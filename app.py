@@ -4,9 +4,8 @@ import google.generativeai as genai
 
 # ===== إعداد الذكاء الاصطناعي =====
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-model = genai.GenerativeModel("gemini-pro
-")
-
+model = genai.GenerativeModel
+model = genai.GenerativeModel("gemini-pro")
 # ===== عنوان التطبيق =====
 st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
 
