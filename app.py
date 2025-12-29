@@ -3,11 +3,42 @@ import time
 import google.generativeai as genai
 
 # ===== إعداد الذكاء الاصطناعي =====
-import google.generativeai as genai
+from google import genai
+import streamlit as st
+import time
 
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
-model = genai.GenerativeModel("models/text-bison-001")
+st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
+
+password = st.text_input("ادخل كلمة الدخول", type="password")
+if password != "SCIENCE60":
+    st.warning("كلمة الدخول غير صحيحة")
+    st.stop()
+
+st.success("تم الدخول بنجاح ✅")
+
+if "start_time" not in st.session_state:
+    st.session_state.start_time = time.time()
+
+elapsed = time.time() - st.session_state.start_time
+remaining = 3600 - elapsed
+
+if remaining <= 0:
+    st.error("⏱️ انتهت مدة الجلسة")
+    st.stop()
+
+st.info(f"⏳ الوقت المتبقي: {int(remaining//60)}:{int(remaining%60):02d}")
+
+question = st.text_input("✍️ اكتب سؤالك")
+
+if st.button("إرسال"):
+    with st.spinner("🤖 جاري التفكير..."):
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=f"اشرح لطالب أولى ثانوي: {question}"
+        )
+    st.write(response.text)
 
 # ===== عنوان التطبيق =====
 st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
