@@ -3,12 +3,18 @@ import time
 import google.generativeai as genai
 
 # ===== إعداد الذكاء الاصطناعي =====
-from google import genai
 import streamlit as st
-import time
+from google import genai # السطر الذي يسبب المشكلة
 
-client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+# إعداد العميل في المكتبة الجديدة يتم هكذا:
+api_key = st.secrets["GOOGLE_API_KEY"]
+client = genai.Client(api_key=api_key)
 
+# واستدعاء الموديل يتم هكذا:
+# response = client.models.generate_content(
+#     model="gemini-1.5-flash", 
+#     contents="اكتب رسالة ترحيب"
+# )
 st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
 
 password = st.text_input("ادخل كلمة الدخول", type="password")
