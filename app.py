@@ -1,5 +1,10 @@
 import streamlit as st
 import time
+import google.generativeai as genai
+
+# ===== إعداد الذكاء الاصطناعي =====
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ===== عنوان التطبيق =====
 st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
@@ -18,7 +23,7 @@ if "start_time" not in st.session_state:
     st.session_state.start_time = time.time()
 
 elapsed = time.time() - st.session_state.start_time
-remaining = 3600 - elapsed  # 60 دقيقة
+remaining = 3600 - elapsed
 
 if remaining <= 0:
     st.error("⏱️ انتهت مدة الجلسة")
@@ -29,7 +34,7 @@ seconds = int(remaining % 60)
 
 st.info(f"⏳ الوقت المتبقي: {minutes}:{seconds:02d}")
 
-# ===== محتوى السؤال =====
+# ===== السؤال والإجابة =====
 st.subheader("✍️ اكتب سؤالك في العلوم المتكاملة")
 
 question = st.text_input("سؤالك هنا")
@@ -38,5 +43,9 @@ if st.button("إرسال"):
     if question.strip() == "":
         st.warning("من فضلك اكتب سؤالًا أولًا")
     else:
-        st.success("تم استلام السؤال ✅")
-        st.write("🤖 هنا ستظهر الإجابة الذكية لاحقًا")
+        with st.spinner("🤖 جاري التفكير..."):
+            response = model.generate_content(
+                f"أجب عن السؤال التالي بأسلوب مبسط لطالب الصف الأول الثانوي:\n{question}"
+            )
+        st.success("الإجابة:")
+        st.write(response.text)
