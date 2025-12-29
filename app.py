@@ -3,9 +3,12 @@ import time
 import google.generativeai as genai
 
 # ===== إعداد الذكاء الاصطناعي =====
+import google.generativeai as genai
+
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
-model = genai.GenerativeModel("gemini-1.0-pro")
+
+model = genai.GenerativeModel("gemini-1.5-flash")
+
 # ===== عنوان التطبيق =====
 st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
 
