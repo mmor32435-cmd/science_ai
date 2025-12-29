@@ -2,28 +2,33 @@ import streamlit as st
 import time
 import google.generativeai as genai
 
-# ===== إعداد الذكاء الاصطناعي =====
-import streamlit as st
-from google import genai # السطر الذي يسبب المشكلة
+# ===== 1. إعداد الصفحة والربط بجوجل =====
+st.set_page_config(page_title="مساعد العلوم", page_icon="🧬", layout="centered")
 
-# إعداد العميل في المكتبة الجديدة يتم هكذا:
-api_key = st.secrets["GOOGLE_API_KEY"]
-client = genai.Client(api_key=api_key)
-
-# واستدعاء الموديل يتم هكذا:
-# response = client.models.generate_content(
-#     model="gemini-1.5-flash", 
-#     contents="اكتب رسالة ترحيب"
-# )
-st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
-
-password = st.text_input("ادخل كلمة الدخول", type="password")
-if password != "SCIENCE60":
-    st.warning("كلمة الدخول غير صحيحة")
+# محاولة جلب المفتاح وتشغيل المكتبة
+try:
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
+    # إعداد الموديل
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error("⚠️ حدث خطأ في مفتاح API. تأكد من إضافته في Secrets.")
     st.stop()
 
-st.success("تم الدخول بنجاح ✅")
+# ===== 2. عنوان التطبيق =====
+st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
 
+# ===== 3. نظام تسجيل الدخول =====
+password = st.text_input("🔑 ادخل كلمة الدخول", type="password")
+
+if password != "SCIENCE60":
+    if password: # عشان ما تظهر الرسالة والخانة فاضية
+        st.warning("⛔ كلمة الدخول غير صحيحة")
+    st.stop() # يوقف التطبيق هنا حتى يتم إدخال الباسورد الصحيح
+
+st.success("تم الدخول بنجاح ✅ ابدأ المذاكرة!")
+
+# ===== 4. عداد الوقت (60 دقيقة) =====
 if "start_time" not in st.session_state:
     st.session_state.start_time = time.time()
 
@@ -34,58 +39,29 @@ if remaining <= 0:
     st.error("⏱️ انتهت مدة الجلسة")
     st.stop()
 
-st.info(f"⏳ الوقت المتبقي: {int(remaining//60)}:{int(remaining%60):02d}")
-
-question = st.text_input("✍️ اكتب سؤالك")
-
-if st.button("إرسال"):
-    with st.spinner("🤖 جاري التفكير..."):
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=f"اشرح لطالب أولى ثانوي: {question}"
-        )
-    st.write(response.text)
-
-# ===== عنوان التطبيق =====
-st.title("🧠 مساعد العلوم المتكاملة – أولى ثانوي")
-
-# ===== تسجيل الدخول =====
-password = st.text_input("ادخل كلمة الدخول", type="password")
-
-if password != "SCIENCE60":
-    st.warning("كلمة الدخول غير صحيحة")
-    st.stop()
-
-st.success("تم الدخول بنجاح ✅")
-
-# ===== عداد 60 دقيقة =====
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-
-elapsed = time.time() - st.session_state.start_time
-remaining = 3600 - elapsed
-
-if remaining <= 0:
-    st.error("⏱️ انتهت مدة الجلسة")
-    st.stop()
-
+# عرض الوقت بشكل جميل
 minutes = int(remaining // 60)
 seconds = int(remaining % 60)
+st.info(f"⏳ الوقت المتبقي للجلسة: {minutes} دقيقة و {seconds:02d} ثانية")
 
-st.info(f"⏳ الوقت المتبقي: {minutes}:{seconds:02d}")
+# ===== 5. الشات والذكاء الاصطناعي =====
+st.markdown("---")
+st.subheader("✍️ اسأل المساعد الذكي")
 
-# ===== السؤال والإجابة =====
-st.subheader("✍️ اكتب سؤالك في العلوم المتكاملة")
+question = st.text_area("اكتب سؤالك هنا:", placeholder="مثال: اشرح لي قانون الجاذبية...")
 
-question = st.text_input("سؤالك هنا")
-
-if st.button("إرسال"):
+if st.button("إرسال السؤال 🚀"):
     if question.strip() == "":
-        st.warning("من فضلك اكتب سؤالًا أولًا")
+        st.warning("⚠️ من فضلك اكتب سؤالًا أولًا")
     else:
-        with st.spinner("🤖 جاري التفكير..."):
-            response = model.generate_content(
-                f"أجب عن السؤال التالي بأسلوب مبسط لطالب الصف الأول الثانوي:\n{question}"
-            )
-        st.success("الإجابة:")
-        st.write(response.text)
+        with st.spinner("🤖 جاري التفكير وتحضير الإجابة..."):
+            try:
+                # توجيه الموديل ليشرح لطالب أولى ثانوي
+                prompt = f"أنت مدرس علوم ممتاز. اشرح لطالب في الصف الأول الثانوي بأسلوب مبسط ومختصر: {question}"
+                
+                response = model.generate_content(prompt)
+                
+                st.markdown("### 💡 الإجابة:")
+                st.write(response.text)
+            except Exception as e:
+                st.error(f"حدث خطأ أثناء الاتصال بجوجل: {e}")
