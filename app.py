@@ -1,133 +1,147 @@
 import streamlit as st
 import time
 import google.generativeai as genai
-import asyncio
-import edge_tts
+from openai import OpenAI
 import speech_recognition as sr
 from streamlit_mic_recorder import mic_recorder
 from io import BytesIO
-import re
 
-# ===== إعداد الصفحة =====
-st.set_page_config(page_title="المعلم المصري", page_icon="🇪🇬", layout="centered")
+# ===== 1. إعداد الصفحة =====
+st.set_page_config(page_title="المعلم البشري", page_icon="🗣️", layout="centered")
 
-# ===== تنظيف النص ليصبح كلامًا مسموعًا =====
-def prepare_text_for_audio(text):
-    # إزالة الرموز غير المنطوقة
-    text = re.sub(r"[*#\"\n]", " ", text)
+# --- إعداد مفاتيح API (يجب التأكد من وجودها) ---
+try:
+    # 1. مفتاح جوجل (للتفكير والإجابة)
+    if "GOOGLE_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    else:
+        st.error("مفتاح GOOGLE_API_KEY مفقود في الـ Secrets")
+        st.stop()
 
-    # تقصير الجمل الطويلة
-    text = re.sub(r"\.{2,}", "،", text)
+    # 2. مفتاح OpenAI (للصوت البشري)
+    if "OPENAI_API_KEY" in st.secrets:
+        openai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    else:
+        st.error("مفتاح OPENAI_API_KEY مفقود في الـ Secrets. لا يمكن تشغيل الصوت البشري بدونه.")
+        st.stop()
 
-    # إجبار وقفات تنفّس طبيعية
-    text = text.replace(".", "، ")
-    text = text.replace("،", "، ")
-
-    # إزالة التكرار الزائد
-    text = re.sub(r"(،\s*){2,}", "، ", text)
-
-    return text.strip()
-
-# ===== توليد الصوت =====
-async def generate_speech(text, output_file, voice_code):
-    clean_text = prepare_text_for_audio(text)
-    communicate = edge_tts.Communicate(
-        clean_text,
-        voice_code,
-        rate="-10%",
-        pitch="+2Hz"
-    )
-    await communicate.save(output_file)
-
-# ===== العنوان =====
-st.title("🎙️ المعلم المصري – شرح علوم بالذكاء الاصطناعي")
-
-# ===== كلمة المرور =====
-password = st.text_input("🔐 أدخل كلمة الدخول", type="password")
-if password != "SCIENCE60":
-    st.warning("كلمة المرور غير صحيحة")
+except Exception as e:
+    st.error(f"خطأ في الإعدادات: {e}")
     st.stop()
 
-st.success("تم الدخول بنجاح ✅")
+# --- دالة نطق الإجابة باستخدام OpenAI (جودة بشرية) ---
+def generate_human_audio(text, output_file, voice_name):
+    try:
+        response = openai_client.audio.speech.create(
+            model="tts-1",       # الموديل السريع والواقعي
+            voice=voice_name,    # الصوت المختار
+            input=text
+        )
+        response.stream_to_file(output_file)
+        return True
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء توليد الصوت: {e}")
+        return False
 
-# ===== المؤقت =====
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
+# --- دالة تحويل الصوت لنص ---
+def speech_to_text(audio_bytes):
+    r = sr.Recognizer()
+    try:
+        audio_file = sr.AudioFile(BytesIO(audio_bytes))
+        with audio_file as source:
+            r.adjust_for_ambient_noise(source)
+            audio_data = r.record(source)
+            # التعرف على اللهجة المصرية
+            text = r.recognize_google(audio_data, language="ar-EG")
+            return text
+    except sr.UnknownValueError:
+        return None
+    except Exception as e:
+        return None
 
-elapsed = time.time() - st.session_state.start_time
-remaining = 3600 - elapsed
+# --- إعداد موديل جوجل ---
+try:
+    all_models = genai.list_models()
+    my_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
+    
+    # اختيار أفضل موديل متاح تلقائياً
+    active_model_name = next((m for m in my_models if 'flash' in m), None)
+    if not active_model_name:
+        active_model_name = next((m for m in my_models if 'pro' in m), my_models[0])
+        
+    model = genai.GenerativeModel(active_model_name)
+except:
+    st.error("فشل الاتصال بموديلات جوجل."); st.stop()
 
-if remaining <= 0:
-    st.error("⏱️ انتهت مدة الجلسة")
-    st.stop()
+# ===== 2. الواجهة =====
+st.title("🎙️ المعلم الصوتي (جودة بشرية)")
+st.caption("✅ التفكير: Google Gemini | ✅ الصوت: OpenAI TTS")
 
-st.info(f"⏳ الوقت المتبقي: {int(remaining//60)} دقيقة")
-
-# ===== إعداد Gemini =====
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-model = genai.GenerativeModel("gemini-pro")
-
-# ===== اختيار الصوت =====
+# --- خيارات الأصوات الاحترافية من OpenAI ---
+st.subheader("🔊 اختر نبرة الصوت")
 voice_options = {
-    "مصري – راجل": "ar-EG-ShakirNeural",
-    "مصري – ست": "ar-EG-SalmaNeural"
+    "👨‍🏫 صوت رجالي عميق ورزين (Onyx)": "onyx",
+    "👨‍💼 صوت رجالي متوازن (Echo)": "echo",
+    "👩‍🏫 صوت نسائي حيوي (Shimmer)": "shimmer",
+    "👩‍💼 صوت نسائي هادئ (Nova)": "nova"
 }
-selected_voice = st.selectbox("🎧 اختر صوت الشرح", list(voice_options.keys()))
-selected_voice_code = voice_options[selected_voice]
+selected_voice_label = st.selectbox("المعلق الصوتي:", list(voice_options.keys()))
+selected_voice_code = voice_options[selected_voice_label]
 
-# ===== تسجيل السؤال =====
-audio = mic_recorder(
-    start_prompt="🎤 اضغط وتكلم بوضوح",
-    stop_prompt="⏹️ اضغط للإيقاف",
-    just_once=True,
-    key="recorder"
+# ===== 3. الدخول =====
+if "logged_in" not in st.session_state:
+    password = st.text_input("🔑 الرقم السري", type="password")
+    if password == "SCIENCE60":
+        st.session_state.logged_in = True
+        st.rerun()
+    elif password: st.warning("خطأ في الرقم السري")
+    st.stop()
+
+# ===== 4. المحادثة =====
+st.markdown("---")
+st.write("اضغط وتحدث، وسأجيبك بصوت بشري طبيعي:")
+
+audio_input = mic_recorder(
+    start_prompt="🎤 تحدث الآن",
+    stop_prompt="⏹️ إرسال",
+    key='recorder',
+    format="wav"
 )
 
-
-if audio:
-    recognizer = sr.Recognizer()
-recognizer.energy_threshold = 300
-recognizer.dynamic_energy_threshold = True
-recognizer.pause_threshold = 0.8
-
-
-    audio_data = sr.AudioData(
-        audio["bytes"],
-        sample_rate=audio["sample_rate"],
-        sample_width=2
-    )
-
-    try:
-        question = recognizer.recognize_google(audio_data, language="ar-EG")
-        st.write(f"🗣️ سؤالك: {question}")
-
-        if st.button("📩 أجب"):
-            with st.spinner("🤖 المعلم بيفكّر..."):
+if audio_input:
+    with st.spinner("👂 أستمع إليك..."):
+        user_text = speech_to_text(audio_input['bytes'])
+    
+    if user_text:
+        st.success(f"🗣️ سؤالك: {user_text}")
+        with st.spinner("🧠 وصوت بشري يتم تحضيره..."):
+            try:
+                # هندسة النص للهجة المصرية
                 prompt = f"""
-اشرح لطالب أولى ثانوي بأسلوب مدرس مصري.
-استخدم جمل قصيرة جدًا.
-خلي الشرح كأنك بتتكلم مش بتكتب.
-خد نفس بين الجمل.
-ما تستخدمش فصحى تقيلة.
-
-السؤال:
-{question}
-"""
-                response = model.generate_content(prompt)
-
-                st.markdown(f"### 📘 الشرح:\n{response.text}")
-
-                output_file = "response.mp3"
-                asyncio.run(
-                    generate_speech(
-                        response.text,
-                        output_file,
-                        selected_voice_code
-                    )
-                )
-                st.audio(output_file, format="audio/mp3", autoplay=True)
-
-    except Exception as e:
-    st.warning("⚠️ من فضلك تكلّم بوضوح وبصوت متوسط، ثم جرّب مرة أخرى")
-
-
+                أنت معلم مصري مخضرم.
+                السؤال: '{user_text}'
+                
+                التعليمات:
+                1. أجب باللهجة المصرية العامية "المحترمة" (لغة المثقفين).
+                2. تجنب الرموز تماماً (* أو -).
+                3. استخدم علامات الترقيم (، .) بكثرة لأن الصوت البشري يحتاج للتنفس.
+                4. اجعل الإجابة مركزة وقصيرة.
+                """
+                
+                # 1. توليد النص من جوجل
+                gemini_response = model.generate_content(prompt)
+                answer_text = gemini_response.text
+                
+                st.markdown(f"### 📘 الرد:\n{answer_text}")
+                
+                # 2. توليد الصوت من OpenAI
+                output_file = "human_response.mp3"
+                success = generate_human_audio(answer_text, output_file, selected_voice_code)
+                
+                if success:
+                    st.audio(output_file, format='audio/mp3', autoplay=True)
+                
+            except Exception as e:
+                st.error(f"حدث خطأ: {e}")
+    else:
+        st.warning("⚠️ الصوت غير واضح، حاول مرة أخرى.")
