@@ -80,8 +80,14 @@ audio = mic_recorder(start_prompt="🎤 اضغط وتكلم", stop_prompt="⏹�
 
 if audio:
     recognizer = sr.Recognizer()
-    with sr.AudioFile(BytesIO(audio["bytes"])) as source:
-        audio_data = recognizer.record(source)
+    
+audio_bytes = audio["bytes"]
+
+audio_data = sr.AudioData(
+    audio_bytes,
+    sample_rate=audio["sample_rate"],
+    sample_width=2
+)
 
     try:
         question = recognizer.recognize_google(audio_data, language="ar-EG")
