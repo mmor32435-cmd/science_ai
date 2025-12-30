@@ -4,3 +4,4 @@ edge-tts
 asyncio
 streamlit-mic-recorder
 SpeechRecognition
+pytz
