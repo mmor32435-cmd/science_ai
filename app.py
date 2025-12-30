@@ -7,27 +7,86 @@ import speech_recognition as sr
 from streamlit_mic_recorder import mic_recorder
 from io import BytesIO
 import re
+from datetime import datetime
+import pytz # مكتبة المناطق الزمنية
 
-# ===== 1. إعداد الصفحة =====
-st.set_page_config(page_title="اختبار العلوم التفاعلي", page_icon="⏱️", layout="wide")
+# ==========================================
+# 🎛️ لوحة تحكم المعلم (عدل هنا يومياً)
+# ==========================================
 
-# --- قائمة كلمات المرور المسموحة (يمكنك التعديل عليها) ---
-# كل طالب تعطيه كلمة سر مختلفة
-VALID_PASSWORDS = [
-    "STUDENT_1", "STUDENT_2", "STUDENT_3", "SCIENCE2024", "CLASS_A"
-]
+# 1. كود الدخول لهذا اليوم
+DAILY_PASSWORD = "SCIENCE_DAY1" 
 
-# مدة الجلسة بالدقائق
-SESSION_DURATION_MINUTES = 60 
+# 2. تاريخ الامتحان (السنة-الشهر-اليوم)
+EXAM_DATE = "2024-05-20" 
 
-# --- دوال الصوت والذكاء الاصطناعي (كما هي) ---
+# 3. وقت البداية والنهاية (بناظم 24 ساعة)
+# مثال: من 1 ظهرًا (13) إلى 2 ظهرًا (14)
+START_HOUR = 13 
+END_HOUR = 14   
+
+# 4. توقيتك المحلي (مهم جداً لضبط الساعة)
+# لمصر: 'Africa/Cairo' | للسعودية: 'Asia/Riyadh'
+MY_TIMEZONE = 'Africa/Cairo' 
+
+# ==========================================
+
+st.set_page_config(page_title="الاختبار المحدد بوقت", page_icon="⏳", layout="centered")
+
+# --- دالة التحقق من الوقت (الحارس الذكي) ---
+def check_time_window():
+    # الحصول على الوقت الحالي بتوقيت بلدك
+    tz = pytz.timezone(MY_TIMEZONE)
+    now = datetime.now(tz)
+    
+    current_date = now.strftime("%Y-%m-%d")
+    current_hour = now.hour
+    current_minute = now.minute
+    
+    # 1. التحقق من اليوم
+    if current_date != EXAM_DATE:
+        return False, f"⛔ الامتحان ليس اليوم. تاريخ الامتحان المقرر: {EXAM_DATE}"
+    
+    # 2. التحقق من الساعة (قبل الموعد)
+    if current_hour < START_HOUR:
+        return False, f"⏳ لم يبدأ الامتحان بعد. يبدأ الساعة {START_HOUR}:00 بتوقيت {MY_TIMEZONE}"
+    
+    # 3. التحقق من الساعة (بعد الموعد)
+    # المسموح: أن تكون الساعة أكبر من أو تساوي البداية، وأقل تماماً من النهاية
+    # مثال: من 13:00 حتى 13:59 (بمجرد أن تأتي 14:00 يغلق)
+    if current_hour >= END_HOUR:
+        return False, "🛑 انتهى وقت الامتحان! تم إغلاق النظام تلقائياً."
+        
+    # حساب الدقائق المتبقية للإغلاق
+    # وقت النهاية هو END_HOUR:00
+    # الدقائق المتبقية = (ساعة النهاية * 60) - (الساعة الحالية * 60 + الدقائق الحالية)
+    end_minutes = END_HOUR * 60
+    current_total_minutes = current_hour * 60 + current_minute
+    remaining = end_minutes - current_total_minutes
+    
+    return True, remaining
+
+# ==========================================
+# تنفيذ التحقق (قبل تشغيل أي كود آخر)
+is_open, message = check_time_window()
+
+if not is_open:
+    st.error(message)
+    st.image("https://cdn-icons-png.flaticon.com/512/483/483696.png", width=150)
+    st.stop() # يقتل التطبيق هنا، لن يظهر أي شيء بالأسفل
+# ==========================================
+
+
+# --- باقي كود التطبيق (لا يعمل إلا إذا كان الوقت صحيحاً) ---
+
+# ... دوال الصوت والذكاء الاصطناعي المعتادة ...
 def prepare_text(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
     return text
 
 async def generate_speech(text, output_file, voice_code):
     clean_text = prepare_text(text)
-    communicate = edge_tts.Communicate(clean_text, voice_code, rate="+0%")
+    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
     await communicate.save(output_file)
 
 def speech_to_text(audio_bytes):
@@ -37,139 +96,86 @@ def speech_to_text(audio_bytes):
         with audio_file as source:
             r.adjust_for_ambient_noise(source)
             audio_data = r.record(source)
-            text = r.recognize_google(audio_data, language="ar-SA")
+            text = r.recognize_google(audio_data, language="ar-EG")
             return text
     except:
         return None
 
-# --- الاتصال بجوجل ---
 try:
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     else:
-        st.error("مفتاح جوجل مفقود!"); st.stop()
-        
+        st.error("مفتاح جوجل مفقود"); st.stop()
+    
     all_models = genai.list_models()
     my_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
     active_model = next((m for m in my_models if 'flash' in m), my_models[0])
     model = genai.GenerativeModel(active_model)
 except:
-    st.error("خطأ في الاتصال بجوجل"); st.stop()
+    st.error("خطأ تقني"); st.stop()
 
-# ==========================================
-# ===== 2. نظام تسجيل الدخول وإدارة الوقت =====
-# ==========================================
 
-# التحقق من حالة تسجيل الدخول
+# ===== واجهة تسجيل الدخول اليومية =====
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔐 بوابة الدخول للاختبار")
-    st.markdown("---")
-    password_input = st.text_input("أدخل كود الطالب الخاص بك:", type="password")
+    st.title("🔐 امتحان العلوم اليومي")
+    st.caption(f"متاح اليوم فقط من {START_HOUR}:00 إلى {END_HOUR}:00")
     
-    if st.button("دخول وبدء الوقت"):
-        if password_input in VALID_PASSWORDS:
+    password = st.text_input("أدخل كود اليوم:", type="password")
+    if st.button("دخول"):
+        if password == DAILY_PASSWORD:
             st.session_state.logged_in = True
-            st.session_state.student_id = password_input
-            # تسجيل وقت البداية
-            st.session_state.start_time = time.time()
             st.rerun()
         else:
-            st.error("⛔ كود الطالب غير صحيح. يرجى مراجعة المعلم.")
-    st.stop() # يوقف الكود هنا إذا لم يسجل الدخول
+            st.error("الكود غير صحيح لهذا اليوم.")
+    st.stop()
 
-# ==========================================
-# ===== 3. حساب الوقت المتبقي (العداد) =====
-# ==========================================
+# ===== واجهة الامتحان (بعد الدخول) =====
 
-elapsed_time = time.time() - st.session_state.start_time
-total_seconds = SESSION_DURATION_MINUTES * 60
-remaining_seconds = total_seconds - elapsed_time
+# عرض العداد المتبقي للإغلاق العام
+is_still_open, remaining_mins = check_time_window()
+if not is_still_open:
+    st.session_state.logged_in = False
+    st.rerun()
 
-# إذا انتهى الوقت
-if remaining_seconds <= 0:
-    st.error("🛑 انتهى وقت الجلسة!")
-    st.warning("لقد استنفذت الـ 60 دقيقة المخصصة لك. يرجى مراجعة المعلم للحصول على كود جديد.")
-    # زر للخروج
-    if st.button("خروج"):
-        st.session_state.logged_in = False
-        st.rerun()
-    st.stop() # يوقف التطبيق تماماً
+st.sidebar.title(f"⏳ باقي: {remaining_mins} دقيقة")
+st.sidebar.warning(f"سيغلق النظام تماماً الساعة {END_HOUR}:00")
 
-# ==========================================
-# ===== 4. واجهة التطبيق والعداد الجانبي =====
-# ==========================================
+st.title("🎙️ المعلم الذكي (اختبار)")
 
-# القائمة الجانبية للعداد
-with st.sidebar:
-    st.title(f"👤 الطالب: {st.session_state.student_id}")
-    st.markdown("---")
-    
-    # حساب الدقائق والثواني
-    mins = int(remaining_seconds // 60)
-    secs = int(remaining_seconds % 60)
-    
-    # لون العداد (يتغير للأحمر إذا بقي أقل من 5 دقائق)
-    timer_color = "green" if mins > 5 else "red"
-    st.markdown(f"<h1 style='text-align: center; color: {timer_color};'>{mins}:{secs:02d}</h1>", unsafe_allow_html=True)
-    st.caption("الوقـت المتبقـي")
-    
-    # شريط التقدم
-    progress_value = max(0.0, min(1.0, remaining_seconds / total_seconds))
-    st.progress(progress_value)
-    
-    st.warning("⚠️ لا تقم بتحديث الصفحة (Refresh) وإلا سيعاد تشغيل العداد من البداية.")
-
-# الواجهة الرئيسية
-st.title("🎙️ اختبار العلوم الشفوي")
-st.caption("تحدث مع المعلم الذكي للإجابة عن الأسئلة")
-
-# --- خيارات الصوت (المجانية عالية الجودة) ---
+# خيارات الصوت
 voice_options = {
-    "🇸🇦 المعلم حامد (رزين)": "ar-SA-HamedNeural",
-    "🇸🇦 المعلمة زارية (واضحة)": "ar-SA-ZariyahNeural"
+    "🇪🇬 مستر شاكر": "ar-EG-ShakirNeural",
+    "🇪🇬 مس سلمى": "ar-EG-SalmaNeural"
 }
-# نختار صوتاً افتراضياً أو نترك للطالب حرية الاختيار
-selected_voice_code = voice_options["🇸🇦 المعلم حامد (رزين)"] 
+selected_voice_code = voice_options["🇪🇬 مستر شاكر"] 
 
-# ===== 5. المحادثة =====
 st.markdown("---")
-col1, col2 = st.columns([1, 4])
-with col1:
-    st.image("https://cdn-icons-png.flaticon.com/512/377/377295.png", width=100)
-with col2:
-    st.info("اضغط على الزر، انتظر ثانية، ثم أجب عن السؤال أو استفسر.")
+st.write("اضغط وتحدث:")
 
 audio_input = mic_recorder(
-    start_prompt="🎤 اضغط للتحدث",
-    stop_prompt="⏹️ إنهاء الإجابة",
+    start_prompt="🎤 تحدث",
+    stop_prompt="⏹️ إرسال",
     key='recorder',
     format="wav"
 )
 
 if audio_input:
-    with st.spinner("👂 المعلم يستمع إليك..."):
+    with st.spinner("👂 ..."):
         user_text = speech_to_text(audio_input['bytes'])
     
     if user_text:
-        st.success(f"🗣️ إجابتك/سؤالك: {user_text}")
-        with st.spinner("🧠 المعلم يقيّم ويجيب..."):
+        st.success(f"🗣️: {user_text}")
+        with st.spinner("🧠 ..."):
             try:
-                # التعليمات للموديل
                 prompt = f"""
-                أنت معلم علوم تجري اختباراً شفوياً لطالب.
-                الطالب قال: '{user_text}'
-                
-                1. إذا كان كلام الطالب سؤالاً: أجب عليه بالفصحى المبسطة.
-                2. إذا كان إجابة على سؤال منك: قيّم إجابته (ممتاز، جيد، أو صحح له الخطأ) بأسلوب مشجع.
-                3. تكلم بأسلوب "المعلم حامد" الرزين والمحترم.
-                4. اجعل ردك مختصراً (لا يزيد عن 3 جمل).
+                أنت معلم مصري. الطالب يسألك أو يجيبك: '{user_text}'.
+                رد عليه باللهجة المصرية وبإيجاز شديد.
                 """
-                
                 response = model.generate_content(prompt)
-                st.markdown(f"### 📘 رد المعلم:\n{response.text}")
+                st.markdown(f"### 📘 الرد:\n{response.text}")
                 
                 output_file = "response.mp3"
                 asyncio.run(generate_speech(response.text, output_file, selected_voice_code))
@@ -177,7 +183,3 @@ if audio_input:
                 
             except Exception as e:
                 st.error(f"خطأ: {e}")
-    else:
-        st.warning("⚠️ الصوت غير واضح، حاول مرة أخرى.")
-
-st.markdown("---")
