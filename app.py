@@ -76,10 +76,20 @@ selected_voice = st.selectbox("🎧 اختر صوت الشرح", list(voice_opti
 selected_voice_code = voice_options[selected_voice]
 
 # ===== تسجيل السؤال =====
-audio = mic_recorder(start_prompt="🎤 اضغط وتكلم", stop_prompt="⏹️ وقف", key="recorder")
+audio = mic_recorder(
+    start_prompt="🎤 اضغط وتكلم بوضوح",
+    stop_prompt="⏹️ اضغط للإيقاف",
+    just_once=True,
+    key="recorder"
+)
+
 
 if audio:
     recognizer = sr.Recognizer()
+recognizer.energy_threshold = 300
+recognizer.dynamic_energy_threshold = True
+recognizer.pause_threshold = 0.8
+
 
     audio_data = sr.AudioData(
         audio["bytes"],
@@ -118,5 +128,6 @@ if audio:
                 st.audio(output_file, format="audio/mp3", autoplay=True)
 
     except Exception as e:
-        st.warning("⚠️ الصوت مش واضح، جرّب تاني")
+    st.warning("⚠️ من فضلك تكلّم بوضوح وبصوت متوسط، ثم جرّب مرة أخرى")
+
 
