@@ -5,3 +5,5 @@ asyncio
 streamlit-mic-recorder
 SpeechRecognition
 pytz
+Pillow
+PyPDF2
