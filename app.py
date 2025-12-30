@@ -3,101 +3,129 @@ import time
 import google.generativeai as genai
 import asyncio
 import edge_tts
+import speech_recognition as sr
+from streamlit_mic_recorder import mic_recorder
+from io import BytesIO
 
 # ===== 1. إعداد الصفحة والستايل =====
-st.set_page_config(page_title="المعلم الذكي", page_icon="🎓", layout="centered")
+st.set_page_config(page_title="المعلم الصوتي", page_icon="🎙️", layout="centered")
 
-# دالة لتوليد الصوت الطبيعي (Neural Voice)
+# --- دالة تحويل النص إلى صوت (المعلم يتحدث) ---
 async def generate_speech(text, output_file):
-    # نختار صوت 'ar-EG-ShakirNeural' لأنه صوت عربي طبيعي وممتاز للتعليم
-    # يمكنك تغييره إلى 'ar-SA-HamedNeural' للهجة السعودية
     communicate = edge_tts.Communicate(text, "ar-EG-ShakirNeural")
     await communicate.save(output_file)
 
-# البحث الذكي عن الموديل (كما اتفقنا سابقاً لضمان العمل)
+# --- دالة تحويل صوت الطالب إلى نص ---
+def speech_to_text(audio_bytes):
+    r = sr.Recognizer()
+    try:
+        # تحويل البيانات الخام إلى ملف صوتي في الذاكرة
+        audio_file = sr.AudioFile(BytesIO(audio_bytes))
+        with audio_file as source:
+            audio_data = r.record(source)
+            # التعرف على الكلام (اللهجة المصرية/العربية)
+            text = r.recognize_google(audio_data, language="ar-EG")
+            return text
+    except sr.UnknownValueError:
+        return None
+    except Exception as e:
+        return f"Error: {e}"
+
+# --- إعداد اتصال جوجل (الذكي) ---
 active_model_name = None
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
     
-    available_models = []
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            available_models.append(m.name)
-            
+    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     if available_models:
-        # تفضيل الموديلات السريعة والقوية
-        priority_models = [m for m in available_models if 'flash' in m] + \
-                          [m for m in available_models if 'pro' in m]
-        active_model_name = priority_models[0] if priority_models else available_models[0]
+        priority = [m for m in available_models if 'flash' in m] + [m for m in available_models if 'pro' in m]
+        active_model_name = priority[0] if priority else available_models[0]
         
-        # --- التعديل الجوهري: إضافة تعليمات النظام (System Instruction) ---
-        # هذه التعليمات هي التي ستغير شخصية الموديل
+        # شخصية المعلم
         system_instruction = """
-        أنت معلم علوم محترف ومرح ومحبوب للطلاب اسمه 'المستشار الذكي'.
-        جمهورك هم طلاب الصف الأول الثانوي (سن 15-16 سنة).
-        أسلوبك في الحديث:
-        1. تحدث باللغة العربية الفصحى البسيطة والواضحة جداً (ابتعد عن الكلمات المعقدة).
-        2. كن مهذباً جداً ومشجعاً (استخدم عبارات مثل: يا بطل، سؤال ذكي، أحسنت).
-        3. استخدم التشبيهات الممتعة من الحياة اليومية لتبسيط العلوم.
-        4. اجعل الإجابة قصيرة ومركزة ومقسمة لنقاط.
-        5. استخدم الإيموجي المناسب 🌟 لتجعل النص حياً.
+        أنت معلم علوم صوتي اسمه 'مستر شاكر'.
+        أسلوبك: صوتي، عفوي، مرح، باللهجة البيضاء المبسطة أو الفصحى السهلة.
+        لا تستخدم تنسيقات معقدة (مثل الجداول) لأنك تتحدث صوتياً.
+        اجعل إجاباتك قصيرة (فقرة واحدة أو فقرتين) حتى لا يمل الطالب من الاستماع.
+        رحب بالطالب عند الحاجة وشجعه.
         """
-        
         model = genai.GenerativeModel(active_model_name, system_instruction=system_instruction)
     else:
-        st.error("⚠️ لا توجد موديلات متاحة.")
-        st.stop()
-
-except Exception as e:
-    st.error(f"⚠️ خطأ في الاتصال: {e}")
-    st.stop()
+        st.error("⚠️ لا توجد موديلات متاحة"); st.stop()
+except:
+    st.error("⚠️ خطأ في الاتصال"); st.stop()
 
 # ===== 2. واجهة التطبيق =====
-st.title("🎓 مساعد العلوم المتكاملة – أولى ثانوي")
+st.title("🎙️ المعلم الذكي (محادثة صوتية)")
 
 # ===== 3. تسجيل الدخول =====
-password = st.text_input("🔑 كلمة المرور", type="password")
-if password != "SCIENCE60":
-    if password: st.warning("⛔ كلمة المرور خطأ")
+if "logged_in" not in st.session_state:
+    password = st.text_input("🔑 كلمة المرور", type="password")
+    if password == "SCIENCE60":
+        st.session_state.logged_in = True
+        st.rerun()
+    elif password:
+        st.warning("كلمة المرور خطأ")
     st.stop()
-st.success("أهلاً بك يا بطل! 🚀")
 
 # ===== 4. العداد =====
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-elapsed = time.time() - st.session_state.start_time
-remaining = 3600 - elapsed
-if remaining <= 0:
-    st.error("انتهى الوقت!"); st.stop()
-st.info(f"⏳ باقي من الوقت: {int(remaining//60)} دقيقة")
+if "start_time" not in st.session_state: st.session_state.start_time = time.time()
+remaining = 3600 - (time.time() - st.session_state.start_time)
+if remaining <= 0: st.error("انتهى الوقت"); st.stop()
+st.info(f"⏳ باقي: {int(remaining//60)} دقيقة")
 
-# ===== 5. الشات والصوت المتطور =====
+# ===== 5. منطقة المحادثة الصوتية =====
 st.markdown("---")
-st.subheader("💡 اسأل معلمك الخاص")
+st.subheader("تحدث مع المعلم مباشرة 👇")
 
-question = st.text_area("اكتب سؤالك هنا:", placeholder="مثال: لماذا السماء زرقاء؟")
+# عمودين: واحد للزر وواحد لعرض الحالة
+col1, col2 = st.columns([1, 3])
 
-if st.button("شرح السؤال 🎙️"):
-    if not question.strip():
-        st.warning("اكتب سؤالاً أولاً يا صديقي!")
-    else:
-        with st.spinner("🤖 المستشار الذكي يفكر ويجهز صوته..."):
-            try:
-                # 1. الحصول على الإجابة النصية (بالشخصية الجديدة)
-                response = model.generate_content(question)
-                answer_text = response.text
-                
-                st.markdown("### 📘 الإجابة:")
-                st.write(answer_text)
-                
-                # 2. توليد الصوت الطبيعي
-                output_sound_file = "response.mp3"
-                # تشغيل الدالة بشكل غير متزامن
-                asyncio.run(generate_speech(answer_text, output_sound_file))
-                
-                # 3. عرض المشغل
-                st.audio(output_sound_file, format='audio/mp3')
-                
-            except Exception as e:
-                st.error(f"حدث خطأ تقني: {e}")
+with col1:
+    st.write("اضغط للتحدث:")
+    # زر التسجيل (يعيد بايتات الصوت)
+    audio_input = mic_recorder(
+        start_prompt="🎤 اضغط وسجّل",
+        stop_prompt="⏹️ إنهاء وإرسال",
+        key='recorder',
+        format="wav" # مهم جداً للتعرف على الكلام
+    )
+
+user_text = ""
+
+# منطق المعالجة
+if audio_input:
+    with st.spinner("🎧 أستمع إليك..."):
+        # 1. تحويل صوت الطالب لنص
+        transcribed_text = speech_to_text(audio_input['bytes'])
+        
+        if transcribed_text:
+            user_text = transcribed_text
+            st.success(f"🗣️ أنت قلت: {user_text}")
+        else:
+            st.warning("⚠️ لم أسمع صوتك بوضوح، حاول مرة أخرى.")
+
+# إذا كان هناك نص (سواء من الصوت أو كتابة يدوية إذا أردت إضافتها لاحقاً)
+if user_text:
+    with st.spinner("🤖 المستشار يفكر ويجهز الرد..."):
+        try:
+            # 2. الحصول على الإجابة
+            response = model.generate_content(user_text)
+            answer_text = response.text
+            
+            # عرض النص
+            st.markdown(f"### 📘 الإجابة:\n{answer_text}")
+            
+            # 3. تحويل الإجابة لصوت
+            output_file = "response.mp3"
+            asyncio.run(generate_speech(answer_text, output_file))
+            
+            # تشغيل الصوت تلقائياً
+            st.audio(output_file, format='audio/mp3', autoplay=True)
+            
+        except Exception as e:
+            st.error(f"حدث خطأ: {e}")
+
+st.markdown("---")
+st.caption("ملاحظة: تأكد من السماح للمتصفح باستخدام الميكروفون 🎤")
