@@ -80,14 +80,12 @@ audio = mic_recorder(start_prompt="🎤 اضغط وتكلم", stop_prompt="⏹�
 
 if audio:
     recognizer = sr.Recognizer()
-    
-audio_bytes = audio["bytes"]
 
-audio_data = sr.AudioData(
-    audio_bytes,
-    sample_rate=audio["sample_rate"],
-    sample_width=2
-)
+    audio_data = sr.AudioData(
+        audio["bytes"],
+        sample_rate=audio["sample_rate"],
+        sample_width=2
+    )
 
     try:
         question = recognizer.recognize_google(audio_data, language="ar-EG")
@@ -110,10 +108,15 @@ audio_data = sr.AudioData(
                 st.markdown(f"### 📘 الشرح:\n{response.text}")
 
                 output_file = "response.mp3"
-                asyncio.run(generate_speech(response.text, output_file, selected_voice_code))
+                asyncio.run(
+                    generate_speech(
+                        response.text,
+                        output_file,
+                        selected_voice_code
+                    )
+                )
                 st.audio(output_file, format="audio/mp3", autoplay=True)
 
-    except:
+    except Exception as e:
         st.warning("⚠️ الصوت مش واضح، جرّب تاني")
 
-st.markdown("---")
