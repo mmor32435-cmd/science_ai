@@ -8,78 +8,64 @@ from streamlit_mic_recorder import mic_recorder
 from io import BytesIO
 import re
 from datetime import datetime
-import pytz # مكتبة المناطق الزمنية
+import pytz
+from PIL import Image
+import PyPDF2
 
 # ==========================================
-# 🎛️ لوحة تحكم المعلم (عدل هنا يومياً)
+# 🎛️ لوحة تحكم المعلم
 # ==========================================
 
-# 1. كود الدخول لهذا اليوم
-DAILY_PASSWORD = "SCIENCE_DAY1" 
+# كلمة المرور الموحدة للدخول
+DAILY_PASSWORD = "SCIENCE_CHAT" 
 
-# 2. تاريخ الامتحان (السنة-الشهر-اليوم)
-EXAM_DATE = "2024-05-20" 
-
-# 3. وقت البداية والنهاية (بناظم 24 ساعة)
-# مثال: من 1 ظهرًا (13) إلى 2 ظهرًا (14)
-START_HOUR = 13 
-END_HOUR = 14   
-
-# 4. توقيتك المحلي (مهم جداً لضبط الساعة)
-# لمصر: 'Africa/Cairo' | للسعودية: 'Asia/Riyadh'
+# توقيتك المحلي
 MY_TIMEZONE = 'Africa/Cairo' 
 
+# المواعيد المسموحة (الساعة بنظام 24)
+# 17 = 5 مساءً | 19 = 7 مساءً | 21 = 9 مساءً
+ALLOWED_HOURS = [17, 19, 21] 
+
 # ==========================================
 
-st.set_page_config(page_title="الاختبار المحدد بوقت", page_icon="⏳", layout="centered")
+st.set_page_config(page_title="منصة المناقشة الذكية", page_icon="💡", layout="wide")
 
-# --- دالة التحقق من الوقت (الحارس الذكي) ---
-def check_time_window():
-    # الحصول على الوقت الحالي بتوقيت بلدك
+# --- 1. دالة حارس الوقت (Time Guard) ---
+def check_discussion_time():
     tz = pytz.timezone(MY_TIMEZONE)
     now = datetime.now(tz)
-    
-    current_date = now.strftime("%Y-%m-%d")
     current_hour = now.hour
-    current_minute = now.minute
     
-    # 1. التحقق من اليوم
-    if current_date != EXAM_DATE:
-        return False, f"⛔ الامتحان ليس اليوم. تاريخ الامتحان المقرر: {EXAM_DATE}"
-    
-    # 2. التحقق من الساعة (قبل الموعد)
-    if current_hour < START_HOUR:
-        return False, f"⏳ لم يبدأ الامتحان بعد. يبدأ الساعة {START_HOUR}:00 بتوقيت {MY_TIMEZONE}"
-    
-    # 3. التحقق من الساعة (بعد الموعد)
-    # المسموح: أن تكون الساعة أكبر من أو تساوي البداية، وأقل تماماً من النهاية
-    # مثال: من 13:00 حتى 13:59 (بمجرد أن تأتي 14:00 يغلق)
-    if current_hour >= END_HOUR:
-        return False, "🛑 انتهى وقت الامتحان! تم إغلاق النظام تلقائياً."
+    # هل الساعة الحالية موجودة ضمن الساعات المسموحة؟
+    if current_hour in ALLOWED_HOURS:
+        # حساب الوقت المتبقي لنهاية الساعة الحالية
+        minutes_passed = now.minute
+        minutes_remaining = 60 - minutes_passed
+        return True, f"✅ الجلسة مفتوحة! متبقي {minutes_remaining} دقيقة للإغلاق."
+    else:
+        # رسالة الخطأ توضح المواعيد
+        msg = f"""
+        🛑 المنصة مغلقة حالياً.
         
-    # حساب الدقائق المتبقية للإغلاق
-    # وقت النهاية هو END_HOUR:00
-    # الدقائق المتبقية = (ساعة النهاية * 60) - (الساعة الحالية * 60 + الدقائق الحالية)
-    end_minutes = END_HOUR * 60
-    current_total_minutes = current_hour * 60 + current_minute
-    remaining = end_minutes - current_total_minutes
-    
-    return True, remaining
+        ⏰ مواعيد المناقشة اليومية (بتوقيت القاهرة):
+        1️⃣ من 5:00 م إلى 6:00 م
+        2️⃣ من 7:00 م إلى 8:00 م
+        3️⃣ من 9:00 م إلى 10:00 م
+        
+        الساعة الآن: {now.strftime('%I:%M %p')}
+        """
+        return False, msg
 
-# ==========================================
-# تنفيذ التحقق (قبل تشغيل أي كود آخر)
-is_open, message = check_time_window()
+# تنفيذ التحقق من الوقت فوراً
+is_open, status_msg = check_discussion_time()
 
 if not is_open:
-    st.error(message)
-    st.image("https://cdn-icons-png.flaticon.com/512/483/483696.png", width=150)
-    st.stop() # يقتل التطبيق هنا، لن يظهر أي شيء بالأسفل
-# ==========================================
+    st.error(status_msg)
+    st.image("https://cdn-icons-png.flaticon.com/512/2972/2972531.png", width=150)
+    st.stop() # يغلق التطبيق
 
+# --- 2. دوال المساعدة (صوت، PDF، صور) ---
 
-# --- باقي كود التطبيق (لا يعمل إلا إذا كان الوقت صحيحاً) ---
-
-# ... دوال الصوت والذكاء الاصطناعي المعتادة ...
 def prepare_text(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
     return text
@@ -101,85 +87,147 @@ def speech_to_text(audio_bytes):
     except:
         return None
 
+def extract_text_from_pdf(pdf_file):
+    reader = PyPDF2.PdfReader(pdf_file)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() + "\n"
+    return text
+
+# --- 3. اتصال الذكاء الاصطناعي ---
 try:
-    if "GOOGLE_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    else:
-        st.error("مفتاح جوجل مفقود"); st.stop()
-    
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    # نحتاج موديل يدعم الصور (Vision) مثل flash أو pro
     all_models = genai.list_models()
-    my_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
-    active_model = next((m for m in my_models if 'flash' in m), my_models[0])
+    vision_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods and 'flash' in m.name]
+    
+    if vision_models:
+        active_model = vision_models[0]
+    else:
+        # احتياطي لو لم يجد flash
+        active_model = "models/gemini-1.5-pro"
+        
     model = genai.GenerativeModel(active_model)
-except:
-    st.error("خطأ تقني"); st.stop()
+except Exception as e:
+    st.error(f"خطأ في الاتصال: {e}")
+    st.stop()
 
+# ==========================================
+# ===== 4. واجهة التطبيق =====
+# ==========================================
 
-# ===== واجهة تسجيل الدخول اليومية =====
+# تسجيل الدخول
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔐 امتحان العلوم اليومي")
-    st.caption(f"متاح اليوم فقط من {START_HOUR}:00 إلى {END_HOUR}:00")
-    
-    password = st.text_input("أدخل كود اليوم:", type="password")
+    st.title("🔐 بوابة المناقشة العلمية")
+    st.success(status_msg) # نعرض رسالة أن الوقت متاح
+    pwd = st.text_input("كلمة مرور الجلسة:", type="password")
     if st.button("دخول"):
-        if password == DAILY_PASSWORD:
+        if pwd == DAILY_PASSWORD:
             st.session_state.logged_in = True
             st.rerun()
         else:
-            st.error("الكود غير صحيح لهذا اليوم.")
+            st.error("كلمة المرور غير صحيحة")
     st.stop()
 
-# ===== واجهة الامتحان (بعد الدخول) =====
+# الواجهة الرئيسية بعد الدخول
+st.sidebar.title("معلومات الجلسة")
+st.sidebar.info(status_msg)
+st.sidebar.markdown("---")
+st.sidebar.write("🔊 صوت المعلم:")
+voice_choice = st.sidebar.radio("اختر:", ["مستر شاكر (مصري)", "مس سلمى (مصرية)"])
+voice_code = "ar-EG-ShakirNeural" if "شاكر" in voice_choice else "ar-EG-SalmaNeural"
 
-# عرض العداد المتبقي للإغلاق العام
-is_still_open, remaining_mins = check_time_window()
-if not is_still_open:
-    st.session_state.logged_in = False
-    st.rerun()
+st.title("💡 ساحة الحوار والمناقشة")
+st.caption("اسأل، ناقش، أرسل صوراً أو ملفات.. المعلم الذكي معك!")
 
-st.sidebar.title(f"⏳ باقي: {remaining_mins} دقيقة")
-st.sidebar.warning(f"سيغلق النظام تماماً الساعة {END_HOUR}:00")
+# --- نظام التبويبات (Tabs) لتنظيم المدخلات ---
+tab1, tab2, tab3 = st.tabs(["🎙️ تحدث (صوت)", "✍️ كتابة وسؤال", "📁 رفع ملفات/صور"])
 
-st.title("🎙️ المعلم الذكي (اختبار)")
+user_input_content = None # لتخزين السؤال النهائي
+input_type = "text" # text, image, pdf
 
-# خيارات الصوت
-voice_options = {
-    "🇪🇬 مستر شاكر": "ar-EG-ShakirNeural",
-    "🇪🇬 مس سلمى": "ar-EG-SalmaNeural"
-}
-selected_voice_code = voice_options["🇪🇬 مستر شاكر"] 
+# --- تبويب 1: الصوت ---
+with tab1:
+    st.write("اضغط وتحدث للنقاش:")
+    audio_input = mic_recorder(start_prompt="🎤 تحدث", stop_prompt="⏹️ إرسال", key='rec', format="wav")
+    if audio_input:
+        with st.spinner("👂 أسمعك..."):
+            text = speech_to_text(audio_input['bytes'])
+            if text:
+                user_input_content = text
+                st.success(f"🗣️ قلت: {text}")
+
+# --- تبويب 2: الكتابة ---
+with tab2:
+    text_input = st.text_area("اكتب سؤالك أو موضوع المناقشة هنا:", height=100)
+    if st.button("إرسال النص") and text_input:
+        user_input_content = text_input
+
+# --- تبويب 3: الملفات والصور ---
+with tab3:
+    uploaded_file = st.file_uploader("ارفع صورة (للمسائل) أو ملف PDF (للمذكرات)", type=['png', 'jpg', 'jpeg', 'pdf'])
+    file_caption = st.text_input("أضف سؤالاً حول الملف (اختياري):")
+    
+    if st.button("تحليل الملف ومناقشته") and uploaded_file:
+        if uploaded_file.type == "application/pdf":
+            # معالجة PDF
+            with st.spinner("📄 جاري قراءة ملف PDF..."):
+                pdf_text = extract_text_from_pdf(uploaded_file)
+                # ندمج نص الـ PDF مع سؤال الطالب
+                user_input_content = f"النص المستخرج من الملف:\n{pdf_text}\n\nسؤالي هو: {file_caption}"
+                input_type = "text" # لأننا حولنا الـ PDF لنص
+        else:
+            # معالجة الصور
+            image = Image.open(uploaded_file)
+            st.image(image, caption="الصورة المرفقة", width=300)
+            user_input_content = [file_caption if file_caption else "اشرح هذه الصورة علمياً", image]
+            input_type = "image"
+
+# ==========================================
+# ===== 5. المعالجة والرد =====
+# ==========================================
+
+if user_input_content:
+    with st.spinner("🧠 المعلم يفكر ويحلل..."):
+        try:
+            # تجهيز التوجيه (Prompt) للمناقشة
+            role_desc = "معلمة" if "سلمى" in voice_choice else "معلم"
+            system_prompt = f"""
+            أنت {role_desc} علوم مصري محب للنقاش والحوار.
+            - هدفك ليس مجرد الإجابة، بل فتح حوار وفهم عمق سؤال الطالب.
+            - تحدث باللهجة المصرية الراقية (بساطة مع دقة علمية).
+            - إذا أرسل الطالب صورة، اشرح تفاصيلها بدقة.
+            - إذا كان السؤال يحتاج تفكيراً، اشرح الخطوات "واحدة واحدة".
+            - استخدم عبارات حوارية مثل: (بص يا سيدي، خد بالك من النقطة دي، إيه رأيك لو...).
+            - اجعل الإجابة مسموعة (تجنب الرموز المعقدة).
+            """
+            
+            # الإرسال للموديل حسب النوع
+            if input_type == "image":
+                # للصورة نرسل القائمة [النص, الصورة]
+                full_prompt = [system_prompt, user_input_content[0], user_input_content[1]]
+                response = model.generate_content(full_prompt)
+            else:
+                # للنص نرسل النص المدمج
+                full_prompt = f"{system_prompt}\n\nسؤال الطالب/محتوى الملف:\n{user_input_content}"
+                response = model.generate_content(full_prompt)
+            
+            # العرض
+            st.markdown("---")
+            st.markdown(f"### 📘 رد {role_desc}:")
+            st.write(response.text)
+            
+            # الصوت
+            output_file = "response.mp3"
+            asyncio.run(generate_speech(response.text, output_file, voice_code))
+            st.audio(output_file, format='audio/mp3', autoplay=True)
+            
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء المعالجة: {e}")
+            if "404" in str(e):
+                st.warning("قد يكون الموديل غير مدعوم في منطقتك للصور، حاول استخدام النص فقط.")
 
 st.markdown("---")
-st.write("اضغط وتحدث:")
-
-audio_input = mic_recorder(
-    start_prompt="🎤 تحدث",
-    stop_prompt="⏹️ إرسال",
-    key='recorder',
-    format="wav"
-)
-
-if audio_input:
-    with st.spinner("👂 ..."):
-        user_text = speech_to_text(audio_input['bytes'])
-    
-    if user_text:
-        st.success(f"🗣️: {user_text}")
-        with st.spinner("🧠 ..."):
-            try:
-                prompt = f"""
-                أنت معلم مصري. الطالب يسألك أو يجيبك: '{user_text}'.
-                رد عليه باللهجة المصرية وبإيجاز شديد.
-                """
-                response = model.generate_content(prompt)
-                st.markdown(f"### 📘 الرد:\n{response.text}")
-                
-                output_file = "response.mp3"
-                asyncio.run(generate_speech(response.text, output_file, selected_voice_code))
-                st.audio(output_file, format='audio/mp3', autoplay=True)
-                
-            except Exception as e:
-                st.error(f"خطأ: {e}")
