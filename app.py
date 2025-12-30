@@ -6,13 +6,32 @@ import edge_tts
 import speech_recognition as sr
 from streamlit_mic_recorder import mic_recorder
 from io import BytesIO
+import re # مكتبة للتعامل مع النصوص وتنظيفها
 
 # ===== 1. إعداد الصفحة =====
 st.set_page_config(page_title="المعلم الصوتي", page_icon="🎙️", layout="centered")
 
+# --- دالة تنظيف النص من الرموز قبل النطق ---
+def clean_text_for_audio(text):
+    # إزالة النجوم (*) المستخدمة للخط العريض
+    text = text.replace("*", "")
+    # إزالة علامات الشباك (#) المستخدمة للعناوين
+    text = text.replace("#", "")
+    # إزالة الشرطات (-) في بداية السطور
+    text = text.replace("- ", "")
+    # إزالة علامات التنصيص
+    text = text.replace('"', "").replace("'", "")
+    # إزالة الأقواس المربعة والروابط [ ]
+    text = re.sub(r'\[.*?\]', '', text)
+    # إزالة الرموز الغريبة المتكررة
+    text = re.sub(r'[_\-><]', '', text)
+    return text
+
 # --- دالة نطق الإجابة ---
-async def generate_speech(text, output_file):
-    communicate = edge_tts.Communicate(text, "ar-EG-ShakirNeural")
+async def generate_speech(text, output_file, voice_code):
+    # ننظف النص أولاً قبل إرساله للقارئ الصوتي
+    clean_text = clean_text_for_audio(text)
+    communicate = edge_tts.Communicate(clean_text, voice_code)
     await communicate.save(output_file)
 
 # --- دالة تحويل الصوت لنص ---
@@ -23,59 +42,46 @@ def speech_to_text(audio_bytes):
         with audio_file as source:
             r.adjust_for_ambient_noise(source)
             audio_data = r.record(source)
-            # التعرف على الكلام (عربي)
             text = r.recognize_google(audio_data, language="ar-EG")
             return text
     except:
         return None
 
-# --- الاتصال الذكي واختيار الموديل من القائمة ---
+# --- الاتصال الذكي واختيار الموديل ---
 active_model_name = "غير متصل"
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
     
-    # 1. نطلب من جوجل القائمة الكاملة للموديلات
     all_models = genai.list_models()
+    my_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
     
-    # 2. نفلتر القائمة لنأخذ فقط الموديلات التي تولد نصوصاً
-    my_models = []
-    for m in all_models:
-        if 'generateContent' in m.supported_generation_methods:
-            my_models.append(m.name)
-    
-    if len(my_models) == 0:
-        st.error("❌ حسابك لا يحتوي على أي موديلات متاحة حالياً.")
-        st.stop()
+    if not my_models:
+        st.error("❌ لا توجد موديلات متاحة."); st.stop()
         
-    # 3. نختار أحدث موديل متاح تلقائياً
-    # نحاول البحث عن موديلات flash أو pro أولاً
-    preferred_model = None
-    for m in my_models:
-        if 'flash' in m:
-            preferred_model = m
-            break
+    preferred_model = next((m for m in my_models if 'flash' in m), None)
     if not preferred_model:
-        for m in my_models:
-            if 'pro' in m:
-                preferred_model = m
-                break
-    
-    # إذا لم نجد المفضلين، نأخذ أول واحد في القائمة وخلاص
-    if not preferred_model:
-        preferred_model = my_models[0]
+        preferred_model = next((m for m in my_models if 'pro' in m), my_models[0])
         
     active_model_name = preferred_model
     model = genai.GenerativeModel(active_model_name)
     
 except Exception as e:
-    st.error(f"⚠️ خطأ في الاتصال: {e}")
-    st.stop()
+    st.error(f"⚠️ خطأ: {e}"); st.stop()
 
-# ===== 2. الواجهة =====
-st.title("🎙️ المعلم الذكي (محادثة)")
-# نعرض اسم الموديل الذي تم اختياره بنجاح
-st.caption(f"✅ تم العثور على الموديل وتشغيله: `{active_model_name}`")
+# ===== 2. الواجهة واختيار الصوت =====
+st.title("🎙️ المعلم الذكي المحاور")
+st.caption(f"✅ الموديل: `{active_model_name}`")
+
+st.subheader("🔊 إعدادات الصوت")
+voice_options = {
+    "🇪🇬 مصر - سلمى (أنثى)": "ar-EG-SalmaNeural",
+    "🇪🇬 مصر - شاكر (ذكر)": "ar-EG-ShakirNeural",
+    "🇸🇦 السعودية - زارية (أنثى)": "ar-SA-ZariyahNeural",
+    "🇸🇦 السعودية - حامد (ذكر)": "ar-SA-HamedNeural"
+}
+selected_voice_name = st.selectbox("اختر شخصية المعلم:", list(voice_options.keys()))
+selected_voice_code = voice_options[selected_voice_name]
 
 # ===== 3. الدخول =====
 if "logged_in" not in st.session_state:
@@ -94,31 +100,48 @@ st.info(f"⏳ الوقت: {int(remaining//60)} دقيقة")
 
 # ===== 5. المحادثة =====
 st.markdown("---")
-st.subheader("تحدث الآن 👇")
+st.subheader("ابدأ الحوار 👇")
 
 audio_input = mic_recorder(
-    start_prompt="🎤 اضغط للتحدث",
-    stop_prompt="⏹️ اضغط للإنهاء",
+    start_prompt="🎤 اضغط وتحدث",
+    stop_prompt="⏹️ إرسال",
     key='recorder',
     format="wav"
 )
 
 if audio_input:
-    with st.spinner("👂 أسمعك..."):
+    with st.spinner("👂 أستمع إليك..."):
         user_text = speech_to_text(audio_input['bytes'])
     
     if user_text:
-        st.success(f"🗣️: {user_text}")
+        st.success(f"🗣️ أنت: {user_text}")
         with st.spinner("🧠 أفكر..."):
             try:
-                # تعليمات المدرس
-                prompt = f"أنت معلم علوم مرح. أجب باختصار وبالعامية المصرية البسيطة على: {user_text}"
+                role = "معلمة" if "أنثى" in selected_voice_name else "معلم"
+                
+                # --- التعديل هنا لضبط الأسلوب ---
+                prompt = f"""
+                أنت {role} علوم لبق جداً ومحاور بارع لطلاب الثانوية.
+                الطالب سألك: '{user_text}'
+                
+                تعليمات الرد الصارمة:
+                1. تحدث بأسلوب قصصي حواري ممتع (Storytelling) وليس كسرد نقاط جامدة.
+                2. استخدم العامية المصرية الراقية والمبسطة.
+                3. تجنب تماماً استخدام الرموز مثل النجمة (*) أو الشباك (#) أو القوائم الرقمية داخل النص، لأنك تتحدث صوتياً.
+                4. اجعل الجمل قصيرة ومترابطة لتكون سهلة الفهم عند سماعها.
+                5. كن ودوداً جداً ونادِ الطالب بـ (يا بطل / يا دكتورة).
+                """
+                
                 response = model.generate_content(prompt)
                 
-                st.markdown(f"### 📘: {response.text}")
+                # عرض النص (يمكن أن يحتوي على تنسيق خفيف إذا أضافه الموديل)
+                st.markdown(f"### 📘 الرد:\n{response.text}")
                 
-                asyncio.run(generate_speech(response.text, "audio.mp3"))
-                st.audio("audio.mp3", format='audio/mp3', autoplay=True)
+                # النطق (سيتم تنظيفه تماماً من أي رموز قبل النطق)
+                output_file = "response.mp3"
+                asyncio.run(generate_speech(response.text, output_file, selected_voice_code))
+                st.audio(output_file, format='audio/mp3', autoplay=True)
+                
             except Exception as e:
                 st.error(f"خطأ: {e}")
     else:
