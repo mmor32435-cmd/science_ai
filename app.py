@@ -11,223 +11,256 @@ from datetime import datetime
 import pytz
 from PIL import Image
 import PyPDF2
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 # ==========================================
-# 🎛️ لوحة تحكم المعلم
+# 🎛️ إعدادات المعلم (الكونترول)
 # ==========================================
 
-# كلمة المرور الموحدة للدخول
-DAILY_PASSWORD = "SCIENCE_CHAT" 
+# 1. كلمات المرور
+TEACHER_MASTER_KEY = "ADMIN_2024"  # كلمة سر المعلم (تفتح في أي وقت)
+DAILY_STUDENT_PASS = "SCIENCE_DAY1" # كلمة سر الطلاب (تتغير يومياً)
 
-# توقيتك المحلي
-MY_TIMEZONE = 'Africa/Cairo' 
+# 2. إعدادات الوقت (للطلاب فقط)
+MY_TIMEZONE = 'Africa/Cairo'
+ALLOWED_HOURS = [17, 19, 21] # الساعة 5، 7، 9 مساءً
 
-# المواعيد المسموحة (الساعة بنظام 24)
-# 17 = 5 مساءً | 19 = 7 مساءً | 21 = 9 مساءً
-ALLOWED_HOURS = [17, 19, 21] 
+# 3. إعدادات جوجل درايف (مهم جداً)
+# يجب وضع معرف المجلد (Folder ID) هنا وليس الرابط الكامل
+# مثال: الرابط drive.google.com/drive/folders/1AbCdEfGhIjK... -> المعرف هو 1AbCdEfGhIjK...
+DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 # ==========================================
 
-st.set_page_config(page_title="منصة المناقشة الذكية", page_icon="💡", layout="wide")
+st.set_page_config(page_title="Science AI Pro", page_icon="🧬", layout="wide")
 
-# --- 1. دالة حارس الوقت (Time Guard) ---
-def check_discussion_time():
-    tz = pytz.timezone(MY_TIMEZONE)
-    now = datetime.now(tz)
-    current_hour = now.hour
+# --- 1. التحقق من المستخدم والوقت ---
+def check_access(password):
+    # إذا كان المعلم، يفتح فوراً
+    if password == TEACHER_MASTER_KEY:
+        return True, "👨‍🏫 مرحباً أستاذي! (وضع المعلم - وصول كامل)", "teacher"
     
-    # هل الساعة الحالية موجودة ضمن الساعات المسموحة؟
-    if current_hour in ALLOWED_HOURS:
-        # حساب الوقت المتبقي لنهاية الساعة الحالية
-        minutes_passed = now.minute
-        minutes_remaining = 60 - minutes_passed
-        return True, f"✅ الجلسة مفتوحة! متبقي {minutes_remaining} دقيقة للإغلاق."
-    else:
-        # رسالة الخطأ توضح المواعيد
-        msg = f"""
-        🛑 المنصة مغلقة حالياً.
-        
-        ⏰ مواعيد المناقشة اليومية (بتوقيت القاهرة):
-        1️⃣ من 5:00 م إلى 6:00 م
-        2️⃣ من 7:00 م إلى 8:00 م
-        3️⃣ من 9:00 م إلى 10:00 م
-        
-        الساعة الآن: {now.strftime('%I:%M %p')}
-        """
-        return False, msg
+    # إذا كان الطالب، نتحقق من الكود والوقت
+    if password == DAILY_STUDENT_PASS:
+        tz = pytz.timezone(MY_TIMEZONE)
+        now = datetime.now(tz)
+        if now.hour in ALLOWED_HOURS:
+            remaining = 60 - now.minute
+            return True, f"✅ أهلاً بك يا بطل. متبقي {remaining} دقيقة.", "student"
+        else:
+            return False, "⏳ المنصة مغلقة حالياً. المواعيد: 5-6م، 7-8م، 9-10م.", "student"
+    
+    return False, "⛔ كلمة المرور غير صحيحة.", "none"
 
-# تنفيذ التحقق من الوقت فوراً
-is_open, status_msg = check_discussion_time()
+# --- 2. دوال جوجل درايف (المكتبة) ---
+def get_drive_service():
+    if "gcp_service_account" in st.secrets:
+        creds = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=['https://www.googleapis.com/auth/drive.readonly']
+        )
+        return build('drive', 'v3', credentials=creds)
+    return None
 
-if not is_open:
-    st.error(status_msg)
-    st.image("https://cdn-icons-png.flaticon.com/512/2972/2972531.png", width=150)
-    st.stop() # يغلق التطبيق
+def list_drive_files(service, folder_id):
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and mimeType='application/pdf'",
+        fields="nextPageToken, files(id, name)").execute()
+    return results.get('files', [])
 
-# --- 2. دوال المساعدة (صوت، PDF، صور) ---
-
-def prepare_text(text):
-    text = re.sub(r'[\*\#\-\_]', '', text)
+def download_pdf_text(service, file_id):
+    request = service.files().get_media(fileId=file_id)
+    file_io = BytesIO()
+    downloader = MediaIoBaseDownload(file_io, request)
+    done = False
+    while done is False:
+        status, done = downloader.next_chunk()
+    
+    # استخراج النص من الـ PDF المحمل
+    file_io.seek(0)
+    reader = PyPDF2.PdfReader(file_io)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() + "\n"
     return text
 
+# --- 3. دوال اللغة والصوت ---
+def get_voice_config(lang):
+    if lang == "English":
+        return "en-US-AndrewNeural", "en-US"
+    else:
+        return "ar-EG-ShakirNeural", "ar-EG" # يمكن التغيير لسلمى
+
 async def generate_speech(text, output_file, voice_code):
-    clean_text = prepare_text(text)
-    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
+    clean_text = re.sub(r'[\*\#\-\_]', '', text)
+    communicate = edge_tts.Communicate(clean_text, voice_code)
     await communicate.save(output_file)
 
-def speech_to_text(audio_bytes):
+def speech_to_text(audio_bytes, lang_code):
     r = sr.Recognizer()
     try:
         audio_file = sr.AudioFile(BytesIO(audio_bytes))
         with audio_file as source:
             r.adjust_for_ambient_noise(source)
             audio_data = r.record(source)
-            text = r.recognize_google(audio_data, language="ar-EG")
+            text = r.recognize_google(audio_data, language=lang_code)
             return text
     except:
         return None
 
-def extract_text_from_pdf(pdf_file):
-    reader = PyPDF2.PdfReader(pdf_file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() + "\n"
-    return text
-
-# --- 3. اتصال الذكاء الاصطناعي ---
+# --- 4. اتصال Gemini ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # نحتاج موديل يدعم الصور (Vision) مثل flash أو pro
-    all_models = genai.list_models()
-    vision_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods and 'flash' in m.name]
-    
-    if vision_models:
-        active_model = vision_models[0]
-    else:
-        # احتياطي لو لم يجد flash
-        active_model = "models/gemini-1.5-pro"
-        
-    model = genai.GenerativeModel(active_model)
-except Exception as e:
-    st.error(f"خطأ في الاتصال: {e}")
-    st.stop()
+    model = genai.GenerativeModel('gemini-1.5-flash') # نستخدم flash لسرعته وقدرته الكبيرة
+except:
+    st.error("Error connecting to AI"); st.stop()
+
 
 # ==========================================
-# ===== 4. واجهة التطبيق =====
+# ===== واجهة التطبيق =====
 # ==========================================
 
-# تسجيل الدخول
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+# --- شاشة تسجيل الدخول ---
+if "auth_status" not in st.session_state:
+    st.session_state.auth_status = False
+    st.session_state.user_type = "none"
 
-if not st.session_state.logged_in:
-    st.title("🔐 بوابة المناقشة العلمية")
-    st.success(status_msg) # نعرض رسالة أن الوقت متاح
-    pwd = st.text_input("كلمة مرور الجلسة:", type="password")
-    if st.button("دخول"):
-        if pwd == DAILY_PASSWORD:
-            st.session_state.logged_in = True
+if not st.session_state.auth_status:
+    st.title("🔐 Science AI Platform")
+    pwd = st.text_input("Password / كلمة المرور:", type="password")
+    if st.button("Enter / دخول"):
+        allowed, msg, u_type = check_access(pwd)
+        if allowed:
+            st.session_state.auth_status = True
+            st.session_state.user_type = u_type
+            st.success(msg)
+            time.sleep(1)
             st.rerun()
         else:
-            st.error("كلمة المرور غير صحيحة")
+            st.error(msg)
     st.stop()
 
-# الواجهة الرئيسية بعد الدخول
-st.sidebar.title("معلومات الجلسة")
-st.sidebar.info(status_msg)
-st.sidebar.markdown("---")
-st.sidebar.write("🔊 صوت المعلم:")
-voice_choice = st.sidebar.radio("اختر:", ["مستر شاكر (مصري)", "مس سلمى (مصرية)"])
-voice_code = "ar-EG-ShakirNeural" if "شاكر" in voice_choice else "ar-EG-SalmaNeural"
-
-st.title("💡 ساحة الحوار والمناقشة")
-st.caption("اسأل، ناقش، أرسل صوراً أو ملفات.. المعلم الذكي معك!")
-
-# --- نظام التبويبات (Tabs) لتنظيم المدخلات ---
-tab1, tab2, tab3 = st.tabs(["🎙️ تحدث (صوت)", "✍️ كتابة وسؤال", "📁 رفع ملفات/صور"])
-
-user_input_content = None # لتخزين السؤال النهائي
-input_type = "text" # text, image, pdf
-
-# --- تبويب 1: الصوت ---
-with tab1:
-    st.write("اضغط وتحدث للنقاش:")
-    audio_input = mic_recorder(start_prompt="🎤 تحدث", stop_prompt="⏹️ إرسال", key='rec', format="wav")
-    if audio_input:
-        with st.spinner("👂 أسمعك..."):
-            text = speech_to_text(audio_input['bytes'])
-            if text:
-                user_input_content = text
-                st.success(f"🗣️ قلت: {text}")
-
-# --- تبويب 2: الكتابة ---
-with tab2:
-    text_input = st.text_area("اكتب سؤالك أو موضوع المناقشة هنا:", height=100)
-    if st.button("إرسال النص") and text_input:
-        user_input_content = text_input
-
-# --- تبويب 3: الملفات والصور ---
-with tab3:
-    uploaded_file = st.file_uploader("ارفع صورة (للمسائل) أو ملف PDF (للمذكرات)", type=['png', 'jpg', 'jpeg', 'pdf'])
-    file_caption = st.text_input("أضف سؤالاً حول الملف (اختياري):")
+# --- الشريط الجانبي (الإعدادات) ---
+with st.sidebar:
+    st.header("⚙️ Settings / الإعدادات")
     
-    if st.button("تحليل الملف ومناقشته") and uploaded_file:
-        if uploaded_file.type == "application/pdf":
-            # معالجة PDF
-            with st.spinner("📄 جاري قراءة ملف PDF..."):
-                pdf_text = extract_text_from_pdf(uploaded_file)
-                # ندمج نص الـ PDF مع سؤال الطالب
-                user_input_content = f"النص المستخرج من الملف:\n{pdf_text}\n\nسؤالي هو: {file_caption}"
-                input_type = "text" # لأننا حولنا الـ PDF لنص
-        else:
-            # معالجة الصور
-            image = Image.open(uploaded_file)
-            st.image(image, caption="الصورة المرفقة", width=300)
-            user_input_content = [file_caption if file_caption else "اشرح هذه الصورة علمياً", image]
-            input_type = "image"
-
-# ==========================================
-# ===== 5. المعالجة والرد =====
-# ==========================================
-
-if user_input_content:
-    with st.spinner("🧠 المعلم يفكر ويحلل..."):
+    # 1. اختيار اللغة
+    language = st.radio("Language / اللغة:", ["العربية", "English"])
+    lang_code = "ar-EG" if language == "العربية" else "en-US"
+    voice_code, sr_lang = get_voice_config(language)
+    
+    st.markdown("---")
+    
+    # 2. المكتبة (جوجل درايف)
+    st.subheader("📚 Reference Books / المكتبة")
+    reference_text = ""
+    
+    if DRIVE_FOLDER_ID:
         try:
-            # تجهيز التوجيه (Prompt) للمناقشة
-            role_desc = "معلمة" if "سلمى" in voice_choice else "معلم"
+            service = get_drive_service()
+            if service:
+                files = list_drive_files(service, DRIVE_FOLDER_ID)
+                if files:
+                    selected_file_name = st.selectbox("Select Book / اختر كتاباً:", [f['name'] for f in files])
+                    # البحث عن المعرف
+                    selected_file_id = next(f['id'] for f in files if f['name'] == selected_file_name)
+                    
+                    if st.button("Load Book / تحميل الكتاب للمذاكرة"):
+                        with st.spinner("Downloading & Reading..."):
+                            reference_text = download_pdf_text(service, selected_file_id)
+                            st.session_state.ref_text = reference_text # حفظ في الذاكرة
+                            st.success(f"تم تحميل {selected_file_name} بنجاح! سيجيب البوت منه.")
+                else:
+                    st.warning("No PDFs found in folder.")
+            else:
+                st.warning("Service Account not configured.")
+        except Exception as e:
+            st.error(f"Drive Error: {e}")
+            
+    # استخدام النص المحمل سابقاً
+    if "ref_text" in st.session_state:
+        reference_text = st.session_state.ref_text
+        st.info("✅ Reference Loaded")
+
+# --- الواجهة الرئيسية ---
+st.title("🧬 AI Science Tutor")
+st.caption("Physics | Chemistry | Biology | General Science")
+
+# التبويبات
+tab_voice, tab_text, tab_upload = st.tabs(["🎙️ Voice / صوت", "✍️ Chat / كتابة", "📁 Upload / ملفات"])
+user_input = ""
+input_mode = "text"
+
+# 1. الصوت
+with tab_voice:
+    st.write("Click to speak / اضغط للتحدث:")
+    audio_in = mic_recorder(start_prompt="🎤 Speak", stop_prompt="⏹️ Stop", key='mic', format="wav")
+    if audio_in:
+        with st.spinner("Listening..."):
+            user_input = speech_to_text(audio_in['bytes'], sr_lang)
+            if user_input: st.success(f"You said: {user_input}")
+
+# 2. الكتابة
+with tab_text:
+    txt_in = st.text_area("Type your question / اكتب سؤالك:")
+    if st.button("Send / إرسال"):
+        user_input = txt_in
+
+# 3. رفع ملفات (تحليل محلي)
+with tab_upload:
+    up_file = st.file_uploader("Upload Image or PDF / ارفع صورة أو ملف", type=['png', 'jpg', 'pdf'])
+    up_q = st.text_input("Question about file / سؤالك عن الملف:")
+    if st.button("Analyze / تحليل") and up_file:
+        if up_file.type == 'application/pdf':
+             pdf_reader = PyPDF2.PdfReader(up_file)
+             extracted = ""
+             for p in pdf_reader.pages: extracted += p.extract_text()
+             user_input = f"PDF Content:\n{extracted}\n\nQuestion: {up_q}"
+        else:
+            image = Image.open(up_file)
+            st.image(image, width=300)
+            user_input = [up_q if up_q else "Explain this image", image]
+            input_mode = "image"
+
+# --- المعالجة والذكاء الاصطناعي ---
+if user_input:
+    with st.spinner("Thinking... / جاري التحليل..."):
+        try:
+            # هندسة الأوامر (Bilingual Prompt)
+            role_lang = "Arabic" if language == "العربية" else "English"
+            
             system_prompt = f"""
-            أنت {role_desc} علوم مصري محب للنقاش والحوار.
-            - هدفك ليس مجرد الإجابة، بل فتح حوار وفهم عمق سؤال الطالب.
-            - تحدث باللهجة المصرية الراقية (بساطة مع دقة علمية).
-            - إذا أرسل الطالب صورة، اشرح تفاصيلها بدقة.
-            - إذا كان السؤال يحتاج تفكيراً، اشرح الخطوات "واحدة واحدة".
-            - استخدم عبارات حوارية مثل: (بص يا سيدي، خد بالك من النقطة دي، إيه رأيك لو...).
-            - اجعل الإجابة مسموعة (تجنب الرموز المعقدة).
+            You are a professional Science Tutor (Physics, Chemistry, Biology).
+            Language Mode: {role_lang}.
+            
+            Instructions:
+            1. Answer strictly in {role_lang}.
+            2. Be interactive, encouraging, and clear.
+            3. If the user asks a question, explain the scientific concept simply.
+            4. If 'Reference Book Context' is provided below, USE IT to answer.
+            5. If no reference is provided, use your general knowledge.
+            6. For English output: Speak clearly and academically.
+            7. For Arabic output: Use Egyptian dialect for spoken parts if possible, but keep terms scientific.
+            
+            Reference Book Context (Partial):
+            {reference_text[:50000] if reference_text else "No reference book loaded."}
             """
             
-            # الإرسال للموديل حسب النوع
-            if input_type == "image":
-                # للصورة نرسل القائمة [النص, الصورة]
-                full_prompt = [system_prompt, user_input_content[0], user_input_content[1]]
-                response = model.generate_content(full_prompt)
+            # إرسال الطلب
+            if input_mode == "image":
+                response = model.generate_content([system_prompt, user_input[0], user_input[1]])
             else:
-                # للنص نرسل النص المدمج
-                full_prompt = f"{system_prompt}\n\nسؤال الطالب/محتوى الملف:\n{user_input_content}"
-                response = model.generate_content(full_prompt)
+                response = model.generate_content(f"{system_prompt}\n\nUser Question: {user_input}")
             
-            # العرض
+            # العرض والصوت
             st.markdown("---")
-            st.markdown(f"### 📘 رد {role_desc}:")
-            st.write(response.text)
+            st.markdown(f"### 💡 Answer / الإجابة:\n{response.text}")
             
-            # الصوت
-            output_file = "response.mp3"
-            asyncio.run(generate_speech(response.text, output_file, voice_code))
-            st.audio(output_file, format='audio/mp3', autoplay=True)
+            out_audio = "resp.mp3"
+            asyncio.run(generate_speech(response.text, out_audio, voice_code))
+            st.audio(out_audio, format='audio/mp3', autoplay=True)
             
         except Exception as e:
-            st.error(f"حدث خطأ أثناء المعالجة: {e}")
-            if "404" in str(e):
-                st.warning("قد يكون الموديل غير مدعوم في منطقتك للصور، حاول استخدام النص فقط.")
-
-st.markdown("---")
+            st.error(f"Error: {e}")
