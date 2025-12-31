@@ -20,14 +20,14 @@ import gspread
 # 🎛️ إعدادات التحكم
 # ==========================================
 
-TEACHER_MASTER_KEY = "ADMIN_2024"  # مفتاحك للدخول الدائم
-CONTROL_SHEET_NAME = "App_Control" # اسم شيت الباسورد
-SESSION_DURATION_MINUTES = 60      # مدة الجلسة المسموحة للطالب (ساعة)
+TEACHER_MASTER_KEY = "ADMIN_2024"  
+CONTROL_SHEET_NAME = "App_Control" 
+SESSION_DURATION_MINUTES = 60      
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
-st.set_page_config(page_title="Science AI Pro", page_icon="⏱️", layout="wide")
+st.set_page_config(page_title="Science AI Pro", page_icon="🐞", layout="wide")
 
-# --- دالة جلب باسورد اليوم من الشيت ---
+# --- دالة جلب الباسورد (معدلة لكشف الخطأ) ---
 def get_daily_password():
     if "gcp_service_account" in st.secrets:
         try:
@@ -36,28 +36,50 @@ def get_daily_password():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             client = gspread.authorize(creds)
-            sheet = client.open(CONTROL_SHEET_NAME).sheet1
-            # نقرأ الخلية B1 كالعادة
-            return str(sheet.acell('B1').value).strip()
-        except: return None
-    return None
+            
+            # محاولة فتح الشيت
+            try:
+                sheet = client.open(CONTROL_SHEET_NAME).sheet1
+            except gspread.SpreadsheetNotFound:
+                st.error(f"❌ لم أجد ملف إكسل باسم '{CONTROL_SHEET_NAME}' في جوجل درايف. تأكد من الاسم والمشاركة.")
+                return None
+            
+            # قراءة القيمة
+            val = sheet.acell('B1').value
+            
+            # === كود كشف الخطأ (سيظهر لك ما في الشيت) ===
+            st.toast(f"📢 النظام قرأ من الشيت الباسورد: {val}", icon="🕵️")
+            # ==========================================
+            
+            return str(val).strip() if val else None
+            
+        except Exception as e:
+            st.error(f"❌ خطأ تقني في الاتصال بالشيت: {e}")
+            st.info("تأكد أنك فعلت Google Sheets API في Google Cloud Console")
+            return None
+    else:
+        st.error("❌ بيانات حساب الخدمة (JSON) غير موجودة في Secrets")
+        return None
 
 # --- التحقق من الدخول ---
 def check_login(password):
-    # 1. المعلم (دخول فوري ودائم)
+    # 1. المعلم
     if password == TEACHER_MASTER_KEY:
         return True, "teacher"
     
-    # 2. الطالب (مطابقة الباسورد فقط)
+    # 2. الطالب
     daily_pass = get_daily_password()
-    if daily_pass and password == daily_pass:
-        return True, "student"
     
-    return False, "none"
+    if not daily_pass:
+        return False, "⚠️ لا يوجد باسورد مسجل في الشيت اليوم."
+        
+    if password == daily_pass:
+        return True, "student"
+    else:
+        # رسالة سرية لك لتعرف الفرق
+        return False, f"⛔ الباسورد خطأ. (أنت كتبت: {password} - والمطلوب: {daily_pass})"
 
-# --- دوال الخدمات (درايف، صوت، ذكاء) ---
-# ... (نفس الدوال السابقة لضمان عمل النظام بكفاءة) ...
-
+# --- باقي الدوال (كما هي) ---
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
         try:
@@ -115,7 +137,7 @@ def speech_to_text(audio_bytes, lang_code):
             return text
     except: return None
 
-# اتصال Gemini
+# Gemini
 try:
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -129,71 +151,52 @@ except: st.stop()
 
 
 # ==========================================
-# ===== منطق الجلسة والوقت =====
+# ===== المنطق =====
 # ==========================================
 
 if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
 
-# شاشة الدخول
+# شاشة الدخول (مع كشف الأخطاء)
 if not st.session_state.auth_status:
-    st.title("🔐 Science AI Platform")
-    st.info(f"ملاحظة: عند تسجيل الدخول، سيكون لديك {SESSION_DURATION_MINUTES} دقيقة فقط.")
+    st.title("🔐 Science AI Platform (Debug Mode)")
+    st.info("⚠️ هذا الوضع يظهر لك سبب الخطأ لتتمكن من حله.")
+    
     pwd = st.text_input("Password:", type="password")
     if st.button("Login"):
-        valid, u_type = check_login(pwd)
+        valid, u_type_or_msg = check_login(pwd)
         if valid:
             st.session_state.auth_status = True
-            st.session_state.user_type = u_type
-            # ⏱️ هنا نبدأ العداد لحظة الدخول
+            st.session_state.user_type = u_type_or_msg
             st.session_state.start_time = time.time()
-            st.success("تم الدخول بنجاح! بدأ الوقت.")
-            time.sleep(1)
-            st.rerun()
+            st.success("تم الدخول!"); time.sleep(0.5); st.rerun()
         else:
-            st.error("كلمة المرور غير صحيحة.")
+            # هنا يظهر لك السبب الحقيقي
+            st.error(u_type_or_msg)
     st.stop()
 
-# التحقق من انتهاء الوقت (للطلاب فقط)
+# وقت الجلسة
 time_up = False
 remaining_minutes = 0
-
 if st.session_state.user_type == "student":
     elapsed_seconds = time.time() - st.session_state.start_time
     allowed_seconds = SESSION_DURATION_MINUTES * 60
-    
-    if elapsed_seconds > allowed_seconds:
-        time_up = True
-    else:
-        remaining_minutes = int((allowed_seconds - elapsed_seconds) // 60)
+    if elapsed_seconds > allowed_seconds: time_up = True
+    else: remaining_minutes = int((allowed_seconds - elapsed_seconds) // 60)
 
-# ==========================================
-# ===== واجهة التطبيق =====
-# ==========================================
-
-# الشريط الجانبي (المعلومات والعداد)
+# واجهة التطبيق
 with st.sidebar:
-    if st.session_state.user_type == "teacher":
-        st.success("👨‍🏫 وضع المعلم (وقت مفتوح)")
+    if st.session_state.user_type == "teacher": st.success("👨‍🏫 Teacher")
     else:
-        if time_up:
-            st.error("🛑 انتهى الوقت!")
-        else:
-            # عداد ملون
-            color = "green" if remaining_minutes > 10 else "red"
-            st.markdown(f"<h1 style='color:{color}'>{remaining_minutes} دقيقة</h1>", unsafe_allow_html=True)
-            st.caption("متبقي من جلستك")
-            st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
+        if time_up: st.error("🛑 Time's up!")
+        else: st.metric("Time Left", f"{remaining_minutes} min")
 
     st.markdown("---")
-    st.header("⚙️ Settings")
     language = st.radio("Language:", ["العربية", "English"])
     lang_code = "ar-EG" if language == "العربية" else "en-US"
     voice_code, sr_lang = get_voice_config(language)
     
-    # المكتبة
-    st.markdown("---")
     if DRIVE_FOLDER_ID:
         service = get_drive_service()
         if service:
@@ -205,20 +208,12 @@ with st.sidebar:
                     fid = next(f['id'] for f in files if f['name'] == sel_file)
                     with st.spinner("Loading..."):
                         st.session_state.ref_text = download_pdf_text(service, fid)
-                        st.success("Active!")
+                        st.success("Loaded!")
 
-# قفل الشاشة إذا انتهى الوقت
 if time_up and st.session_state.user_type == "student":
-    st.error("⚠️ لقد انتهت مدة الجلسة (60 دقيقة).")
-    st.warning("يرجى التواصل مع المعلم للحصول على كود جديد غداً.")
-    if st.button("تسجيل الخروج"):
-        st.session_state.auth_status = False
-        st.rerun()
-    st.stop() # يوقف الكود هنا
+    st.error("Session Expired."); st.stop()
 
-# --- التطبيق الرئيسي (يعمل فقط إذا كان الوقت متاحاً) ---
-
-st.title("🧬 AI Science Tutor")
+st.title("⚡ AI Science Tutor")
 tab1, tab2, tab3 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 Upload"])
 user_input = ""
 input_mode = "text"
@@ -247,35 +242,22 @@ with tab3:
             input_mode = "image"
 
 if user_input:
-    status = st.status("🧠 Thinking...", expanded=True)
+    status = st.status("🧠 Processing...", expanded=True)
     try:
         role_lang = "Arabic" if language == "العربية" else "English"
         ref = st.session_state.get("ref_text", "")
-        
-        sys_prompt = f"""
-        Role: Science Tutor. Lang: {role_lang}.
-        Goal: Discuss & Explain clearly.
-        Instructions:
-        1. Answer in {role_lang}.
-        2. Be conversational.
-        3. Reference: {ref[:20000]}
-        """
+        sys_prompt = f"Role: Science Tutor. Lang: {role_lang}. Be concise. Ref: {ref[:20000]}"
         
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
                 response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
-             else:
-                st.error("Model doesn't support images.")
-                st.stop()
+             else: st.error("Model error"); st.stop()
         else:
             response = model.generate_content(f"{sys_prompt}\nUser: {user_input}")
         
         status.write("Speaking...")
         st.markdown(f"### 💡 Answer:\n{response.text}")
-        
         audio = asyncio.run(generate_audio_stream(response.text, voice_code))
         st.audio(audio, format='audio/mp3', autoplay=True)
         status.update(label="Done", state="complete", expanded=False)
-        
-    except Exception as e:
-        st.error(f"Error: {e}")
+    except Exception as e: st.error(f"Error: {e}")
