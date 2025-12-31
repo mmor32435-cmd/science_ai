@@ -19,10 +19,10 @@ from googleapiclient.http import MediaIoBaseDownload
 # 🎛️ إعدادات التحكم
 # ==========================================
 
-TEACHER_MASTER_KEY = "ADMIN_2024"  # كلمة سر المعلم
-DAILY_STUDENT_PASS = "SCIENCE_DAY1" # كلمة سر الطلاب
+TEACHER_MASTER_KEY = "ADMIN_2024"  # كلمة سر المعلم (افتح في أي وقت)
+DAILY_STUDENT_PASS = "SCIENCE_DAY1" # كلمة سر الطلاب (مواعيد محددة)
 MY_TIMEZONE = 'Africa/Cairo'
-ALLOWED_HOURS = [17, 19, 21] # الساعة 5، 7، 9
+ALLOWED_HOURS = [17, 19, 21] # المواعيد: 5م، 7م، 9م
 
 # جلب كود المجلد من الإعدادات
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
@@ -31,9 +31,11 @@ st.set_page_config(page_title="Science AI Pro", page_icon="🧬", layout="wide")
 
 # --- التحقق من الدخول ---
 def check_access(password):
+    # المعلم يدخل دائماً
     if password == TEACHER_MASTER_KEY:
-        return True, "👨‍🏫 مرحباً أستاذي! (وصول كامل)", "teacher"
+        return True, "👨‍🏫 مرحباً أستاذي! (وضع المعلم - وصول كامل)", "teacher"
     
+    # الطالب يدخل بشروط
     if password == DAILY_STUDENT_PASS:
         tz = pytz.timezone(MY_TIMEZONE)
         now = datetime.now(tz)
@@ -47,7 +49,7 @@ def check_access(password):
 
 # --- دوال جوجل درايف ---
 def get_drive_service():
-    # هنا نقرأ البيانات الصحيحة من Secrets مباشرة
+    # يقرأ بيانات الاعتماد من Secrets مباشرة (بعد إصلاح التنسيق)
     if "gcp_service_account" in st.secrets:
         try:
             creds = service_account.Credentials.from_service_account_info(
@@ -67,7 +69,7 @@ def list_drive_files(service, folder_id):
             fields="nextPageToken, files(id, name)").execute()
         return results.get('files', [])
     except Exception as e:
-        st.error(f"خطأ في الوصول للمجلد: {e}")
+        st.error(f"خطأ في الوصول للمجلد (تأكد أنك شاركت المجلد مع إيميل الخدمة): {e}")
         return []
 
 def download_pdf_text(service, file_id):
@@ -112,16 +114,26 @@ def speech_to_text(audio_bytes, lang_code):
     except:
         return None
 
-# --- إعداد Gemini ---
+# --- إعداد Gemini (محسن لتجنب خطأ 404) ---
 try:
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # البحث الذكي عن الموديل المتاح
+        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # محاولة العثور على flash أو pro
+        active_model_name = next((m for m in all_models if 'flash' in m), None)
+        if not active_model_name:
+            active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
+            
+        model = genai.GenerativeModel(active_model_name)
     else:
         st.error("مفتاح GOOGLE_API_KEY غير موجود في Secrets")
         st.stop()
-except:
-    st.error("خطأ في الاتصال بالذكاء الاصطناعي"); st.stop()
+except Exception as e:
+    st.error(f"خطأ في الاتصال بالذكاء الاصطناعي: {e}")
+    st.stop()
 
 
 # ==========================================
@@ -151,6 +163,7 @@ if not st.session_state.auth_status:
 # --- الشريط الجانبي (الإعدادات) ---
 with st.sidebar:
     st.header("⚙️ Settings / الإعدادات")
+    st.caption(f"Model: {active_model_name}")
     
     # 1. اختيار اللغة
     language = st.radio("Language / اللغة:", ["العربية", "English"])
@@ -183,7 +196,7 @@ with st.sidebar:
     
     if "ref_text" in st.session_state:
         reference_text = st.session_state.ref_text
-        st.info("✅ تم تفعيل مرجع الكتاب")
+        st.info("✅ الكتاب مرجع نشط الآن")
 
 # --- الواجهة الرئيسية ---
 st.title("🧬 AI Science Tutor")
@@ -243,7 +256,12 @@ if user_input:
             """
             
             if input_mode == "image":
-                response = model.generate_content([system_prompt, user_input[0], user_input[1]])
+                # بعض الموديلات لا تدعم الصور، نتأكد هنا
+                if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
+                     response = model.generate_content([system_prompt, user_input[0], user_input[1]])
+                else:
+                    st.error("الموديل الحالي لا يدعم الصور، استخدم النص فقط.")
+                    st.stop()
             else:
                 response = model.generate_content(f"{system_prompt}\n\nUser Question: {user_input}")
             
