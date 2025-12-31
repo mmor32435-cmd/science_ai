@@ -16,33 +16,24 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # ==========================================
-# 🎛️ إعدادات المعلم (الكونترول)
+# 🎛️ إعدادات التحكم
 # ==========================================
 
-# 1. كلمات المرور
-TEACHER_MASTER_KEY = "ADMIN_2024"  # كلمة سر المعلم (تفتح في أي وقت)
-DAILY_STUDENT_PASS = "SCIENCE_DAY1" # كلمة سر الطلاب (تتغير يومياً)
-
-# 2. إعدادات الوقت (للطلاب فقط)
+TEACHER_MASTER_KEY = "ADMIN_2024"  # كلمة سر المعلم
+DAILY_STUDENT_PASS = "SCIENCE_DAY1" # كلمة سر الطلاب
 MY_TIMEZONE = 'Africa/Cairo'
-ALLOWED_HOURS = [17, 19, 21] # الساعة 5، 7، 9 مساءً
+ALLOWED_HOURS = [17, 19, 21] # الساعة 5، 7، 9
 
-# 3. إعدادات جوجل درايف (مهم جداً)
-# يجب وضع معرف المجلد (Folder ID) هنا وليس الرابط الكامل
-# مثال: الرابط drive.google.com/drive/folders/1AbCdEfGhIjK... -> المعرف هو 1AbCdEfGhIjK...
+# جلب كود المجلد من الإعدادات
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
-
-# ==========================================
 
 st.set_page_config(page_title="Science AI Pro", page_icon="🧬", layout="wide")
 
-# --- 1. التحقق من المستخدم والوقت ---
+# --- التحقق من الدخول ---
 def check_access(password):
-    # إذا كان المعلم، يفتح فوراً
     if password == TEACHER_MASTER_KEY:
-        return True, "👨‍🏫 مرحباً أستاذي! (وضع المعلم - وصول كامل)", "teacher"
+        return True, "👨‍🏫 مرحباً أستاذي! (وصول كامل)", "teacher"
     
-    # إذا كان الطالب، نتحقق من الكود والوقت
     if password == DAILY_STUDENT_PASS:
         tz = pytz.timezone(MY_TIMEZONE)
         now = datetime.now(tz)
@@ -54,44 +45,55 @@ def check_access(password):
     
     return False, "⛔ كلمة المرور غير صحيحة.", "none"
 
-# --- 2. دوال جوجل درايف (المكتبة) ---
+# --- دوال جوجل درايف ---
 def get_drive_service():
+    # هنا نقرأ البيانات الصحيحة من Secrets مباشرة
     if "gcp_service_account" in st.secrets:
-        creds = service_account.Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=['https://www.googleapis.com/auth/drive.readonly']
-        )
-        return build('drive', 'v3', credentials=creds)
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=['https://www.googleapis.com/auth/drive.readonly']
+            )
+            return build('drive', 'v3', credentials=creds)
+        except Exception as e:
+            st.error(f"خطأ في قراءة مفتاح الخدمة: {e}")
+            return None
     return None
 
 def list_drive_files(service, folder_id):
-    results = service.files().list(
-        q=f"'{folder_id}' in parents and mimeType='application/pdf'",
-        fields="nextPageToken, files(id, name)").execute()
-    return results.get('files', [])
+    try:
+        results = service.files().list(
+            q=f"'{folder_id}' in parents and mimeType='application/pdf'",
+            fields="nextPageToken, files(id, name)").execute()
+        return results.get('files', [])
+    except Exception as e:
+        st.error(f"خطأ في الوصول للمجلد: {e}")
+        return []
 
 def download_pdf_text(service, file_id):
-    request = service.files().get_media(fileId=file_id)
-    file_io = BytesIO()
-    downloader = MediaIoBaseDownload(file_io, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-    
-    # استخراج النص من الـ PDF المحمل
-    file_io.seek(0)
-    reader = PyPDF2.PdfReader(file_io)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() + "\n"
-    return text
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_io = BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        
+        file_io.seek(0)
+        reader = PyPDF2.PdfReader(file_io)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except Exception as e:
+        return f"Error reading PDF: {e}"
 
-# --- 3. دوال اللغة والصوت ---
+# --- دوال الصوت واللغة ---
 def get_voice_config(lang):
     if lang == "English":
         return "en-US-AndrewNeural", "en-US"
     else:
-        return "ar-EG-ShakirNeural", "ar-EG" # يمكن التغيير لسلمى
+        return "ar-EG-ShakirNeural", "ar-EG"
 
 async def generate_speech(text, output_file, voice_code):
     clean_text = re.sub(r'[\*\#\-\_]', '', text)
@@ -110,12 +112,16 @@ def speech_to_text(audio_bytes, lang_code):
     except:
         return None
 
-# --- 4. اتصال Gemini ---
+# --- إعداد Gemini ---
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash') # نستخدم flash لسرعته وقدرته الكبيرة
+    if "GOOGLE_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    else:
+        st.error("مفتاح GOOGLE_API_KEY غير موجود في Secrets")
+        st.stop()
 except:
-    st.error("Error connecting to AI"); st.stop()
+    st.error("خطأ في الاتصال بالذكاء الاصطناعي"); st.stop()
 
 
 # ==========================================
@@ -158,31 +164,26 @@ with st.sidebar:
     reference_text = ""
     
     if DRIVE_FOLDER_ID:
-        try:
-            service = get_drive_service()
-            if service:
-                files = list_drive_files(service, DRIVE_FOLDER_ID)
-                if files:
-                    selected_file_name = st.selectbox("Select Book / اختر كتاباً:", [f['name'] for f in files])
-                    # البحث عن المعرف
-                    selected_file_id = next(f['id'] for f in files if f['name'] == selected_file_name)
-                    
-                    if st.button("Load Book / تحميل الكتاب للمذاكرة"):
-                        with st.spinner("Downloading & Reading..."):
-                            reference_text = download_pdf_text(service, selected_file_id)
-                            st.session_state.ref_text = reference_text # حفظ في الذاكرة
-                            st.success(f"تم تحميل {selected_file_name} بنجاح! سيجيب البوت منه.")
-                else:
-                    st.warning("No PDFs found in folder.")
+        service = get_drive_service()
+        if service:
+            files = list_drive_files(service, DRIVE_FOLDER_ID)
+            if files:
+                selected_file_name = st.selectbox("Select Book / اختر كتاباً:", [f['name'] for f in files])
+                selected_file_id = next(f['id'] for f in files if f['name'] == selected_file_name)
+                
+                if st.button("Load Book / تحميل الكتاب"):
+                    with st.spinner("Downloading & Reading..."):
+                        reference_text = download_pdf_text(service, selected_file_id)
+                        st.session_state.ref_text = reference_text
+                        st.success(f"تم تحميل {selected_file_name}!")
             else:
-                st.warning("Service Account not configured.")
-        except Exception as e:
-            st.error(f"Drive Error: {e}")
-            
-    # استخدام النص المحمل سابقاً
+                st.warning("المجلد فارغ أو الكود خطأ.")
+        else:
+            st.warning("لم يتم الاتصال بجوجل درايف. تأكد من Secrets.")
+    
     if "ref_text" in st.session_state:
         reference_text = st.session_state.ref_text
-        st.info("✅ Reference Loaded")
+        st.info("✅ تم تفعيل مرجع الكتاب")
 
 # --- الواجهة الرئيسية ---
 st.title("🧬 AI Science Tutor")
@@ -208,10 +209,10 @@ with tab_text:
     if st.button("Send / إرسال"):
         user_input = txt_in
 
-# 3. رفع ملفات (تحليل محلي)
+# 3. رفع ملفات
 with tab_upload:
-    up_file = st.file_uploader("Upload Image or PDF / ارفع صورة أو ملف", type=['png', 'jpg', 'pdf'])
-    up_q = st.text_input("Question about file / سؤالك عن الملف:")
+    up_file = st.file_uploader("Upload Image or PDF", type=['png', 'jpg', 'pdf'])
+    up_q = st.text_input("Question about file:")
     if st.button("Analyze / تحليل") and up_file:
         if up_file.type == 'application/pdf':
              pdf_reader = PyPDF2.PdfReader(up_file)
@@ -224,37 +225,28 @@ with tab_upload:
             user_input = [up_q if up_q else "Explain this image", image]
             input_mode = "image"
 
-# --- المعالجة والذكاء الاصطناعي ---
+# --- المعالجة ---
 if user_input:
     with st.spinner("Thinking... / جاري التحليل..."):
         try:
-            # هندسة الأوامر (Bilingual Prompt)
             role_lang = "Arabic" if language == "العربية" else "English"
             
             system_prompt = f"""
-            You are a professional Science Tutor (Physics, Chemistry, Biology).
-            Language Mode: {role_lang}.
-            
+            You are a professional Science Tutor. Language: {role_lang}.
             Instructions:
             1. Answer strictly in {role_lang}.
-            2. Be interactive, encouraging, and clear.
-            3. If the user asks a question, explain the scientific concept simply.
-            4. If 'Reference Book Context' is provided below, USE IT to answer.
-            5. If no reference is provided, use your general knowledge.
-            6. For English output: Speak clearly and academically.
-            7. For Arabic output: Use Egyptian dialect for spoken parts if possible, but keep terms scientific.
+            2. Explain simply and clearly.
+            3. Use the Reference Book Context below if relevant.
             
-            Reference Book Context (Partial):
-            {reference_text[:50000] if reference_text else "No reference book loaded."}
+            Reference Context:
+            {reference_text[:50000] if reference_text else "No reference loaded."}
             """
             
-            # إرسال الطلب
             if input_mode == "image":
                 response = model.generate_content([system_prompt, user_input[0], user_input[1]])
             else:
                 response = model.generate_content(f"{system_prompt}\n\nUser Question: {user_input}")
             
-            # العرض والصوت
             st.markdown("---")
             st.markdown(f"### 💡 Answer / الإجابة:\n{response.text}")
             
