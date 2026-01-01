@@ -20,14 +20,15 @@ import gspread
 # 🎛️ إعدادات التحكم
 # ==========================================
 
-TEACHER_MASTER_KEY = "ADMIN_2024"  # مفتاح المعلم (دخول دائم)
-CONTROL_SHEET_NAME = "App_Control" # اسم ملف الشيت
-SESSION_DURATION_MINUTES = 60      # مدة الجلسة (ساعة)
+TEACHER_MASTER_KEY = "ADMIN_2024"  
+CONTROL_SHEET_NAME = "App_Control" 
+SESSION_DURATION_MINUTES = 60      
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
-st.set_page_config(page_title="Science AI Pro", page_icon="⚡", layout="wide")
+# إعداد الصفحة مع أيقونة واسم التطبيق في التبويب
+st.set_page_config(page_title="AI Science Tutor | Mr. Elsayed", page_icon="🧬", layout="wide")
 
-# --- دالة جلب باسورد اليوم (صامتة بدون رسائل أخطاء) ---
+# --- دالة جلب باسورد اليوم ---
 def get_daily_password():
     if "gcp_service_account" in st.secrets:
         try:
@@ -43,18 +44,14 @@ def get_daily_password():
 
 # --- التحقق من الدخول ---
 def check_login(password):
-    # 1. المعلم
     if password == TEACHER_MASTER_KEY:
         return True, "teacher"
-    
-    # 2. الطالب (من الشيت)
     daily_pass = get_daily_password()
     if daily_pass and password == daily_pass:
         return True, "student"
-    
     return False, "none"
 
-# --- دوال الخدمات (درايف والصوت) ---
+# --- دوال الخدمات ---
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
         try:
@@ -126,30 +123,81 @@ except: st.stop()
 
 
 # ==========================================
-# ===== واجهة التطبيق (النظيفة) =====
+# ===== تصميم الواجهة الاحترافي =====
+# ==========================================
+
+# دالة لرسم الهيدر (العنوان + الاسم)
+def draw_header():
+    st.markdown("""
+        <style>
+        .header-container {
+            padding: 2rem 1rem;
+            border-radius: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+        .main-title {
+            font-size: 3rem;
+            font-weight: 800;
+            margin: 0;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            font-family: 'Helvetica Neue', sans-serif;
+        }
+        .sub-title {
+            font-size: 1.5rem;
+            margin-top: 10px;
+            font-weight: 300;
+            color: #f0f0f0;
+        }
+        .teacher-name {
+            background-color: rgba(255, 255, 255, 0.2);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            border: 1px solid rgba(255,255,255,0.4);
+        }
+        </style>
+        
+        <div class="header-container">
+            <div class="main-title">🧬 AI Science Tutor</div>
+            <div class="sub-title">
+                Supervised by <span class="teacher-name">Mr. Elsayed Elbadawy</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+# ==========================================
+# ===== المنطق والتشغيل =====
 # ==========================================
 
 if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
 
-# شاشة الدخول البسيطة
+# شاشة الدخول
 if not st.session_state.auth_status:
-    st.title("🔐 Science AI Platform")
-    st.caption(f"Student Session: {SESSION_DURATION_MINUTES} Minutes")
+    # عرض الهيدر حتى في شاشة الدخول
+    draw_header()
     
-    pwd = st.text_input("Enter Password / أدخل كود الدخول:", type="password")
+    st.info(f"🔒 Student Session Limit: {SESSION_DURATION_MINUTES} Minutes")
     
-    if st.button("Login / دخول"):
-        with st.spinner("Checking Access..."): # مجرد رسالة انتظار صغيرة
-            valid, u_type = check_login(pwd)
-            if valid:
-                st.session_state.auth_status = True
-                st.session_state.user_type = u_type
-                st.session_state.start_time = time.time()
-                st.success("Welcome!"); time.sleep(0.5); st.rerun()
-            else:
-                st.error("Invalid Password / كلمة المرور غير صحيحة")
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        pwd = st.text_input("Enter Password / أدخل كود الدخول:", type="password")
+        if st.button("Login / دخول", use_container_width=True):
+            with st.spinner("Verifying..."):
+                valid, u_type = check_login(pwd)
+                if valid:
+                    st.session_state.auth_status = True
+                    st.session_state.user_type = u_type
+                    st.session_state.start_time = time.time()
+                    st.success("Welcome!"); time.sleep(0.5); st.rerun()
+                else:
+                    st.error("Invalid Password")
     st.stop()
 
 # منطق الوقت
@@ -164,7 +212,7 @@ if st.session_state.user_type == "student":
 # الشريط الجانبي
 with st.sidebar:
     if st.session_state.user_type == "teacher":
-        st.success("👨‍🏫 Teacher Mode")
+        st.success("👨‍🏫 Teacher Mode (Unlimited)")
     else:
         if time_up: st.error("🛑 Time's Up")
         else:
@@ -185,7 +233,7 @@ with st.sidebar:
             if files:
                 st.subheader("📚 Library")
                 sel_file = st.selectbox("Book:", [f['name'] for f in files])
-                if st.button("Load Book"):
+                if st.button("Load Book", use_container_width=True):
                     fid = next(f['id'] for f in files if f['name'] == sel_file)
                     with st.spinner("Loading..."):
                         st.session_state.ref_text = download_pdf_text(service, fid)
@@ -194,24 +242,27 @@ with st.sidebar:
 if time_up and st.session_state.user_type == "student":
     st.error("Session Expired / انتهت الجلسة"); st.stop()
 
+# عرض الهيدر في الصفحة الرئيسية أيضاً
+draw_header()
+
 # التطبيق الرئيسي
-st.title("⚡ AI Science Tutor")
-tab1, tab2, tab3 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 Upload"])
+tab1, tab2, tab3 = st.tabs(["🎙️ Voice Chat", "✍️ Text Chat", "📁 Upload File"])
 user_input = ""
 input_mode = "text"
 
 with tab1:
-    audio_in = mic_recorder(start_prompt="🎤 Speak", stop_prompt="⏹️ Send", key='mic', format="wav")
+    st.write("Tap the microphone to speak:")
+    audio_in = mic_recorder(start_prompt="🎤 Start Speaking", stop_prompt="⏹️ Stop & Send", key='mic', format="wav")
     if audio_in: user_input = speech_to_text(audio_in['bytes'], sr_lang)
 
 with tab2:
-    txt_in = st.text_area("Question:")
-    if st.button("Send"): user_input = txt_in
+    txt_in = st.text_area("Type your question here:")
+    if st.button("Send Message", use_container_width=True): user_input = txt_in
 
 with tab3:
-    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
-    up_q = st.text_input("Details:")
-    if st.button("Analyze") and up_file:
+    up_file = st.file_uploader("Upload Image or PDF", type=['png','jpg','pdf'])
+    up_q = st.text_input("Add details about the file:")
+    if st.button("Analyze File", use_container_width=True) and up_file:
         if up_file.type == 'application/pdf':
              pdf = PyPDF2.PdfReader(up_file)
              ext = ""
@@ -219,18 +270,19 @@ with tab3:
              user_input = f"PDF:\n{ext}\nQ: {up_q}"
         else:
             img = Image.open(up_file)
-            st.image(img, width=200)
+            st.image(img, width=300)
             user_input = [up_q if up_q else "Explain", img]
             input_mode = "image"
 
 if user_input:
-    status = st.status("🧠 Processing...", expanded=True)
+    status = st.status("🧠 Mr. Elsayed's AI is thinking...", expanded=True)
     try:
         role_lang = "Arabic" if language == "العربية" else "English"
         ref = st.session_state.get("ref_text", "")
         
         sys_prompt = f"""
-        Role: Science Tutor. Lang: {role_lang}.
+        Role: Professional Science Tutor. Lang: {role_lang}.
+        Context: You are assisting Mr. Elsayed Elbadawy's students.
         Goal: Explain clearly & Interactively.
         Instructions:
         1. Answer in {role_lang}.
@@ -238,7 +290,7 @@ if user_input:
         3. Reference: {ref[:20000]}
         """
         
-        status.write("Thinking...")
+        status.write("Analyzing...")
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
                 response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
@@ -246,7 +298,7 @@ if user_input:
         else:
             response = model.generate_content(f"{sys_prompt}\nUser: {user_input}")
         
-        status.write("Speaking...")
+        status.write("Generating Voice...")
         st.markdown(f"### 💡 Answer:\n{response.text}")
         
         audio = asyncio.run(generate_audio_stream(response.text, voice_code))
