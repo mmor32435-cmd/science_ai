@@ -20,36 +20,73 @@ import gspread
 # 🎛️ إعدادات التحكم
 # ==========================================
 
-TEACHER_MASTER_KEY = "ADMIN_2024"  
-CONTROL_SHEET_NAME = "App_Control" 
-SESSION_DURATION_MINUTES = 60      
+TEACHER_MASTER_KEY = "ADMIN_2024"
+CONTROL_SHEET_NAME = "App_Control"
+SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
-# إعداد الصفحة مع أيقونة واسم التطبيق في التبويب
-st.set_page_config(page_title="AI Science Tutor | Mr. Elsayed", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="Science AI Pro", page_icon="⚡", layout="wide")
 
-# --- دالة جلب باسورد اليوم ---
-def get_daily_password():
+# --- دوال الاتصال بالشيت ---
+def get_gspread_client():
     if "gcp_service_account" in st.secrets:
         try:
             creds = service_account.Credentials.from_service_account_info(
                 st.secrets["gcp_service_account"],
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
-            client = gspread.authorize(creds)
+            return gspread.authorize(creds)
+        except: return None
+    return None
+
+def get_daily_password():
+    client = get_gspread_client()
+    if client:
+        try:
             sheet = client.open(CONTROL_SHEET_NAME).sheet1
             return str(sheet.acell('B1').value).strip()
         except: return None
     return None
 
-# --- التحقق من الدخول ---
+# --- دالة تسجيل الدخول (الجديدة) ---
+def log_login_to_sheet(user_type, password_used):
+    """تسجيل الدخول في الصفحة الثانية من ملف الإكسل"""
+    client = get_gspread_client()
+    if client:
+        try:
+            # نفتح الصفحة الثانية المسماة Logs
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+            
+            # توقيت القاهرة
+            tz = pytz.timezone('Africa/Cairo')
+            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # إضافة صف جديد
+            sheet.append_row([now, user_type, password_used])
+        except Exception as e:
+            print(f"Log Error: {e}") # لن يوقف التطبيق، فقط يطبع في الكونسول
+
+# --- التحقق من الدخول (مع التسجيل) ---
 def check_login(password):
+    # 1. المعلم
     if password == TEACHER_MASTER_KEY:
+        log_login_to_sheet("Teacher", "MASTER_KEY") # سجل أن المعلم دخل
         return True, "teacher"
+    
+    # 2. الطالب
     daily_pass = get_daily_password()
     if daily_pass and password == daily_pass:
+        log_login_to_sheet("Student", password) # سجل أن طالب دخل بالكود الصحيح
         return True, "student"
+    
+    # محاولة فاشلة (اختياري: يمكن تسجيلها أيضاً لكشف محاولات الاختراق)
+    # log_login_to_sheet("Failed", password) 
+    
     return False, "none"
+
+# --- (باقي الكود كما هو تماماً بدون تغيير) ---
+# ... انسخ باقي الدوال من الكود السابق (get_drive_service, audio, AI, الواجهة...)
+# ... (لعدم التكرار، استخدم نفس الجزء السفلي من الكود الأخير الذي أعطيته لك)
 
 # --- دوال الخدمات ---
 def get_drive_service():
@@ -126,7 +163,6 @@ except: st.stop()
 # ===== تصميم الواجهة الاحترافي =====
 # ==========================================
 
-# دالة لرسم الهيدر (العنوان + الاسم)
 def draw_header():
     st.markdown("""
         <style>
@@ -180,9 +216,7 @@ if "auth_status" not in st.session_state:
 
 # شاشة الدخول
 if not st.session_state.auth_status:
-    # عرض الهيدر حتى في شاشة الدخول
     draw_header()
-    
     st.info(f"🔒 Student Session Limit: {SESSION_DURATION_MINUTES} Minutes")
     
     col1, col2, col3 = st.columns([1,2,1])
@@ -242,7 +276,7 @@ with st.sidebar:
 if time_up and st.session_state.user_type == "student":
     st.error("Session Expired / انتهت الجلسة"); st.stop()
 
-# عرض الهيدر في الصفحة الرئيسية أيضاً
+# عرض الهيدر
 draw_header()
 
 # التطبيق الرئيسي
