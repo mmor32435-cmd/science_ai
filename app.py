@@ -25,9 +25,9 @@ CONTROL_SHEET_NAME = "App_Control"
 SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
-st.set_page_config(page_title="Science AI Pro", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="AI Science Tutor", page_icon="🧬", layout="wide")
 
-# --- دوال الاتصال بالشيت ---
+# --- دوال الاتصال بالشيت (للتسجيل والباسورد) ---
 def get_gspread_client():
     if "gcp_service_account" in st.secrets:
         try:
@@ -48,45 +48,31 @@ def get_daily_password():
         except: return None
     return None
 
-# --- دالة تسجيل الدخول (الجديدة) ---
 def log_login_to_sheet(user_type, password_used):
-    """تسجيل الدخول في الصفحة الثانية من ملف الإكسل"""
     client = get_gspread_client()
     if client:
         try:
-            # نفتح الصفحة الثانية المسماة Logs
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+            # نحاول فتح صفحة Logs، لو مش موجودة ننشئها (اختياري)
+            try:
+                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+            except:
+                sheet = client.open(CONTROL_SHEET_NAME).sheet1 # احتياطي
             
-            # توقيت القاهرة
             tz = pytz.timezone('Africa/Cairo')
             now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # إضافة صف جديد
             sheet.append_row([now, user_type, password_used])
-        except Exception as e:
-            print(f"Log Error: {e}") # لن يوقف التطبيق، فقط يطبع في الكونسول
+        except: pass
 
-# --- التحقق من الدخول (مع التسجيل) ---
+# --- التحقق من الدخول ---
 def check_login(password):
-    # 1. المعلم
     if password == TEACHER_MASTER_KEY:
-        log_login_to_sheet("Teacher", "MASTER_KEY") # سجل أن المعلم دخل
+        log_login_to_sheet("Teacher", "MASTER_KEY")
         return True, "teacher"
-    
-    # 2. الطالب
     daily_pass = get_daily_password()
     if daily_pass and password == daily_pass:
-        log_login_to_sheet("Student", password) # سجل أن طالب دخل بالكود الصحيح
+        log_login_to_sheet("Student", password)
         return True, "student"
-    
-    # محاولة فاشلة (اختياري: يمكن تسجيلها أيضاً لكشف محاولات الاختراق)
-    # log_login_to_sheet("Failed", password) 
-    
     return False, "none"
-
-# --- (باقي الكود كما هو تماماً بدون تغيير) ---
-# ... انسخ باقي الدوال من الكود السابق (get_drive_service, audio, AI, الواجهة...)
-# ... (لعدم التكرار، استخدم نفس الجزء السفلي من الكود الأخير الذي أعطيته لك)
 
 # --- دوال الخدمات ---
 def get_drive_service():
@@ -160,54 +146,48 @@ except: st.stop()
 
 
 # ==========================================
-# ===== تصميم الواجهة الاحترافي =====
+# ===== تصميم الواجهة (الهيدر) =====
 # ==========================================
 
 def draw_header():
     st.markdown("""
         <style>
         .header-container {
-            padding: 2rem 1rem;
-            border-radius: 15px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1.5rem;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #4b6cb7 0%, #182848 100%);
             color: white;
             text-align: center;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
         }
         .main-title {
-            font-size: 3rem;
-            font-weight: 800;
-            margin: 0;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-            font-family: 'Helvetica Neue', sans-serif;
-        }
-        .sub-title {
-            font-size: 1.5rem;
-            margin-top: 10px;
-            font-weight: 300;
-            color: #f0f0f0;
-        }
-        .teacher-name {
-            background-color: rgba(255, 255, 255, 0.2);
-            padding: 5px 15px;
-            border-radius: 20px;
+            font-size: 2.2rem;
             font-weight: bold;
-            letter-spacing: 1px;
-            border: 1px solid rgba(255,255,255,0.4);
+            margin-bottom: 5px;
+            font-family: sans-serif;
+        }
+        .sub-text {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        .badge {
+            background: #ff9f43;
+            color: #fff;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            margin-left: 5px;
         }
         </style>
-        
         <div class="header-container">
             <div class="main-title">🧬 AI Science Tutor</div>
-            <div class="sub-title">
-                Supervised by <span class="teacher-name">Mr. Elsayed Elbadawy</span>
-            </div>
+            <div class="sub-text">Supervised by: <b>Mr. Elsayed Elbadawy</b></div>
         </div>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# ===== المنطق والتشغيل =====
+# ===== منطق التشغيل =====
 # ==========================================
 
 if "auth_status" not in st.session_state:
@@ -217,13 +197,12 @@ if "auth_status" not in st.session_state:
 # شاشة الدخول
 if not st.session_state.auth_status:
     draw_header()
-    st.info(f"🔒 Student Session Limit: {SESSION_DURATION_MINUTES} Minutes")
-    
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
+        st.info(f"⏳ Session Limit: {SESSION_DURATION_MINUTES} Minutes")
         pwd = st.text_input("Enter Password / أدخل كود الدخول:", type="password")
         if st.button("Login / دخول", use_container_width=True):
-            with st.spinner("Verifying..."):
+            with st.spinner("Checking..."):
                 valid, u_type = check_login(pwd)
                 if valid:
                     st.session_state.auth_status = True
@@ -231,7 +210,7 @@ if not st.session_state.auth_status:
                     st.session_state.start_time = time.time()
                     st.success("Welcome!"); time.sleep(0.5); st.rerun()
                 else:
-                    st.error("Invalid Password")
+                    st.error("Invalid Code / الكود خطأ")
     st.stop()
 
 # منطق الوقت
@@ -243,60 +222,67 @@ if st.session_state.user_type == "student":
     if elapsed > allowed: time_up = True
     else: remaining_minutes = int((allowed - elapsed) // 60)
 
-# الشريط الجانبي
-with st.sidebar:
-    if st.session_state.user_type == "teacher":
-        st.success("👨‍🏫 Teacher Mode (Unlimited)")
-    else:
-        if time_up: st.error("🛑 Time's Up")
-        else:
-            st.metric("Time Left", f"{remaining_minutes} min")
-            st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
+if time_up and st.session_state.user_type == "student":
+    st.error("Session Expired / انتهت الجلسة"); st.stop()
 
-    st.markdown("---")
-    st.header("⚙️ Settings")
-    language = st.radio("Language:", ["العربية", "English"])
-    lang_code = "ar-EG" if language == "العربية" else "en-US"
-    voice_code, sr_lang = get_voice_config(language)
+# --- واجهة التطبيق الرئيسية ---
+draw_header()
+
+# 🔥 التعديل هنا: وضع اختيار اللغة في الواجهة الرئيسية وليس الجانبية 🔥
+# نستخدم أعمدة لترتيب الشكل
+col_lang, col_status = st.columns([2, 1])
+
+with col_lang:
+    # اختيار اللغة (أفقي ليناسب الموبايل)
+    language = st.radio("اختر لغة التحدث / Select Language:", ["العربية", "English"], horizontal=True)
+
+# إعدادات اللغة بناءً على الاختيار
+lang_code = "ar-EG" if language == "العربية" else "en-US"
+voice_code, sr_lang = get_voice_config(language)
+
+# الشريط الجانبي (يحتوي فقط على العداد والمكتبة الآن)
+with st.sidebar:
+    st.header("⚙️ Tools")
+    
+    if st.session_state.user_type == "teacher":
+        st.success("👨‍🏫 Teacher Mode")
+    else:
+        st.metric("⏳ Time Left", f"{remaining_minutes} min")
+        st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
     
     st.markdown("---")
+    # المكتبة تبقى في الجانب لأنها ميزة إضافية
     if DRIVE_FOLDER_ID:
         service = get_drive_service()
         if service:
             files = list_drive_files(service, DRIVE_FOLDER_ID)
             if files:
-                st.subheader("📚 Library")
+                st.subheader("📚 Library (كتب الشرح)")
                 sel_file = st.selectbox("Book:", [f['name'] for f in files])
                 if st.button("Load Book", use_container_width=True):
                     fid = next(f['id'] for f in files if f['name'] == sel_file)
                     with st.spinner("Loading..."):
                         st.session_state.ref_text = download_pdf_text(service, fid)
-                        st.success("Active!")
+                        st.toast("Book Loaded Successfully! ✅")
 
-if time_up and st.session_state.user_type == "student":
-    st.error("Session Expired / انتهت الجلسة"); st.stop()
-
-# عرض الهيدر
-draw_header()
-
-# التطبيق الرئيسي
+# التطبيق
 tab1, tab2, tab3 = st.tabs(["🎙️ Voice Chat", "✍️ Text Chat", "📁 Upload File"])
 user_input = ""
 input_mode = "text"
 
 with tab1:
-    st.write("Tap the microphone to speak:")
-    audio_in = mic_recorder(start_prompt="🎤 Start Speaking", stop_prompt="⏹️ Stop & Send", key='mic', format="wav")
+    st.caption("Click mic to speak | اضغط الميكروفون للتحدث")
+    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
     if audio_in: user_input = speech_to_text(audio_in['bytes'], sr_lang)
 
 with tab2:
-    txt_in = st.text_area("Type your question here:")
-    if st.button("Send Message", use_container_width=True): user_input = txt_in
+    txt_in = st.text_area("Write here | اكتب سؤالك:")
+    if st.button("Send / إرسال", use_container_width=True): user_input = txt_in
 
 with tab3:
-    up_file = st.file_uploader("Upload Image or PDF", type=['png','jpg','pdf'])
-    up_q = st.text_input("Add details about the file:")
-    if st.button("Analyze File", use_container_width=True) and up_file:
+    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
+    up_q = st.text_input("Details:")
+    if st.button("Analyze", use_container_width=True) and up_file:
         if up_file.type == 'application/pdf':
              pdf = PyPDF2.PdfReader(up_file)
              ext = ""
@@ -309,22 +295,24 @@ with tab3:
             input_mode = "image"
 
 if user_input:
-    status = st.status("🧠 Mr. Elsayed's AI is thinking...", expanded=True)
+    # استخدام Toast للسرعة بدلاً من Status box الكبير
+    st.toast("🧠 Thinking...", icon="🤔")
+    
     try:
         role_lang = "Arabic" if language == "العربية" else "English"
         ref = st.session_state.get("ref_text", "")
         
+        # هندسة الأوامر (محدثة لتكون شخصية مستر السيد)
         sys_prompt = f"""
-        Role: Professional Science Tutor. Lang: {role_lang}.
-        Context: You are assisting Mr. Elsayed Elbadawy's students.
-        Goal: Explain clearly & Interactively.
+        Role: Professional Science Tutor (Mr. Elsayed's Assistant).
+        Language: {role_lang}.
+        Goal: Explain clearly, encourage the student.
         Instructions:
-        1. Answer in {role_lang}.
-        2. BE CONCISE (under 60 words).
-        3. Reference: {ref[:20000]}
+        1. Answer strictly in {role_lang}.
+        2. BE CONCISE (under 60 words for fast audio).
+        3. Use Reference Context if available: {ref[:20000]}
         """
         
-        status.write("Analyzing...")
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
                 response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
@@ -332,13 +320,11 @@ if user_input:
         else:
             response = model.generate_content(f"{sys_prompt}\nUser: {user_input}")
         
-        status.write("Generating Voice...")
         st.markdown(f"### 💡 Answer:\n{response.text}")
         
+        # تشغيل الصوت
         audio = asyncio.run(generate_audio_stream(response.text, voice_code))
         st.audio(audio, format='audio/mp3', autoplay=True)
-        status.update(label="Done", state="complete", expanded=False)
         
     except Exception as e:
-        status.update(label="Error", state="error")
         st.error(f"Error: {e}")
