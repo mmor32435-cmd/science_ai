@@ -20,14 +20,17 @@ import gspread
 # 🎛️ إعدادات التحكم
 # ==========================================
 
-TEACHER_MASTER_KEY = "ADMIN_2024"
-CONTROL_SHEET_NAME = "App_Control"
-SESSION_DURATION_MINUTES = 60
+TEACHER_MASTER_KEY = "ADMIN_2024"   # مفتاح المعلم
+CONTROL_SHEET_NAME = "App_Control"  # اسم ملف الشيت
+SESSION_DURATION_MINUTES = 60       # مدة الجلسة
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 st.set_page_config(page_title="AI Science Tutor", page_icon="🧬", layout="wide")
 
-# --- دوال الاتصال بالشيت ---
+# ==========================================
+# 🛠️ دوال الاتصال بالشيت (التسجيل والحذف)
+# ==========================================
+
 def get_gspread_client():
     if "gcp_service_account" in st.secrets:
         try:
@@ -52,8 +55,10 @@ def log_login_to_sheet(user_name, user_type):
     client = get_gspread_client()
     if client:
         try:
+            # محاولة فتح صفحة Logs
             try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
             except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
+            
             tz = pytz.timezone('Africa/Cairo')
             now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             sheet.append_row([now, user_type, user_name])
@@ -63,45 +68,57 @@ def log_activity(user_name, input_type, question_text):
     client = get_gspread_client()
     if client:
         try:
+            # محاولة فتح صفحة Activity
             try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-            except: return
+            except: return # لو الصفحة مش موجودة لا تفعل شيئاً
+
             tz = pytz.timezone('Africa/Cairo')
             now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_name, input_type, str(question_text)[:500]])
+            
+            # معالجة النص إذا كان يحتوي على صورة (قائمة)
+            final_text = question_text
+            if isinstance(question_text, list):
+                final_text = f"[Image Attached] {question_text[0]}"
+            
+            sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
         except: pass
 
-# 🔥 دالة التنظيف الجديدة (للمعلم فقط) 🔥
+# 🔥 دالة التنظيف الجذرية (Reset) 🔥
 def clear_old_data():
     client = get_gspread_client()
     if client:
         try:
-            # تنظيف سجل الدخول (Logs) - نمسح من الصف 2 إلى 5000
+            # 1. تنظيف Logs (قص الشيت)
             try:
                 sheet_logs = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-                sheet_logs.batch_clear(['A2:C5000']) 
+                sheet_logs.resize(rows=1) # يمسح كل شيء ويبقي العنوان فقط
+                sheet_logs.resize(rows=100) # يعيد تكبيره
             except: pass
 
-            # تنظيف سجل الأسئلة (Activity)
+            # 2. تنظيف Activity (قص الشيت)
             try:
-                sheet_activity = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-                sheet_activity.batch_clear(['A2:D5000'])
+                sheet_act = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+                sheet_act.resize(rows=1)
+                sheet_act.resize(rows=100)
             except: pass
             
             return True
-        except Exception as e:
-            return False
+        except: return False
     return False
 
-# --- التحقق من الدخول ---
+# ==========================================
+# 🔐 التحقق والخدمات
+# ==========================================
+
 def check_login(password):
     if password == TEACHER_MASTER_KEY:
+        log_login_to_sheet("Teacher", "MASTER_KEY")
         return True, "teacher"
     daily_pass = get_daily_password()
     if daily_pass and password == daily_pass:
         return True, "student"
     return False, "none"
 
-# --- دوال الخدمات ---
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
         try:
@@ -173,7 +190,7 @@ except: st.stop()
 
 
 # ==========================================
-# ===== تصميم الواجهة =====
+# 🎨 واجهة التطبيق
 # ==========================================
 
 def draw_header():
@@ -204,15 +221,11 @@ def draw_header():
         </div>
     """, unsafe_allow_html=True)
 
-# ==========================================
-# ===== منطق التشغيل =====
-# ==========================================
-
 if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
 
-# شاشة الدخول
+# --- شاشة الدخول ---
 if not st.session_state.auth_status:
     draw_header()
     col1, col2, col3 = st.columns([1,2,1])
@@ -220,13 +233,13 @@ if not st.session_state.auth_status:
         st.info(f"⏳ Session Limit: {SESSION_DURATION_MINUTES} Minutes")
         
         student_name = st.text_input("Student Name / اسمك الثلاثي:")
-        pwd = st.text_input("Password / كود الدخول:", type="password")
+        pwd = st.text_input("Access Code / كود الدخول:", type="password")
         
         if st.button("Login / دخول", use_container_width=True):
             if not student_name and pwd != TEACHER_MASTER_KEY:
                 st.warning("Please enter your name")
             else:
-                with st.spinner("Checking..."):
+                with st.spinner("Verifying..."):
                     valid, u_type = check_login(pwd)
                     if valid:
                         st.session_state.auth_status = True
@@ -234,15 +247,15 @@ if not st.session_state.auth_status:
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
                         st.session_state.start_time = time.time()
                         
-                        # تسجيل الدخول فقط إذا كان طالباً أو معلماً
+                        # تسجيل الدخول
                         log_login_to_sheet(st.session_state.user_name, u_type)
                         
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
-                        st.error("Invalid Code")
+                        st.error("Invalid Code / الكود خطأ")
     st.stop()
 
-# منطق الوقت
+# --- منطق الوقت ---
 time_up = False
 remaining_minutes = 0
 if st.session_state.user_type == "student":
@@ -252,42 +265,41 @@ if st.session_state.user_type == "student":
     else: remaining_minutes = int((allowed - elapsed) // 60)
 
 if time_up and st.session_state.user_type == "student":
-    st.error("Session Expired"); st.stop()
+    st.error("Session Expired / انتهت الجلسة"); st.stop()
 
-# --- الواجهة الرئيسية ---
+# --- التطبيق الرئيسي ---
 draw_header()
 
-col_lang, col_status = st.columns([2, 1])
+# اختيار اللغة (في الواجهة الرئيسية)
+col_lang, col_stat = st.columns([2,1])
 with col_lang:
-    language = st.radio("Select Language:", ["العربية", "English"], horizontal=True)
+    language = st.radio("Select Language / اختر اللغة:", ["العربية", "English"], horizontal=True)
 
 lang_code = "ar-EG" if language == "العربية" else "en-US"
 voice_code, sr_lang = get_voice_config(language)
 
-# الشريط الجانبي (الأدوات + التحكم للمعلم)
+# الشريط الجانبي (الأدوات + التحكم)
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_name}**")
     
-    # ---------------------------------------------------
-    # 🔥 لوحة تحكم المعلم (تظهر لك فقط) 🔥
-    # ---------------------------------------------------
+    # تحكم المعلم
     if st.session_state.user_type == "teacher":
         st.success("👨‍🏫 Teacher Mode")
         st.markdown("---")
         with st.expander("⚠️ Danger Zone (Teacher Only)"):
-            st.warning("هذا الزر يحذف كل سجلات الطلاب السابقة لتنظيف الملف.")
-            if st.button("🗑️ Clear All Logs & Data"):
-                with st.spinner("Deleting..."):
+            st.warning("هذا الزر يحذف بيانات الطلاب القديمة.")
+            if st.button("🗑️ Clear All Logs", use_container_width=True):
+                with st.spinner("Cleaning..."):
                     if clear_old_data():
-                        st.success("تم تنظيف البيانات بنجاح! ✅")
+                        st.success("Data Cleared! ✅")
                     else:
-                        st.error("حدث خطأ أثناء الحذف.")
-    # ---------------------------------------------------
+                        st.error("Failed to clear.")
     else:
         st.metric("⏳ Time Left", f"{remaining_minutes} min")
         st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
     
     st.markdown("---")
+    # المكتبة
     if DRIVE_FOLDER_ID:
         service = get_drive_service()
         if service:
@@ -301,7 +313,7 @@ with st.sidebar:
                         st.session_state.ref_text = download_pdf_text(service, fid)
                         st.toast("Book Loaded Successfully! ✅")
 
-# التطبيق
+# التبويبات والمحادثة
 tab1, tab2, tab3 = st.tabs(["🎙️ Voice Chat", "✍️ Text Chat", "📁 Upload File"])
 user_input = ""
 input_mode = "text"
@@ -331,7 +343,7 @@ with tab3:
             input_mode = "image"
 
 if user_input:
-    # تسجيل النشاط
+    # 📝 تسجيل السؤال في الشيت
     log_activity(st.session_state.user_name, input_mode, user_input)
     
     st.toast("🧠 Thinking...", icon="🤔")
@@ -346,7 +358,7 @@ if user_input:
         Instructions:
         1. Answer in {role_lang}.
         2. BE CONCISE (under 60 words).
-        3. Reference: {ref[:20000]}
+        3. Use Reference Context: {ref[:20000]}
         """
         
         if input_mode == "image":
