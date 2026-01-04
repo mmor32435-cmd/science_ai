@@ -27,7 +27,7 @@ DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 st.set_page_config(page_title="AI Science Tutor", page_icon="🧬", layout="wide")
 
-# --- دوال الاتصال بالشيت (للتسجيل والباسورد) ---
+# --- دوال الاتصال بالشيت (تسجيل الدخول + تسجيل النشاط) ---
 def get_gspread_client():
     if "gcp_service_account" in st.secrets:
         try:
@@ -48,29 +48,40 @@ def get_daily_password():
         except: return None
     return None
 
-def log_login_to_sheet(user_type, password_used):
+# تسجيل الدخول (في صفحة Logs)
+def log_login_to_sheet(user_name, user_type):
     client = get_gspread_client()
     if client:
         try:
-            # نحاول فتح صفحة Logs، لو مش موجودة ننشئها (اختياري)
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except:
-                sheet = client.open(CONTROL_SHEET_NAME).sheet1 # احتياطي
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+            except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
             
             tz = pytz.timezone('Africa/Cairo')
             now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_type, password_used])
+            sheet.append_row([now, user_type, user_name])
+        except: pass
+
+# تسجيل الأسئلة (في صفحة Activity) - الميزة الجديدة
+def log_activity(user_name, input_type, question_text):
+    client = get_gspread_client()
+    if client:
+        try:
+            # نحاول الكتابة في صفحة Activity
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+            except: return # لو الصفحة مش موجودة نتجاهل
+            
+            tz = pytz.timezone('Africa/Cairo')
+            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            # تسجيل: الوقت، الاسم، النوع، السؤال
+            sheet.append_row([now, user_name, input_type, str(question_text)[:500]]) # نأخذ أول 500 حرف فقط
         except: pass
 
 # --- التحقق من الدخول ---
 def check_login(password):
     if password == TEACHER_MASTER_KEY:
-        log_login_to_sheet("Teacher", "MASTER_KEY")
         return True, "teacher"
     daily_pass = get_daily_password()
     if daily_pass and password == daily_pass:
-        log_login_to_sheet("Student", password)
         return True, "student"
     return False, "none"
 
@@ -193,24 +204,39 @@ def draw_header():
 if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
+    st.session_state.user_name = "Unknown" # متغير لحفظ اسم الطالب
 
-# شاشة الدخول
+# شاشة الدخول (المعدلة لطلب الاسم)
 if not st.session_state.auth_status:
     draw_header()
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.info(f"⏳ Session Limit: {SESSION_DURATION_MINUTES} Minutes")
-        pwd = st.text_input("Enter Password / أدخل كود الدخول:", type="password")
+        
+        # 1. طلب الاسم
+        student_name = st.text_input("Student Name / اسمك الثلاثي:")
+        # 2. طلب الباسورد
+        pwd = st.text_input("Password / كود الدخول:", type="password")
+        
         if st.button("Login / دخول", use_container_width=True):
-            with st.spinner("Checking..."):
-                valid, u_type = check_login(pwd)
-                if valid:
-                    st.session_state.auth_status = True
-                    st.session_state.user_type = u_type
-                    st.session_state.start_time = time.time()
-                    st.success("Welcome!"); time.sleep(0.5); st.rerun()
-                else:
-                    st.error("Invalid Code / الكود خطأ")
+            if not student_name and pwd != TEACHER_MASTER_KEY:
+                st.warning("Please enter your name / يرجى كتابة اسمك")
+            else:
+                with st.spinner("Checking..."):
+                    valid, u_type = check_login(pwd)
+                    if valid:
+                        st.session_state.auth_status = True
+                        st.session_state.user_type = u_type
+                        # حفظ الاسم في الجلسة
+                        st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
+                        st.session_state.start_time = time.time()
+                        
+                        # تسجيل الدخول في الشيت
+                        log_login_to_sheet(st.session_state.user_name, u_type)
+                        
+                        st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
+                    else:
+                        st.error("Invalid Code / الكود خطأ")
     st.stop()
 
 # منطق الوقت
@@ -228,20 +254,16 @@ if time_up and st.session_state.user_type == "student":
 # --- واجهة التطبيق الرئيسية ---
 draw_header()
 
-# 🔥 التعديل هنا: وضع اختيار اللغة في الواجهة الرئيسية وليس الجانبية 🔥
-# نستخدم أعمدة لترتيب الشكل
 col_lang, col_status = st.columns([2, 1])
-
 with col_lang:
-    # اختيار اللغة (أفقي ليناسب الموبايل)
-    language = st.radio("اختر لغة التحدث / Select Language:", ["العربية", "English"], horizontal=True)
+    language = st.radio("Select Language:", ["العربية", "English"], horizontal=True)
 
-# إعدادات اللغة بناءً على الاختيار
 lang_code = "ar-EG" if language == "العربية" else "en-US"
 voice_code, sr_lang = get_voice_config(language)
 
-# الشريط الجانبي (يحتوي فقط على العداد والمكتبة الآن)
+# الشريط الجانبي
 with st.sidebar:
+    st.write(f"👤 **{st.session_state.user_name}**") # عرض اسم الطالب
     st.header("⚙️ Tools")
     
     if st.session_state.user_type == "teacher":
@@ -251,13 +273,12 @@ with st.sidebar:
         st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
     
     st.markdown("---")
-    # المكتبة تبقى في الجانب لأنها ميزة إضافية
     if DRIVE_FOLDER_ID:
         service = get_drive_service()
         if service:
             files = list_drive_files(service, DRIVE_FOLDER_ID)
             if files:
-                st.subheader("📚 Library (كتب الشرح)")
+                st.subheader("📚 Library")
                 sel_file = st.selectbox("Book:", [f['name'] for f in files])
                 if st.button("Load Book", use_container_width=True):
                     fid = next(f['id'] for f in files if f['name'] == sel_file)
@@ -271,13 +292,13 @@ user_input = ""
 input_mode = "text"
 
 with tab1:
-    st.caption("Click mic to speak | اضغط الميكروفون للتحدث")
+    st.caption("Click mic to speak")
     audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
     if audio_in: user_input = speech_to_text(audio_in['bytes'], sr_lang)
 
 with tab2:
-    txt_in = st.text_area("Write here | اكتب سؤالك:")
-    if st.button("Send / إرسال", use_container_width=True): user_input = txt_in
+    txt_in = st.text_area("Write here:")
+    if st.button("Send", use_container_width=True): user_input = txt_in
 
 with tab3:
     up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
@@ -295,22 +316,22 @@ with tab3:
             input_mode = "image"
 
 if user_input:
-    # استخدام Toast للسرعة بدلاً من Status box الكبير
-    st.toast("🧠 Thinking...", icon="🤔")
+    # 📝 تسجيل النشاط في الشيت
+    log_activity(st.session_state.user_name, input_mode, user_input)
     
+    st.toast("🧠 Thinking...", icon="🤔")
     try:
         role_lang = "Arabic" if language == "العربية" else "English"
         ref = st.session_state.get("ref_text", "")
         
-        # هندسة الأوامر (محدثة لتكون شخصية مستر السيد)
         sys_prompt = f"""
-        Role: Professional Science Tutor (Mr. Elsayed's Assistant).
+        Role: Science Tutor (Mr. Elsayed's Assistant).
         Language: {role_lang}.
-        Goal: Explain clearly, encourage the student.
+        Goal: Explain clearly.
         Instructions:
         1. Answer strictly in {role_lang}.
-        2. BE CONCISE (under 60 words for fast audio).
-        3. Use Reference Context if available: {ref[:20000]}
+        2. BE CONCISE (under 60 words).
+        3. Use Reference Context: {ref[:20000]}
         """
         
         if input_mode == "image":
@@ -322,7 +343,6 @@ if user_input:
         
         st.markdown(f"### 💡 Answer:\n{response.text}")
         
-        # تشغيل الصوت
         audio = asyncio.run(generate_audio_stream(response.text, voice_code))
         st.audio(audio, format='audio/mp3', autoplay=True)
         
