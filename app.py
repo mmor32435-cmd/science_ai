@@ -28,17 +28,17 @@ SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "هل تعلم؟ قلب الجمبري يقع في رأسه! 🦐",
-    "هل تعلم؟ كوكب الزهرة يدور حول نفسه عكس عقارب الساعة! 🪐",
-    "هل تعلم؟ العظام أقوى 5 مرات من الفولاذ (نسبياً)! 🦴",
-    "هل تعلم؟ الأكسجين هو العنصر الأكثر شيوعاً في قشرة الأرض! 💨",
-    "هل تعلم؟ لا يوجد صوت في الفضاء! 🔇"
+    "هل تعلم؟ مخ الإنسان يولد كهرباء تكفي لإضاءة مصباح! 💡",
+    "هل تعلم؟ لا يوجد صوت في الفضاء! 🔇",
+    "هل تعلم؟ الماء الساخن يتجمد أسرع من البارد! ❄️",
+    "هل تعلم؟ الزرافة لها 3 قلوب! 🦒",
+    "هل تعلم؟ التفاح يوقظك أكثر من القهوة! 🍎"
 ]
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 # ==========================================
-# 🛠️ الخدمات (شيت، درايف، صوت)
+# 🛠️ الخدمات
 # ==========================================
 
 def get_gspread_client():
@@ -221,46 +221,34 @@ if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
     st.session_state.chat_history = []
-    # المتغيرات الدراسية
     st.session_state.student_grade = ""
     st.session_state.study_lang = ""
 
-# --- شاشة الدخول (المحدثة بنظام المراحل) ---
+# --- شاشة الدخول ---
 if not st.session_state.auth_status:
     draw_header()
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.info(f"💡 {random.choice(DAILY_FACTS)}")
         
-        # 1. الاسم
         student_name = st.text_input("Name / اسمك الثلاثي:")
+        stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
         
-        # 2. المرحلة التعليمية (الرئيسية)
-        stage = st.selectbox("Stage / المرحلة التعليمية:", 
-                             ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
-        
-        # 3. الصف الدراسي (يظهر بناءً على اختيار المرحلة)
         grade_options = []
         if stage == "المرحلة الابتدائية":
             grade_options = ["الصف الرابع", "الصف الخامس", "الصف السادس"]
         elif stage == "المرحلة الإعدادية":
-            grade_options = ["الصف الأول الإعدادي", "الصف الثاني الإعدادي", "الصف الثالث الإعدادي"]
+            grade_options = ["الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي"]
         elif stage == "المرحلة الثانوية":
-            grade_options = ["الصف الأول الثانوي", "الصف الثاني الثانوي", "الصف الثالث الثانوي"]
+            grade_options = ["الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
         
-        selected_grade = st.selectbox("Grade / الصف الدراسي:", grade_options) if grade_options else None
-        
-        # 4. نوع الدراسة
-        study_type = st.radio("Education Type / نظام الدراسة:", 
-                              ["مدارس عربي", "مدارس لغات (English)"], horizontal=True)
-        
-        # 5. الباسورد
-        pwd = st.text_input("Access Code / كود الدخول:", type="password")
+        selected_grade = st.selectbox("Grade / الصف:", grade_options) if grade_options else None
+        study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
+        pwd = st.text_input("Code / كود الدخول:", type="password")
         
         if st.button("Login / دخول", use_container_width=True):
-            # التحقق: يجب اختيار مرحلة وصف واسم
             if (not student_name or stage == "اختر المرحلة...") and pwd != TEACHER_MASTER_KEY:
-                st.warning("⚠️ يرجى استكمال جميع البيانات (الاسم، المرحلة، الصف).")
+                st.warning("⚠️ أكمل بياناتك أولاً")
             else:
                 with st.spinner("Connecting..."):
                     daily_pass, _ = get_sheet_data()
@@ -279,24 +267,18 @@ if not st.session_state.auth_status:
                         st.session_state.auth_status = True
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
-                        
-                        # حفظ البيانات الأكاديمية بدقة
                         final_grade = f"{stage} - {selected_grade}" if selected_grade else "General"
                         st.session_state.student_grade = final_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
-                        
                         st.session_state.start_time = time.time()
                         
-                        # تسجيل الدخول بتفاصيل كاملة
-                        log_info = f"{final_grade} | {st.session_state.study_lang}"
-                        log_login_to_sheet(st.session_state.user_name, u_type, log_info)
-                        
+                        log_login_to_sheet(st.session_state.user_name, u_type, f"{final_grade} | {st.session_state.study_lang}")
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
-                        st.error("Invalid Code / الكود خطأ")
+                        st.error("Code Error")
     st.stop()
 
-# --- منطق الوقت ---
+# --- الوقت ---
 time_up = False
 remaining_minutes = 0
 if st.session_state.user_type == "student":
@@ -308,7 +290,7 @@ if st.session_state.user_type == "student":
 if time_up and st.session_state.user_type == "student":
     st.error("Session Expired"); st.stop()
 
-# --- التطبيق الرئيسي ---
+# --- التطبيق ---
 draw_header()
 
 col_lang, col_stat = st.columns([2,1])
@@ -318,21 +300,18 @@ with col_lang:
 lang_code = "ar-EG" if language == "العربية" else "en-US"
 voice_code, sr_lang = get_voice_config(language)
 
-# --- الشريط الجانبي ---
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_name}**")
     if st.session_state.user_type == "student":
-        # عرض معلومات الطالب
         st.info(f"📚 {st.session_state.student_grade}")
         st.caption(f"🏫 {st.session_state.study_lang}")
     
     if st.session_state.user_type == "teacher":
         st.success("👨‍🏫 Admin Dashboard")
         st.markdown("---")
-        with st.expander("📊 Live Stats", expanded=True):
+        with st.expander("📊 Stats"):
             count, last_qs = get_stats_for_admin()
-            st.metric("Logins Today", count)
-            st.write("Recent Qs:")
+            st.metric("Logins", count)
             for q in last_qs:
                 if len(q) > 3: st.caption(f"- {q[3][:25]}...")
         
@@ -367,7 +346,6 @@ with st.sidebar:
                         st.session_state.ref_text = download_pdf_text(service, fid)
                         st.toast("Book Loaded! ✅")
 
-# --- التبويبات والمحتوى ---
 tab1, tab2, tab3, tab4 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz"])
 user_input = ""
 input_mode = "text"
@@ -382,4 +360,21 @@ with tab2:
     if st.button("Send", use_container_width=True): user_input = txt_in
 
 with tab3:
-    up_file = st.file_uploader("Image/PDF", 
+    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
+    up_q = st.text_input("Details:")
+    if st.button("Analyze", use_container_width=True) and up_file:
+        if up_file.type == 'application/pdf':
+             pdf = PyPDF2.PdfReader(up_file)
+             ext = ""
+             for p in pdf.pages: ext += p.extract_text()
+             user_input = f"PDF:\n{ext}\nQ: {up_q}"
+        else:
+            img = Image.open(up_file)
+            st.image(img, width=300)
+            user_input = [up_q if up_q else "Explain", img]
+            input_mode = "image"
+
+with tab4:
+    st.info(f"Targeting: **{st.session_state.student_grade}**")
+    if st.button("🎲 Generate Question", use_container_width=True):
+        grade 
