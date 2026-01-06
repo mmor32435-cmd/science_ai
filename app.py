@@ -15,7 +15,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import gspread
-from fpdf import FPDF
+import pandas as pd
 import random
 
 # ==========================================
@@ -28,16 +28,16 @@ SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "هل تعلم؟ سرعة الضوء 300,000 كم/ثانية! ⚡",
-    "هل تعلم؟ الهيدروجين هو أكثر العناصر انتشاراً في الكون! 🌌",
-    "هل تعلم؟ المعدة تفرز حمضاً قوياً يمكنه إذابة المعادن! 🧪",
-    "هل تعلم؟ الحمض النووي للإنسان لو فردناه سيصل للشمس ويعود! 🧬"
+    "هل تعلم؟ مخ الإنسان يولد كهرباء تكفي لإضاءة مصباح! 💡",
+    "هل تعلم؟ لا يوجد صوت في الفضاء! 🔇",
+    "هل تعلم؟ الماء الساخن يتجمد أسرع من البارد! ❄️",
+    "هل تعلم؟ الزرافة لها 3 قلوب! 🦒"
 ]
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 # ==========================================
-# 🛠️ الخدمات (شيت، درايف، صوت)
+# 🛠️ الخدمات
 # ==========================================
 
 def get_gspread_client():
@@ -278,6 +278,7 @@ if not st.session_state.auth_status:
             else:
                 with st.spinner("Connecting..."):
                     daily_pass, _ = get_sheet_data()
+                    
                     if pwd == TEACHER_MASTER_KEY:
                         u_type = "teacher"; valid = True
                     elif daily_pass and pwd == daily_pass:
@@ -289,12 +290,10 @@ if not st.session_state.auth_status:
                         st.session_state.auth_status = True
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
-                        
                         final_grade = f"{stage} - {selected_grade}" if selected_grade else "General"
                         st.session_state.student_grade = final_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
                         st.session_state.start_time = time.time()
-                        
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{final_grade} | {st.session_state.study_lang}")
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
@@ -410,17 +409,17 @@ with tab3:
             input_mode = "image"
         update_xp(st.session_state.user_name, 15)
 
-# 🌟 اختبار مخصص جداً (مع الحل لمشكلة التحديث)
+# 🌟 ميزة الاختبار (تم إصلاح خطأ Failed هنا)
 with tab4:
     st.info(f"Quiz for: **{st.session_state.student_grade}**")
     
-    if st.button("🎲 Generate Question", use_container_width=True):
+    # 1. زر التوليد
+    if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
         grade = st.session_state.student_grade
         system = st.session_state.study_lang
         
-        # 1. إجبار الموديل على استخدام المرجع
+        # استخدام المرجع أو المنهج المصري
         ref_context = st.session_state.get("ref_text", "")
-        # إذا لم يكن هناك مرجع، نستخدم المنهج المصري العام
         source = f"Source Material: {ref_context[:30000]}" if ref_context else "Source: Egyptian Ministry of Education Curriculum."
         
         q_prompt = f"""
@@ -432,32 +431,34 @@ with tab4:
         Language: Arabic.
         """
         
+        # 🔥 التعديل الجوهري: فصلنا عملية التحديث عن عملية الجلب
+        success_gen = False
         try:
-            # استخدام Exception لتجنب توقف التطبيق بسبب الـ rerun
-            try:
-                with st.spinner("Generating..."):
-                    response = model.generate_content(q_prompt)
-                    st.session_state.current_quiz_question = response.text
-                    st.session_state.quiz_active = True
-                    st.rerun()
-            except Exception as e:
-                # هذا الاستثناء يحدث غالباً بسبب الـ rerun وهو طبيعي
-                pass 
-        except: st.error("Failed.")
+            with st.spinner("Generating..."):
+                response = model.generate_content(q_prompt)
+                st.session_state.current_quiz_question = response.text
+                st.session_state.quiz_active = True
+                success_gen = True
+        except Exception as e:
+            st.error(f"Error: {e}")
+        
+        # إذا نجحنا، نحدث الصفحة الآن (خارج Try/Except)
+        if success_gen:
+            st.rerun()
 
+    # 2. عرض السؤال وانتظار الإجابة
     if st.session_state.quiz_active and st.session_state.current_quiz_question:
         st.markdown("---")
         st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
         
-        # مكان الإجابة
         student_ans = st.text_input("✍️ إجابتك:")
         
-        if st.button("✅ Check Answer", use_container_width=True):
+        if st.button("✅ Check Answer / تحقق", use_container_width=True):
             if student_ans:
                 check_prompt = f"""
                 Question: {st.session_state.current_quiz_question}
                 Student Answer: {student_ans}
-                Task: Correct it based on Egyptian Curriculum/Textbook.
+                Task: Correct it based on Egyptian Curriculum.
                 Output: Correct/Wrong + Simple Explanation + Score(10/10).
                 Lang: Arabic.
                 """
@@ -474,9 +475,20 @@ with tab4:
                     st.session_state.quiz_active = False
                     st.session_state.current_quiz_question = ""
             else:
-                st.warning("اكتب الإجابة!")
+                st.warning("اكتب إجابة أولاً!")
 
-if user_input:
+with tab5:
+    st.write("احصل على تحليل لأدائك:")
+    if st.button("📈 حلل مستواي", use_container_width=True):
+        if st.session_state.chat_history:
+            history_text = get_chat_text(st.session_state.chat_history)
+            user_input = f"Analyze performance for ({st.session_state.user_name}). Chat: {history_text[:5000]}"
+            input_mode = "analysis"
+        else:
+            st.warning("ابدأ محادثة أولاً.")
+
+# المعالجة الرئيسية (لغير الاختبار)
+if user_input and input_mode != "quiz":
     log_activity(st.session_state.user_name, input_mode, user_input)
     st.toast("🧠 Thinking...", icon="🤔")
     
@@ -487,35 +499,31 @@ if user_input:
         student_level = st.session_state.get("student_grade", "General")
         curriculum = st.session_state.get("study_lang", "Arabic")
         
-        sys_prompt = f"""
-        Role: Science Tutor (Mr. Elsayed's Assistant).
-        Target: Student in {student_level}.
-        Curriculum System: {curriculum}.
-        Current Language: {role_lang}.
-        Student Name: {student_name}.
-        
-        Instructions:
-        1. Address student by name.
-        2. Adapt explanation complexity strictly to {student_level}.
-        3. If Curriculum is 'English Science', use English terms even if speaking Arabic.
-        4. Use LaTeX for formulas.
-        5. BE CONCISE (under 60 words).
-        6. Reference: {ref[:20000]}
-        """
+        if input_mode == "analysis":
+            sys_prompt = "You are a Mentor. Analyze performance. Be concise."
+        else:
+            sys_prompt = f"""
+            Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
+            Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
+            Instructions: Address by name. Adapt to level. Use LaTeX. BE CONCISE.
+            Ref: {ref[:20000]}
+            """
         
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
                 response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
              else: st.error("Model error."); st.stop()
         else:
-            response = model.generate_content(f"{sys_prompt}\nUser Input: {user_input}")
+            response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
         
-        st.session_state.chat_history.append((str(user_input)[:50], response.text))
+        if input_mode != "analysis":
+            st.session_state.chat_history.append((str(user_input)[:50], response.text))
         
         st.markdown(f"### 💡 Answer:\n{response.text}")
         
-        audio = asyncio.run(generate_audio_stream(response.text, voice_code))
-        st.audio(audio, format='audio/mp3', autoplay=True)
+        if input_mode != "analysis":
+            audio = asyncio.run(generate_audio_stream(response.text, voice_code))
+            st.audio(audio, format='audio/mp3', autoplay=True)
         
     except Exception as e:
         st.error(f"Error: {e}")
