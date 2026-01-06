@@ -15,7 +15,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import gspread
-import pandas as pd # لمعالجة لوحة الشرف
 import random
 
 # ==========================================
@@ -28,14 +27,13 @@ SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "هل تعلم؟ مخ الإنسان يولد كهرباء تكفي لإضاءة مصباح! 💡",
-    "هل تعلم؟ لا يوجد صوت في الفضاء! 🔇",
-    "هل تعلم؟ الماء الساخن يتجمد أسرع من البارد! ❄️",
-    "هل تعلم؟ الزرافة لها 3 قلوب! 🦒",
-    "هل تعلم؟ التفاح يوقظك أكثر من القهوة! 🍎"
+    "هل تعلم؟ الضوء يستغرق 8 دقائق ليصل من الشمس للأرض! ☀️",
+    "هل تعلم؟ الحمض النووي للإنسان يتطابق بنسبة 50% مع الموز! 🧬",
+    "هل تعلم؟ قلب الجمبري يقع في رأسه! 🦐",
+    "هل تعلم؟ العسل هو الطعام الوحيد الذي لا يفسد أبداً! 🍯"
 ]
 
-st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="AI Science Tutor", page_icon="🧬", layout="wide")
 
 # ==========================================
 # 🛠️ الخدمات (شيت، درايف، صوت)
@@ -95,28 +93,22 @@ def log_activity(user_name, input_type, question_text):
             sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
         except: pass
 
-# 🔥 نظام النقاط (Gamification) 🔥
+# 🔥 نظام النقاط 🔥
 def update_xp(user_name, points_to_add):
     client = get_gspread_client()
     if client:
         try:
-            try: 
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
             except: 
-                return # لو الصفحة مش موجودة
+                # إنشاء الصفحة لو مش موجودة (اختياري)
+                return 
             
-            # البحث عن الطالب
             cell = sheet.find(user_name)
-            
             if cell:
-                # تحديث النقاط الحالية
                 current_xp = int(sheet.cell(cell.row, 2).value)
-                new_xp = current_xp + points_to_add
-                sheet.update_cell(cell.row, 2, new_xp)
+                sheet.update_cell(cell.row, 2, current_xp + points_to_add)
             else:
-                # طالب جديد
                 sheet.append_row([user_name, points_to_add])
-                
             return True
         except: pass
     return False
@@ -127,28 +119,21 @@ def get_leaderboard():
         try:
             try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
             except: return []
-            
             data = sheet.get_all_records()
-            if not data: return []
-            
-            df = pd.DataFrame(data)
-            df['XP'] = pd.to_numeric(df['XP'])
-            # ترتيب تنازلي وأخذ أول 5
-            top_5 = df.sort_values(by='XP', ascending=False).head(5)
-            return top_5.to_dict('records')
+            # ترتيب بسيط (يحتاج pandas لترتيب دقيق، لكن سنستخدم دالة بسيطة للسرعة)
+            sorted_data = sorted(data, key=lambda x: int(x['XP']), reverse=True)
+            return sorted_data[:5]
         except: return []
     return []
 
-# 🔥 التنظيف الشامل 🔥
 def clear_old_data():
     client = get_gspread_client()
     if client:
         try:
-            for sheet_name in ["Logs", "Activity", "Gamification"]:
-                try:
-                    ws = client.open(CONTROL_SHEET_NAME).worksheet(sheet_name)
-                    ws.resize(rows=1)
-                    ws.resize(rows=100)
+            for s in ["Logs", "Activity", "Gamification"]:
+                try: 
+                    ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                    ws.resize(rows=1); ws.resize(rows=100)
                 except: pass
             return True
         except: return False
@@ -159,8 +144,8 @@ def get_stats_for_admin():
     if client:
         try:
             logs = client.open(CONTROL_SHEET_NAME).worksheet("Logs").get_all_values()
-            questions = client.open(CONTROL_SHEET_NAME).worksheet("Activity").get_all_values()
-            return len(logs)-1, questions[-5:]
+            qs = client.open(CONTROL_SHEET_NAME).worksheet("Activity").get_all_values()
+            return len(logs)-1, qs[-5:]
         except: return 0, []
     return 0, []
 
@@ -263,12 +248,16 @@ def draw_header():
         </div>
     """, unsafe_allow_html=True)
 
+# تهيئة متغيرات الجلسة
 if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
     st.session_state.chat_history = []
     st.session_state.student_grade = ""
     st.session_state.study_lang = ""
+    # متغيرات الاختبار الجديدة
+    st.session_state.quiz_active = False
+    st.session_state.current_quiz_question = ""
 
 # --- شاشة الدخول ---
 if not st.session_state.auth_status:
@@ -279,7 +268,6 @@ if not st.session_state.auth_status:
         
         student_name = st.text_input("Name / اسمك الثلاثي:")
         
-        # القوائم المتدرجة
         stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
         grade_options = []
         if stage == "المرحلة الابتدائية": grade_options = ["الصف الرابع", "الصف الخامس", "الصف السادس"]
@@ -288,7 +276,7 @@ if not st.session_state.auth_status:
         selected_grade = st.selectbox("Grade / الصف:", grade_options) if grade_options else None
         
         study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
-        pwd = st.text_input("Code / كود الدخول:", type="password")
+        pwd = st.text_input("Access Code / كود الدخول:", type="password")
         
         if st.button("Login / دخول", use_container_width=True):
             if (not student_name or stage == "اختر المرحلة...") and pwd != TEACHER_MASTER_KEY:
@@ -298,14 +286,11 @@ if not st.session_state.auth_status:
                     daily_pass, _ = get_sheet_data()
                     
                     if pwd == TEACHER_MASTER_KEY:
-                        u_type = "teacher"
-                        valid = True
+                        u_type = "teacher"; valid = True
                     elif daily_pass and pwd == daily_pass:
-                        u_type = "student"
-                        valid = True
+                        u_type = "student"; valid = True
                     else:
-                        u_type = "none"
-                        valid = False
+                        u_type = "none"; valid = False
                     
                     if valid:
                         st.session_state.auth_status = True
@@ -349,8 +334,8 @@ with st.sidebar:
     st.write(f"👤 **{st.session_state.user_name}**")
     if st.session_state.user_type == "student":
         st.info(f"📚 {st.session_state.student_grade}")
+        st.caption(f"🏫 {st.session_state.study_lang}")
         
-        # 🏆 لوحة الشرف
         st.markdown("---")
         st.subheader("🏆 Leaderboard")
         leaders = get_leaderboard()
@@ -358,9 +343,7 @@ with st.sidebar:
             for i, leader in enumerate(leaders):
                 medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
                 st.write(f"{medal} **{leader['Student_Name']}**: {leader['XP']} XP")
-        else:
-            st.caption("No points yet. Be the first!")
-
+    
     if st.session_state.user_type == "teacher":
         st.success("👨‍🏫 Admin Dashboard")
         st.markdown("---")
@@ -401,7 +384,7 @@ with st.sidebar:
                         st.session_state.ref_text = download_pdf_text(service, fid)
                         st.toast("Book Loaded! ✅")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"]) # تبويب جديد
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
 user_input = ""
 input_mode = "text"
 
@@ -410,14 +393,12 @@ with tab1:
     audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
     if audio_in: 
         user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        # إضافة نقاط للسؤال الصوتي
-        update_xp(st.session_state.user_name, 10) 
+        update_xp(st.session_state.user_name, 10)
 
 with tab2:
     txt_in = st.text_area("Write here:")
     if st.button("Send", use_container_width=True): 
         user_input = txt_in
-        # إضافة نقاط للسؤال الكتابي
         update_xp(st.session_state.user_name, 5)
 
 with tab3:
@@ -434,31 +415,82 @@ with tab3:
             st.image(img, width=300)
             user_input = [up_q if up_q else "Explain", img]
             input_mode = "image"
-        # نقاط للملفات
         update_xp(st.session_state.user_name, 15)
 
+# 🌟 ميزة الاختبار التفاعلي (تم إصلاحها بالكامل)
 with tab4:
-    st.info(f"Targeting: **{st.session_state.student_grade}**")
-    if st.button("🎲 Generate Question", use_container_width=True):
+    st.info(f"Quiz for: **{st.session_state.student_grade}**")
+    
+    # زر توليد سؤال جديد
+    if st.button("🎲 New Question / سؤال جديد", use_container_width=True):
         grade = st.session_state.student_grade
         system = st.session_state.study_lang
-        user_input = f"Generate a multiple-choice question for a student in {grade}, studying in {system}. Wait for answer."
-        input_mode = "quiz"
-        # نقاط لاستخدام الاختبار
-        update_xp(st.session_state.user_name, 20)
+        
+        # نطلب من الذكاء الاصطناعي سؤالاً فقط بدون إجابة
+        q_prompt = f"""
+        Generate ONE multiple-choice question for a student in {grade} ({system}).
+        Topic: General Science (Physics/Chemistry/Biology).
+        Language: Arabic.
+        Output Format: Just the question and 4 choices. DO NOT give the answer.
+        """
+        try:
+            with st.spinner("Generating Quiz..."):
+                response = model.generate_content(q_prompt)
+                st.session_state.current_quiz_question = response.text
+                st.session_state.quiz_active = True
+                st.rerun() # تحديث الصفحة لإظهار السؤال
+        except: st.error("Failed to generate.")
 
-# 🌟 ميزة: المحلل الذكي
+    # إذا كان هناك سؤال نشط، نعرضه وننتظر الإجابة
+    if st.session_state.quiz_active and st.session_state.current_quiz_question:
+        st.markdown("---")
+        st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
+        
+        # خانة إجابة الطالب
+        student_ans = st.text_input("✍️ اكتب إجابتك هنا (أو الحرف الصحيح):")
+        
+        if st.button("✅ Check Answer / تحقق", use_container_width=True):
+            if student_ans:
+                # نرسل السؤال + إجابة الطالب للذكاء الاصطناعي ليصححها
+                check_prompt = f"""
+                Question: {st.session_state.current_quiz_question}
+                Student Answer: {student_ans}
+                
+                Task:
+                1. Tell if correct or wrong.
+                2. Explain the correct answer simply.
+                3. Give score 10/10 if correct, else 0/10.
+                Language: Arabic (Egyptian friendly tone).
+                """
+                with st.spinner("Checking..."):
+                    result = model.generate_content(check_prompt)
+                    st.success("📝 النتيجة:")
+                    st.write(result.text)
+                    
+                    # إذا كانت الإجابة صحيحة (تحليل بسيط للنص)، نضيف نقاط
+                    if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
+                        st.balloons()
+                        update_xp(st.session_state.user_name, 50)
+                        st.toast("🎉 +50 XP Added!")
+                    
+                    # إنهاء السؤال الحالي
+                    st.session_state.quiz_active = False
+                    st.session_state.current_quiz_question = ""
+            else:
+                st.warning("اكتب إجابة أولاً!")
+
 with tab5:
-    st.write("احصل على تحليل لأدائك في الجلسة:")
-    if st.button("📈 حلل مستواي الآن", use_container_width=True):
+    st.write("احصل على تحليل لأدائك:")
+    if st.button("📈 حلل مستواي", use_container_width=True):
         if st.session_state.chat_history:
             history_text = get_chat_text(st.session_state.chat_history)
-            user_input = f"Analyze this chat history for student ({st.session_state.user_name}). List strengths, weaknesses, and a study tip. Chat: {history_text[:5000]}"
+            user_input = f"Analyze performance for ({st.session_state.user_name}). Chat: {history_text[:5000]}"
             input_mode = "analysis"
         else:
-            st.warning("لم نتحدث بعد! اسألني أولاً.")
+            st.warning("ابدأ محادثة أولاً.")
 
-if user_input:
+# المعالجة الرئيسية (لغير الاختبار)
+if user_input and input_mode != "quiz":
     log_activity(st.session_state.user_name, input_mode, user_input)
     st.toast("🧠 Thinking...", icon="🤔")
     
@@ -469,23 +501,14 @@ if user_input:
         student_level = st.session_state.get("student_grade", "General")
         curriculum = st.session_state.get("study_lang", "Arabic")
         
-        # هندسة الأوامر (حسب الوضع)
         if input_mode == "analysis":
-            sys_prompt = "You are a Mentor. Analyze the student's performance based on the chat. Be encouraging and concise."
+            sys_prompt = "You are a Mentor. Analyze performance. Be concise."
         else:
             sys_prompt = f"""
-            Role: Science Tutor (Mr. Elsayed's Assistant).
-            Target: Student in {student_level}.
-            Curriculum: {curriculum}.
-            Language: {role_lang}.
-            Student: {student_name}.
-            
-            Instructions:
-            1. Address student by name.
-            2. Adapt to {student_level} level.
-            3. Use LaTeX for formulas.
-            4. BE CONCISE.
-            5. Reference: {ref[:20000]}
+            Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
+            Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
+            Instructions: Address by name. Adapt to level. Use LaTeX. BE CONCISE.
+            Ref: {ref[:20000]}
             """
         
         if input_mode == "image":
@@ -495,13 +518,12 @@ if user_input:
         else:
             response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
         
-        # حفظ المحادثة (إلا لو كان تحليل)
         if input_mode != "analysis":
             st.session_state.chat_history.append((str(user_input)[:50], response.text))
         
         st.markdown(f"### 💡 Answer:\n{response.text}")
         
-        if input_mode != "analysis": # لا داعي للصوت في تقرير التحليل الطويل
+        if input_mode != "analysis":
             audio = asyncio.run(generate_audio_stream(response.text, voice_code))
             st.audio(audio, format='audio/mp3', autoplay=True)
         
