@@ -75,15 +75,22 @@ def update_daily_password(new_pass):
     except:
         return False
 
+# --- دوال التسجيل (مصححة) ---
+
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
     if not client: return
+
+    sheet = None
     try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+    except:
         try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-        except:
             sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        
+        except:
+            return
+
+    try:
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([now, user_type, user_name, details])
@@ -93,12 +100,14 @@ def log_login_to_sheet(user_name, user_type, details=""):
 def log_activity(user_name, input_type, question_text):
     client = get_gspread_client()
     if not client: return
+
+    sheet = None
     try:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-        except:
-            return 
-        
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+    except:
+        return
+
+    try:
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         
@@ -110,14 +119,156 @@ def log_activity(user_name, input_type, question_text):
     except:
         pass
 
+# --- دوال النقاط (مصححة) ---
+
 def update_xp(user_name, points_to_add):
     client = get_gspread_client()
     if not client: return 0
+
+    sheet = None
     try:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except:
-            return 0
-        
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+    except:
+        return 0
+
+    try:
         cell = sheet.find(user_name)
-        current_xp 
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            current_xp = int(val) if val else 0
+            new_xp = current_xp + points_to_add
+            sheet.update_cell(cell.row, 2, new_xp)
+            return new_xp
+        else:
+            sheet.append_row([user_name, points_to_add])
+            return points_to_add
+    except:
+        return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            return int(val) if val else 0
+    except:
+        return 0
+    return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        if not data: return []
+        
+        df = pd.DataFrame(data)
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        top_5 = df.sort_values(by='XP', ascending=False).head(5)
+        return top_5.to_dict('records')
+    except:
+        return []
+
+def clear_old_data():
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        names = ["Logs", "Activity", "Gamification"]
+        for name in names:
+            try:
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(name)
+                ws.resize(rows=1)
+                ws.resize(rows=100)
+            except:
+                pass
+        return True
+    except:
+        return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if not client: return 0, []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        logs = sheet.worksheet("Logs").get_all_values()
+        qs = sheet.worksheet("Activity").get_all_values()
+        return len(logs)-1, qs[-5:]
+    except:
+        return 0, []
+
+def get_chat_text(history):
+    text = "--- Chat History ---\n\n"
+    for q, a in history:
+        text += f"Student: {q}\nAI Tutor: {a}\n\n"
+    return text
+
+def create_certificate(student_name):
+    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP.\n\nSigned: Mr. Elsayed Elbadawy"
+    return txt.encode('utf-8')
+
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
+            return build('drive', 'v3', credentials=creds)
+        except:
+            return None
+    return None
+
+def list_drive_files(service, folder_id):
+    try:
+        return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
+    except:
+        return []
+
+def download_pdf_text(service, file_id):
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_io = BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        file_io.seek(0)
+        reader = PyPDF2.PdfReader(file_io)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except:
+        return ""
+
+def get_voice_config(lang):
+    if lang == "English":
+        return "en-US-AndrewNeural", "en-US"
+    else:
+        return "ar-EG-ShakirNeural", "ar-EG"
+
+def clean_text_for_audio(text):
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = re.sub(r'\\item', '', text)         
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
+    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
+    return text
+
+async def generate_audio_stream(text, voice_code):
+    clean_text = clean_text_for_audio(text)
+    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
+    mp3_fp = BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            mp3_fp.write(chunk["data"])
+    return mp3_fp
+
+def speech_to_text(audio_bytes, lang_code):
+    r = sr.Recognizer()
+    try:
+        audio_file = 
