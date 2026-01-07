@@ -52,7 +52,8 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except: return None
+        except:
+            return None
     return None
 
 def get_sheet_data():
@@ -62,7 +63,8 @@ def get_sheet_data():
             sheet = client.open(CONTROL_SHEET_NAME)
             daily_pass = str(sheet.sheet1.acell('B1').value).strip()
             return daily_pass, sheet
-        except: return None, None
+        except:
+            return None, None
     return None, None
 
 def update_daily_password(new_pass):
@@ -71,24 +73,129 @@ def update_daily_password(new_pass):
         try:
             client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
             return True
-        except: return False
+        except:
+            return False
     return False
 
+# --- تم تبسيط الدوال التالية لمنع أخطاء المسافات ---
+
 def log_login_to_sheet(user_name, user_type, details=""):
+    client = get_gspread_client()
+    if not client:
+        return
+
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now, user_type, user_name, details])
+    except:
+        pass
+
+def log_activity(user_name, input_type, question_text):
+    client = get_gspread_client()
+    if not client:
+        return
+
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return # إذا لم توجد الصفحة نتجاهل
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        final_text = question_text
+        if isinstance(question_text, list):
+            final_text = f"[Image] {question_text[0]}"
+        
+        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+    except:
+        pass
+
+def update_xp(user_name, points_to_add):
+    client = get_gspread_client()
+    if not client:
+        return 0
+
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except:
+            return 0
+        
+        cell = sheet.find(user_name)
+        current_xp = 0
+        
+        if cell:
+            current_xp = int(sheet.cell(cell.row, 2).value)
+            new_xp = current_xp + points_to_add
+            sheet.update_cell(cell.row, 2, new_xp)
+            return new_xp
+        else:
+            sheet.append_row([user_name, points_to_add])
+            return points_to_add
+    except:
+        return 0
+    return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if client:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            cell = sheet.find(user_name)
+            if cell:
+                return int(sheet.cell(cell.row, 2).value)
+        except:
+            return 0
+    return 0
+
+def get_leaderboard():
     client = get_gspread_client()
     if client:
         try:
             try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
             except:
-                sheet = client.open(CONTROL_SHEET_NAME).sheet1
+                return []
             
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_type, user_name, details])
-        except: pass
+            data = sheet.get_all_records()
+            if not data:
+                return []
+            
+            df = pd.DataFrame(data)
+            df['XP'] = pd.to_numeric(df['XP'])
+            top_5 = df.sort_values(by='XP', ascending=False).head(5)
+            return top_5.to_dict('records')
+        except:
+            return []
+    return []
 
-def log_activity(user_name, input_type, question_text):
+def clear_old_data():
     client = get_gspread_client()
     if client:
-        
+        try:
+            for s in ["Logs", "Activity", "Gamification"]:
+                try:
+                    ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                    ws.resize(rows=1)
+                    ws.resize(rows=100)
+                except:
+                    pass
+            return True
+        except:
+            return False
+    return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if client:
+        try:
+            logs = client.open(CONTROL_SHEET_NAME).worksheet("Logs").get_all_values()
+            qs = 
