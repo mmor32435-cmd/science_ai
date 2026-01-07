@@ -33,15 +33,18 @@ DAILY_FACTS = [
     "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
     "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
-    "هل تعلم؟ العسل لا يفسد أبداً! 🍯"
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
+    "هل تعلم؟ سرعة الضوء 300,000 كم/ث! ⚡"
 ]
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 # ==========================================
-# 🛠️ الخدمات
+# 🛠️ الخدمات (شيت، درايف، صوت)
 # ==========================================
 
+# تحسين: استخدام Cache لمنع إعادة الاتصال المتكرر
+@st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" in st.secrets:
         try:
@@ -172,6 +175,8 @@ def get_chat_text(history):
 def create_certificate(student_name):
     return f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy".encode('utf-8')
 
+# تحسين: كاش للدرايف
+@st.cache_resource
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
         try:
@@ -229,14 +234,20 @@ def speech_to_text(audio_bytes, lang_code):
             return r.recognize_google(audio_data, language=lang_code)
     except: return None
 
-try:
+# تحسين: كاش للموديل لعدم تحميله كل مرة
+@st.cache_resource
+def load_ai_model():
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         active_model_name = next((m for m in all_models if 'flash' in m), None)
         if not active_model_name: active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
-        model = genai.GenerativeModel(active_model_name)
-    else: st.stop()
+        return genai.GenerativeModel(active_model_name), active_model_name
+    return None, None
+
+try:
+    model, active_model_name = load_ai_model()
+    if not model: st.stop()
 except: st.stop()
 
 
@@ -284,29 +295,38 @@ if "auth_status" not in st.session_state:
     st.session_state.current_quiz_question = ""
     st.session_state.current_xp = 0
 
-# --- شاشة الدخول ---
+# --- شاشة الدخول (المعدلة باستخدام Form) ---
+# استخدام Form يمنع إعادة تحميل الصفحة أثناء الكتابة
 if not st.session_state.auth_status:
     draw_header()
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.info(f"💡 {random.choice(DAILY_FACTS)}")
         
-        student_name = st.text_input("Name / اسمك الثلاثي:")
-        stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
-        grade_options = []
-        if stage == "المرحلة الابتدائية": grade_options = ["الصف الرابع", "الصف الخامس", "الصف السادس"]
-        elif stage == "المرحلة الإعدادية": grade_options = ["الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي"]
-        elif stage == "المرحلة الثانوية": grade_options = ["الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
-        selected_grade = st.selectbox("Grade / الصف:", grade_options) if grade_options else None
-        study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
-        pwd = st.text_input("Access Code / كود الدخول:", type="password")
+        with st.form("login_form"):
+            student_name = st.text_input("Name / اسمك الثلاثي:")
+            
+            stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
+            grade_options = ["..."] # Default
+            # (للتبسيط في الفورم، سنعتمد على الكتابة أو التحديد اللاحق أو نضع كل الصفوف)
+            # لتحسين التجربة، سنضع الصفوف بشكل عام هنا
+            all_grades = ["الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي", 
+                          "الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي",
+                          "الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
+            selected_grade = st.selectbox("Grade / الصف:", all_grades)
+            
+            study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
+            pwd = st.text_input("Access Code / كود الدخول:", type="password")
+            
+            submit_login = st.form_submit_button("Login / دخول", use_container_width=True)
         
-        if st.button("Login / دخول", use_container_width=True):
-            if (not student_name or stage == "اختر المرحلة...") and pwd != TEACHER_MASTER_KEY:
-                st.warning("⚠️ أكمل بياناتك أولاً")
+        if submit_login:
+            if (not student_name) and pwd != TEACHER_MASTER_KEY:
+                st.warning("⚠️ الرجاء كتابة الاسم")
             else:
                 with st.spinner("Connecting..."):
                     daily_pass, _ = get_sheet_data()
+                    
                     if pwd == TEACHER_MASTER_KEY:
                         u_type = "teacher"; valid = True
                     elif daily_pass and pwd == daily_pass:
@@ -319,10 +339,11 @@ if not st.session_state.auth_status:
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
                         
-                        final_grade = f"{stage} - {selected_grade}" if selected_grade else "General"
+                        final_grade = f"{stage} - {selected_grade}"
                         st.session_state.student_grade = final_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
                         st.session_state.start_time = time.time()
+                        
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{final_grade} | {st.session_state.study_lang}")
                         st.session_state.current_xp = get_current_xp(st.session_state.user_name)
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
@@ -539,14 +560,12 @@ if user_input and input_mode != "quiz":
         if input_mode != "analysis":
             st.session_state.chat_history.append((str(user_input)[:50], response.text))
         
-        # تحسين عرض الإجابة: فصل النص عن كود الرسم
         final_text = response.text
         dot_code = None
-        
         if "```dot" in response.text:
             try:
                 parts = response.text.split("```dot")
-                final_text = parts[0] # النص فقط
+                final_text = parts[0]
                 dot_code = parts[1].split("```")[0].strip()
             except: pass
         elif "digraph" in response.text and "{" in response.text:
@@ -554,11 +573,10 @@ if user_input and input_mode != "quiz":
                 start = response.text.find("digraph")
                 end = response.text.rfind("}") + 1
                 dot_code = response.text[start:end]
-                final_text = response.text.replace(dot_code, "") # إخفاء الكود
+                final_text = response.text.replace(dot_code, "")
             except: pass
 
         st.markdown(f"### 💡 Answer:\n{final_text}")
-        
         if dot_code:
             try: st.graphviz_chart(dot_code)
             except Exception as e: st.warning(f"Could not render diagram: {e}")
