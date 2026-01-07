@@ -15,8 +15,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import gspread
-import pandas as pd
+from fpdf import FPDF
 import random
+import graphviz # مكتبة الرسم المدمجة
 
 # ==========================================
 # 🎛️ إعدادات التحكم
@@ -28,16 +29,16 @@ SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "هل تعلم؟ مخ الإنسان يولد كهرباء تكفي لإضاءة مصباح! 💡",
-    "هل تعلم؟ لا يوجد صوت في الفضاء! 🔇",
-    "هل تعلم؟ الماء الساخن يتجمد أسرع من البارد! ❄️",
-    "هل تعلم؟ الزرافة لها 3 قلوب! 🦒"
+    "هل تعلم؟ الحمض النووي للإنسان يتطابق بنسبة 50% مع الموز! 🧬",
+    "هل تعلم؟ الضوء يستغرق 8 دقائق ليصل من الشمس للأرض! ☀️",
+    "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯"
 ]
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 # ==========================================
-# 🛠️ الخدمات
+# 🛠️ الخدمات (شيت، درايف، صوت)
 # ==========================================
 
 def get_gspread_client():
@@ -94,21 +95,36 @@ def log_activity(user_name, input_type, question_text):
             sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
         except: pass
 
+# نظام النقاط وقراءة الرصيد الحالي
 def update_xp(user_name, points_to_add):
     client = get_gspread_client()
     if client:
         try:
             try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-            except: return 
+            except: return 0
+            
             cell = sheet.find(user_name)
+            current_xp = 0
             if cell:
                 current_xp = int(sheet.cell(cell.row, 2).value)
-                sheet.update_cell(cell.row, 2, current_xp + points_to_add)
+                new_xp = current_xp + points_to_add
+                sheet.update_cell(cell.row, 2, new_xp)
+                return new_xp
             else:
                 sheet.append_row([user_name, points_to_add])
-            return True
-        except: pass
-    return False
+                return points_to_add
+        except: return 0
+    return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if client:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            cell = sheet.find(user_name)
+            if cell: return int(sheet.cell(cell.row, 2).value)
+        except: return 0
+    return 0
 
 def get_leaderboard():
     client = get_gspread_client()
@@ -150,6 +166,39 @@ def get_chat_text(history):
     for q, a in history:
         text += f"Student: {q}\nAI Tutor: {a}\n\n"
     return text
+
+# 🔥 دالة إنشاء الشهادة (الابتكار الجديد) 🔥
+def create_certificate(student_name):
+    pdf = FPDF(orientation='L', unit='mm', format='A4')
+    pdf.add_page()
+    # إطار بسيط
+    pdf.set_draw_color(0, 80, 180) # أزرق
+    pdf.set_line_width(5)
+    pdf.rect(10, 10, 277, 190)
+    
+    pdf.set_font("Arial", 'B', 40)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 40, "CERTIFICATE OF EXCELLENCE", 0, 1, 'C')
+    
+    pdf.set_font("Arial", '', 20)
+    pdf.cell(0, 20, "This is to certify that", 0, 1, 'C')
+    
+    pdf.set_font("Arial", 'B', 30)
+    pdf.set_text_color(0, 80, 180)
+    # نستخدم الاسم الإنجليزي أو اللاتيني لأن FPDF الأساسية لا تدعم العربية مباشرة بدون خطوط خارجية
+    # لذا سنكتب الاسم كما هو (إذا كان إنجليزي سيظهر، عربي قد يحتاج مكتبة أخرى، لذا ننصح الطلاب بكتابة اسمهم بالإنجليزية للدخول)
+    pdf.cell(0, 30, student_name, 0, 1, 'C')
+    
+    pdf.set_font("Arial", '', 16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 20, "Has shown outstanding performance in Science", 0, 1, 'C')
+    pdf.cell(0, 10, f"Date: {datetime.now().strftime('%Y-%m-%d')}", 0, 1, 'C')
+    
+    pdf.ln(20)
+    pdf.set_font("Arial", 'I', 14)
+    pdf.cell(0, 10, "Signed: Mr. Elsayed Elbadawy", 0, 1, 'C')
+    
+    return pdf.output(dest='S').encode('latin-1')
 
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
@@ -252,6 +301,7 @@ if "auth_status" not in st.session_state:
     st.session_state.study_lang = ""
     st.session_state.quiz_active = False
     st.session_state.current_quiz_question = ""
+    st.session_state.current_xp = 0 # رصيد النقاط المحلي
 
 # --- شاشة الدخول ---
 if not st.session_state.auth_status:
@@ -260,7 +310,7 @@ if not st.session_state.auth_status:
     with col2:
         st.info(f"💡 {random.choice(DAILY_FACTS)}")
         
-        student_name = st.text_input("Name / اسمك الثلاثي:")
+        student_name = st.text_input("Name (English preferred) / الاسم (يفضل الإنجليزية):")
         
         stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
         grade_options = []
@@ -290,11 +340,17 @@ if not st.session_state.auth_status:
                         st.session_state.auth_status = True
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
+                        
                         final_grade = f"{stage} - {selected_grade}" if selected_grade else "General"
                         st.session_state.student_grade = final_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
                         st.session_state.start_time = time.time()
+                        
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{final_grade} | {st.session_state.study_lang}")
+                        
+                        # جلب النقاط الحالية عند الدخول
+                        st.session_state.current_xp = get_current_xp(st.session_state.user_name)
+                        
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
                         st.error("Code Error")
@@ -324,9 +380,21 @@ voice_code, sr_lang = get_voice_config(language)
 
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_name}**")
+    
+    # 🏅 عرض النقاط للطالب
     if st.session_state.user_type == "student":
+        st.metric("🌟 Your XP", st.session_state.current_xp)
+        
+        # 🏆 ميزة الشهادة
+        if st.session_state.current_xp >= 100:
+            st.success("🎉 You reached 100 XP!")
+            if st.button("🎓 Get Certificate"):
+                pdf_bytes = create_certificate(st.session_state.user_name)
+                st.download_button("⬇️ Download Certificate", pdf_bytes, "Certificate.pdf", "application/pdf")
+        else:
+            st.caption(f"Reach 100 XP to get a Certificate! ({100 - st.session_state.current_xp} left)")
+
         st.info(f"📚 {st.session_state.student_grade}")
-        st.caption(f"🏫 {st.session_state.study_lang}")
         
         st.markdown("---")
         st.subheader("🏆 Leaderboard")
@@ -355,9 +423,9 @@ with st.sidebar:
             if st.button("🗑️ Clear Logs"):
                 if clear_old_data(): st.success("Cleared!")
     else:
+        st.markdown("---")
         st.metric("⏳ Time Left", f"{remaining_minutes} min")
         st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
-        st.markdown("---")
         if st.session_state.chat_history:
             chat_txt = get_chat_text(st.session_state.chat_history)
             st.download_button("📥 Save Chat", chat_txt, file_name="Science_Session.txt")
@@ -385,13 +453,15 @@ with tab1:
     audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
     if audio_in: 
         user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        update_xp(st.session_state.user_name, 10)
+        new_xp = update_xp(st.session_state.user_name, 10)
+        st.session_state.current_xp = new_xp
 
 with tab2:
     txt_in = st.text_area("Write here:")
     if st.button("Send", use_container_width=True): 
         user_input = txt_in
-        update_xp(st.session_state.user_name, 5)
+        new_xp = update_xp(st.session_state.user_name, 5)
+        st.session_state.current_xp = new_xp
 
 with tab3:
     up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
@@ -407,18 +477,16 @@ with tab3:
             st.image(img, width=300)
             user_input = [up_q if up_q else "Explain", img]
             input_mode = "image"
-        update_xp(st.session_state.user_name, 15)
+        new_xp = update_xp(st.session_state.user_name, 15)
+        st.session_state.current_xp = new_xp
 
-# 🌟 ميزة الاختبار (تم إصلاح خطأ Failed هنا)
+# 🌟 ميزة الاختبار
 with tab4:
     st.info(f"Quiz for: **{st.session_state.student_grade}**")
     
-    # 1. زر التوليد
     if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
         grade = st.session_state.student_grade
         system = st.session_state.study_lang
-        
-        # استخدام المرجع أو المنهج المصري
         ref_context = st.session_state.get("ref_text", "")
         source = f"Source Material: {ref_context[:30000]}" if ref_context else "Source: Egyptian Ministry of Education Curriculum."
         
@@ -426,27 +494,19 @@ with tab4:
         Generate ONE multiple-choice question.
         Target: Student in {grade} ({system}).
         {source}
-        Constraint: The question MUST be strictly from the provided source or standard Egyptian curriculum for this grade.
-        Output: Question and 4 options. DO NOT provide the answer yet.
+        Constraint: Strictly from provided source or curriculum.
+        Output: Question and 4 options. NO Answer yet.
         Language: Arabic.
         """
         
-        # 🔥 التعديل الجوهري: فصلنا عملية التحديث عن عملية الجلب
-        success_gen = False
         try:
             with st.spinner("Generating..."):
                 response = model.generate_content(q_prompt)
                 st.session_state.current_quiz_question = response.text
                 st.session_state.quiz_active = True
-                success_gen = True
-        except Exception as e:
-            st.error(f"Error: {e}")
-        
-        # إذا نجحنا، نحدث الصفحة الآن (خارج Try/Except)
-        if success_gen:
-            st.rerun()
+                st.rerun()
+        except: pass
 
-    # 2. عرض السؤال وانتظار الإجابة
     if st.session_state.quiz_active and st.session_state.current_quiz_question:
         st.markdown("---")
         st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
@@ -458,8 +518,8 @@ with tab4:
                 check_prompt = f"""
                 Question: {st.session_state.current_quiz_question}
                 Student Answer: {student_ans}
-                Task: Correct it based on Egyptian Curriculum.
-                Output: Correct/Wrong + Simple Explanation + Score(10/10).
+                Task: Correct based on Egyptian Curriculum.
+                Output: Correct/Wrong + Explanation.
                 Lang: Arabic.
                 """
                 with st.spinner("Checking..."):
@@ -469,13 +529,14 @@ with tab4:
                     
                     if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
                         st.balloons()
-                        update_xp(st.session_state.user_name, 50)
+                        new_xp = update_xp(st.session_state.user_name, 50)
+                        st.session_state.current_xp = new_xp
                         st.toast("🎉 +50 XP!")
                     
                     st.session_state.quiz_active = False
                     st.session_state.current_quiz_question = ""
             else:
-                st.warning("اكتب إجابة أولاً!")
+                st.warning("اكتب الإجابة!")
 
 with tab5:
     st.write("احصل على تحليل لأدائك:")
@@ -487,7 +548,6 @@ with tab5:
         else:
             st.warning("ابدأ محادثة أولاً.")
 
-# المعالجة الرئيسية (لغير الاختبار)
 if user_input and input_mode != "quiz":
     log_activity(st.session_state.user_name, input_mode, user_input)
     st.toast("🧠 Thinking...", icon="🤔")
@@ -499,15 +559,18 @@ if user_input and input_mode != "quiz":
         student_level = st.session_state.get("student_grade", "General")
         curriculum = st.session_state.get("study_lang", "Arabic")
         
-        if input_mode == "analysis":
-            sys_prompt = "You are a Mentor. Analyze performance. Be concise."
-        else:
-            sys_prompt = f"""
-            Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
-            Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
-            Instructions: Address by name. Adapt to level. Use LaTeX. BE CONCISE.
-            Ref: {ref[:20000]}
-            """
+        # 🌟 هندسة الأوامر لرسم المخططات الذهنية
+        map_instruction = ""
+        if "مخطط" in str(user_input) or "خريطة" in str(user_input) or "map" in str(user_input).lower():
+            map_instruction = "IMPORTANT: If the user asks for a mind map, ALSO output the explanation in Graphviz DOT format inside ```dot ... ``` block."
+
+        sys_prompt = f"""
+        Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
+        Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
+        Instructions: Address by name. Adapt to level. Use LaTeX. BE CONCISE.
+        {map_instruction}
+        Ref: {ref[:20000]}
+        """
         
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
@@ -521,6 +584,14 @@ if user_input and input_mode != "quiz":
         
         st.markdown(f"### 💡 Answer:\n{response.text}")
         
+        # 🎨 كود رسم المخطط الذهني (جديد)
+        if "```dot" in response.text:
+            try:
+                # استخراج كود الرسم من الإجابة
+                dot_code = response.text.split("```dot")[1].split("```")[0]
+                st.graphviz_chart(dot_code)
+            except: pass
+
         if input_mode != "analysis":
             audio = asyncio.run(generate_audio_stream(response.text, voice_code))
             st.audio(audio, format='audio/mp3', autoplay=True)
