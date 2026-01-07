@@ -21,10 +21,8 @@ import random
 import graphviz 
 
 # ==========================================
-# 🎛️ إعدادات الصفحة (يجب أن تكون أول شيء)
+# 🎛️ إعدادات التحكم
 # ==========================================
-
-st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
@@ -39,9 +37,306 @@ DAILY_FACTS = [
     "هل تعلم؟ سرعة الضوء 300,000 كم/ث! ⚡"
 ]
 
+st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
+
 # ==========================================
-# 🎨 دالة رسم الهيدر
+# 🛠️ الخدمات (شيت، درايف، صوت)
 # ==========================================
+
+@st.cache_resource
+def get_gspread_client():
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+            )
+            return gspread.authorize(creds)
+        except:
+            return None
+    return None
+
+def get_sheet_data():
+    client = get_gspread_client()
+    if not client: return None, None
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        daily_pass = str(sheet.sheet1.acell('B1').value).strip()
+        return daily_pass, sheet
+    except:
+        return None, None
+
+def update_daily_password(new_pass):
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
+        return True
+    except:
+        return False
+
+# --- دوال التسجيل ---
+
+def log_login_to_sheet(user_name, user_type, details=""):
+    client = get_gspread_client()
+    if not client: return
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now, user_type, user_name, details])
+    except:
+        pass
+
+def log_activity(user_name, input_type, question_text):
+    client = get_gspread_client()
+    if not client: return
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return 
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        final_text = question_text
+        if isinstance(question_text, list):
+            final_text = f"[Image] {question_text[0]}"
+        
+        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+    except:
+        pass
+
+def update_xp(user_name, points_to_add):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except:
+            return 0
+        
+        cell = sheet.find(user_name)
+        current_xp = 0
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            current_xp = int(val) if val else 0
+            new_xp = current_xp + points_to_add
+            sheet.update_cell(cell.row, 2, new_xp)
+            return new_xp
+        else:
+            sheet.append_row([user_name, points_to_add])
+            return points_to_add
+    except:
+        return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            return int(val) if val else 0
+        return 0
+    except:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        if not data: return []
+        
+        df = pd.DataFrame(data)
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        top_5 = df.sort_values(by='XP', ascending=False).head(5)
+        return top_5.to_dict('records')
+    except:
+        return []
+
+def clear_old_data():
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        for s in ["Logs", "Activity", "Gamification"]:
+            try: 
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                ws.resize(rows=1); ws.resize(rows=100)
+            except: pass
+        return True
+    except: return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if not client: return 0, []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
+    except:
+        return 0, []
+
+def get_chat_text(history):
+    text = "--- Chat History ---\n\n"
+    for q, a in history:
+        text += f"Student: {q}\nAI Tutor: {a}\n\n"
+    return text
+
+def create_certificate(student_name):
+    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
+    return txt.encode('utf-8')
+
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
+            return build('drive', 'v3', credentials=creds)
+        except:
+            return None
+    return None
+
+def list_drive_files(service, folder_id):
+    try:
+        return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
+    except:
+        return []
+
+def download_pdf_text(service, file_id):
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_io = BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        file_io.seek(0)
+        reader = PyPDF2.PdfReader(file_io)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except:
+        return ""
+
+def get_voice_config(lang):
+    if lang == "English":
+        return "en-US-AndrewNeural", "en-US"
+    else:
+        return "ar-EG-ShakirNeural", "ar-EG"
+
+def clean_text_for_audio(text):
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = re.sub(r'\\item', '', text)         
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
+    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
+    return text
+
+async def generate_audio_stream(text, voice_code):
+    clean_text = clean_text_for_audio(text)
+    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
+    mp3_fp = BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            mp3_fp.write(chunk["data"])
+    return mp3_fp
+
+def speech_to_text(audio_bytes, lang_code):
+    r = sr.Recognizer()
+    try:
+        audio_file = sr.AudioFile(BytesIO(audio_bytes))
+        with audio_file as source:
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = r.record(source)
+            return r.recognize_google(audio_data, language=lang_code)
+    except:
+        return None
+
+# 🔥 دالة تحميل الموديل (تم تبسيطها لمنع الخطأ) 🔥
+@st.cache_resource
+def load_ai_model():
+    try:
+        api_key = None
+        if "GOOGLE_API_KEYS" in st.secrets:
+            keys = st.secrets["GOOGLE_API_KEYS"]
+            if isinstance(keys, list) and len(keys) > 0:
+                api_key = random.choice(keys)
+        elif "GOOGLE_API_KEY" in st.secrets:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            
+        if api_key:
+            genai.configure(api_key=api_key)
+            all_models = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    all_models.append(m.name)
+            
+            # البحث البسيط عن الموديل
+            active_model = None
+            for m in all_models:
+                if 'flash' in m:
+                    active_model = m
+                    break
+            
+            if not active_model:
+                for m in all_models:
+                    if 'pro' in m:
+                        active_model = m
+                        break
+            
+            # إذا لم نجد flash أو pro، نأخذ الأول
+            if not active_model and all_models:
+                active_model = all_models[0]
+                
+            if active_model:
+                return genai.GenerativeModel(active_model)
+                
+    except:
+        pass
+    return None
+
+try:
+    model = load_ai_model()
+    if not model:
+        st.stop()
+except:
+    st.stop()
+
+# دالة التوليد الآمنة
+def safe_generate_content(model, prompt):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return model.generate_content(prompt)
+        except Exception as e:
+            if "429" in str(e) or "Quota" in str(e):
+                time.sleep(1)
+                st.cache_resource.clear()
+                continue
+            else:
+                raise e
+    raise Exception("Busy")
+
+
+# ==========================================
+# 🎨 الواجهة
+# ==========================================
+
 def draw_header():
     st.markdown("""
         <style>
@@ -72,11 +367,6 @@ def draw_header():
         </div>
     """, unsafe_allow_html=True)
 
-# ==========================================
-# 🔐 شاشة الدخول (الأولوية القصوى)
-# ==========================================
-
-# تهيئة المتغيرات
 if "auth_status" not in st.session_state:
     st.session_state.auth_status = False
     st.session_state.user_type = "none"
@@ -87,50 +377,7 @@ if "auth_status" not in st.session_state:
     st.session_state.current_quiz_question = ""
     st.session_state.current_xp = 0
 
-# --- خدمات الشيت ---
-@st.cache_resource
-def get_gspread_client():
-    if "gcp_service_account" in st.secrets:
-        try:
-            creds = service_account.Credentials.from_service_account_info(
-                st.secrets["gcp_service_account"],
-                scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-            )
-            return gspread.authorize(creds)
-        except: return None
-    return None
-
-def get_sheet_data():
-    client = get_gspread_client()
-    if not client: return None, None
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME)
-        daily_pass = str(sheet.sheet1.acell('B1').value).strip()
-        return daily_pass, sheet
-    except: return None, None
-
-def log_login_to_sheet(user_name, user_type, details=""):
-    client = get_gspread_client()
-    if not client: return
-    try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-        except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        tz = pytz.timezone('Africa/Cairo')
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now, user_type, user_name, details])
-    except: pass
-
-def get_current_xp(user_name):
-    client = get_gspread_client()
-    if not client: return 0
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        cell = sheet.find(user_name)
-        if cell: return int(sheet.cell(cell.row, 2).value)
-        return 0
-    except: return 0
-
-# --- عرض شاشة الدخول ---
+# --- شاشة الدخول ---
 if not st.session_state.auth_status:
     draw_header()
     col1, col2, col3 = st.columns([1,2,1])
@@ -155,200 +402,139 @@ if not st.session_state.auth_status:
                 st.warning("⚠️ يرجى كتابة الاسم")
             else:
                 with st.spinner("Connecting..."):
-                    # التحقق من الباسورد
                     daily_pass, _ = get_sheet_data()
-                    
-                    valid = False
-                    u_type = "none"
                     
                     if pwd == TEACHER_MASTER_KEY:
                         u_type = "teacher"; valid = True
                     elif daily_pass and pwd == daily_pass:
                         u_type = "student"; valid = True
+                    else:
+                        u_type = "none"; valid = False
                     
                     if valid:
                         st.session_state.auth_status = True
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
+                        
                         st.session_state.student_grade = selected_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
                         st.session_state.start_time = time.time()
                         
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
                         
-                        try: st.session_state.current_xp = get_current_xp(st.session_state.user_name)
-                        except: st.session_state.current_xp = 0
+                        try:
+                            st.session_state.current_xp = get_current_xp(st.session_state.user_name)
+                        except:
+                            st.session_state.current_xp = 0
 
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
-                        st.error("Code Error / الكود خطأ")
-    
-    # 🛑 إيقاف هنا حتى لا يتم تحميل باقي التطبيق قبل الدخول
+                        st.error("Code Error")
     st.stop()
 
+# --- الوقت ---
+time_up = False
+remaining_minutes = 0
+if st.session_state.user_type == "student":
+    elapsed = time.time() - st.session_state.start_time
+    allowed = SESSION_DURATION_MINUTES * 60
+    if elapsed > allowed:
+        time_up = True
+    else:
+        remaining_minutes = int((allowed - elapsed) // 60)
 
-# ==========================================
-# 🚀 التطبيق الرئيسي (يعمل بعد الدخول فقط)
-# ==========================================
+if time_up and st.session_state.user_type == "student":
+    st.error("Session Expired"); st.stop()
 
-# --- دوال الخدمات الإضافية ---
-def update_daily_password(new_pass):
-    client = get_gspread_client()
-    if not client: return False
-    try:
-        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
-        return True
-    except: return False
+# --- التطبيق ---
+draw_header()
 
-def log_activity(user_name, input_type, question_text):
-    client = get_gspread_client()
-    if not client: return
-    try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-        except: return
-        tz = pytz.timezone('Africa/Cairo')
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        final_text = question_text
-        if isinstance(question_text, list): final_text = f"[Image] {question_text[0]}"
-        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
-    except: pass
+col_lang, col_stat = st.columns([2,1])
+with col_lang:
+    language = st.radio("Speaking Language / لغة التحدث:", ["العربية", "English"], horizontal=True)
 
-def update_xp(user_name, points_to_add):
-    client = get_gspread_client()
-    if not client: return 0
-    try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except: return 0
-        cell = sheet.find(user_name)
-        current_xp = 0
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            current_xp = int(val) if val else 0
-            new_xp = current_xp + points_to_add
-            sheet.update_cell(cell.row, 2, new_xp)
-            return new_xp
-        else:
-            sheet.append_row([user_name, points_to_add])
-            return points_to_add
-    except: return 0
+lang_code = "ar-EG" if language == "العربية" else "en-US"
+voice_code, sr_lang = get_voice_config(language)
 
-def get_leaderboard():
-    client = get_gspread_client()
-    if not client: return []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        data = sheet.get_all_records()
-        if not data: return []
-        df = pd.DataFrame(data)
-        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
-        top_5 = df.sort_values(by='XP', ascending=False).head(5)
-        return top_5.to_dict('records')
-    except: return []
+with st.sidebar:
+    st.write(f"👤 **{st.session_state.user_name}**")
+    if st.session_state.user_type == "student":
+        st.metric("🌟 Your XP", st.session_state.current_xp)
+        if st.session_state.current_xp >= 100:
+            st.success("🎉 100 XP Reached!")
+            if st.button("🎓 Certificate"):
+                st.download_button("⬇️ Download", create_certificate(st.session_state.user_name), "Certificate.txt")
+        st.info(f"📚 {st.session_state.student_grade}")
+        
+        st.markdown("---")
+        st.subheader("🏆 Leaderboard")
+        leaders = get_leaderboard()
+        if leaders:
+            for i, leader in enumerate(leaders):
+                medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
+                st.write(f"{medal} **{leader['Student_Name']}**: {leader['XP']} XP")
+    
+    if st.session_state.user_type == "teacher":
+        st.success("👨‍🏫 Admin Dashboard")
+        st.markdown("---")
+        with st.expander("📊 Stats"):
+            count, last_qs = get_stats_for_admin()
+            st.metric("Logins", count)
+            for q in last_qs:
+                if len(q) > 3:
+                    st.caption(f"- {q[3][:25]}...")
+        
+        with st.expander("🔑 Password"):
+            new_p = st.text_input("New Code:")
+            if st.button("Update"):
+                if update_daily_password(new_p):
+                    st.success("Updated!")
+                else:
+                    st.error("Failed")
+        
+        with st.expander("⚠️ Danger"):
+            if st.button("🗑️ Clear Logs"):
+                if clear_old_data():
+                    st.success("Cleared!")
+                else:
+                    st.error("Failed")
+    else:
+        st.metric("⏳ Time Left", f"{remaining_minutes} min")
+        st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
+        st.markdown("---")
+        if st.session_state.chat_history:
+            chat_txt = get_chat_text(st.session_state.chat_history)
+            st.download_button("📥 Save Chat", chat_txt, file_name="Science_Session.txt")
 
-def clear_old_data():
-    client = get_gspread_client()
-    if not client: return False
-    try:
-        for s in ["Logs", "Activity", "Gamification"]:
-            try: 
-                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
-                ws.resize(rows=1); ws.resize(rows=100)
-            except: pass
-        return True
-    except: return False
+    st.markdown("---")
+    if DRIVE_FOLDER_ID:
+        service = get_drive_service()
+        if service:
+            files = list_drive_files(service, DRIVE_FOLDER_ID)
+            if files:
+                st.subheader("📚 Library")
+                sel_file = st.selectbox("Book:", [f['name'] for f in files])
+                if st.button("Load Book", use_container_width=True):
+                    fid = next(f['id'] for f in files if f['name'] == sel_file)
+                    with st.spinner("Loading..."):
+                        st.session_state.ref_text = download_pdf_text(service, fid)
+                        st.toast("Book Loaded! ✅")
 
-def get_stats_for_admin():
-    client = get_gspread_client()
-    if not client: return 0, []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME)
-        try: logs = sheet.worksheet("Logs").get_all_values()
-        except: logs = []
-        try: qs = sheet.worksheet("Activity").get_all_values()
-        except: qs = []
-        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
-    except: return 0, []
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
+user_input = ""
+input_mode = "text"
 
-def get_chat_text(history):
-    text = "--- Chat History ---\n\n"
-    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
-    return text
+with tab1:
+    st.caption("Click mic to speak")
+    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
+    if audio_in: 
+        user_input = speech_to_text(audio_in['bytes'], sr_lang)
+        st.session_state.current_xp += 10
+        update_xp(st.session_state.user_name, 10)
 
-def create_certificate(student_name):
-    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP.\n\nSigned: Mr. Elsayed Elbadawy"
-    return txt.encode('utf-8')
-
-@st.cache_resource
-def get_drive_service():
-    if "gcp_service_account" in st.secrets:
-        try:
-            creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
-            return build('drive', 'v3', credentials=creds)
-        except: return None
-    return None
-
-def list_drive_files(service, folder_id):
-    try: return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
-    except: return []
-
-def download_pdf_text(service, file_id):
-    try:
-        request = service.files().get_media(fileId=file_id)
-        file_io = BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request)
-        done = False
-        while done is False: status, done = downloader.next_chunk()
-        file_io.seek(0)
-        reader = PyPDF2.PdfReader(file_io)
-        text = ""
-        for page in reader.pages: text += page.extract_text() + "\n"
-        return text
-    except: return ""
-
-def get_voice_config(lang):
-    if lang == "English": return "en-US-AndrewNeural", "en-US"
-    else: return "ar-EG-ShakirNeural", "ar-EG"
-
-def clean_text_for_audio(text):
-    text = re.sub(r'\\begin\{.*?\}', '', text) 
-    text = re.sub(r'\\end\{.*?\}', '', text)   
-    text = re.sub(r'\\item', '', text)         
-    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
-    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
-    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
-    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
-    return text
-
-async def generate_audio_stream(text, voice_code):
-    clean_text = clean_text_for_audio(text)
-    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
-    mp3_fp = BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
-    return mp3_fp
-
-def speech_to_text(audio_bytes, lang_code):
-    r = sr.Recognizer()
-    try:
-        audio_file = sr.AudioFile(BytesIO(audio_bytes))
-        with audio_file as source:
-            r.adjust_for_ambient_noise(source, duration=0.5)
-            audio_data = r.record(source)
-            return r.recognize_google(audio_data, language=lang_code)
-    except: return None
-
-# 🔥 دالة الذكاء الاصطناعي (تم تأخير تحميلها لما بعد الدخول) 🔥
-@st.cache_resource
-def load_ai_model():
-    try:
-        api_key = None
-        if "GOOGLE_API_KEYS" in st.secrets:
-            keys = st.secrets["GOOGLE_API_KEYS"]
-            if keys: api_key = random.choice(keys)
-        elif "GOOGLE_API_KEY" in st.secrets:
-            api_key = st.secrets["GOOGLE_API_KEY"]
-            
-        if api_key:
-            genai.configure(api_key=api_key)
-            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            active_model_name = next((m for m in all_models if 
+with tab2:
+    txt_in = st.text_area("Write here:")
+    if st.button("Send", use_container_width=True): 
+        user_input = txt_in
+        st.session_state.current_xp += 5
+        update_xp(st.session_state.user_name, 5)
