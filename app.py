@@ -52,7 +52,7 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except:
+        except Exception as e:
             return None
     return None
 
@@ -167,13 +167,17 @@ def clear_old_data():
     client = get_gspread_client()
     if not client: return False
     try:
-        for s in ["Logs", "Activity", "Gamification"]:
-            try: 
-                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
-                ws.resize(rows=1); ws.resize(rows=100)
-            except: pass
+        names = ["Logs", "Activity", "Gamification"]
+        for name in names:
+            try:
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(name)
+                ws.resize(rows=1)
+                ws.resize(rows=100)
+            except:
+                pass
         return True
-    except: return False
+    except:
+        return False
 
 def get_stats_for_admin():
     client = get_gspread_client()
@@ -267,274 +271,39 @@ def speech_to_text(audio_bytes, lang_code):
     except:
         return None
 
-# 🔥 دالة تحميل الموديل (تم تبسيطها لمنع الخطأ) 🔥
-@st.cache_resource
-def load_ai_model():
+# 🔥 دالة تحميل الموديل الذكية 🔥
+def configure_genai():
     try:
-        api_key = None
+        # محاولة استخدام القائمة
         if "GOOGLE_API_KEYS" in st.secrets:
             keys = st.secrets["GOOGLE_API_KEYS"]
             if isinstance(keys, list) and len(keys) > 0:
-                api_key = random.choice(keys)
+                key = random.choice(keys)
+                genai.configure(api_key=key)
+                return True
+        # محاولة استخدام المفتاح الفردي
         elif "GOOGLE_API_KEY" in st.secrets:
-            api_key = st.secrets["GOOGLE_API_KEY"]
-            
-        if api_key:
-            genai.configure(api_key=api_key)
-            all_models = []
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    all_models.append(m.name)
-            
-            # البحث البسيط عن الموديل
-            active_model = None
-            for m in all_models:
-                if 'flash' in m:
-                    active_model = m
-                    break
-            
-            if not active_model:
-                for m in all_models:
-                    if 'pro' in m:
-                        active_model = m
-                        break
-            
-            # إذا لم نجد flash أو pro، نأخذ الأول
-            if not active_model and all_models:
-                active_model = all_models[0]
-                
-            if active_model:
-                return genai.GenerativeModel(active_model)
-                
-    except:
-        pass
-    return None
+            genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+            return True
+    except Exception as e:
+        st.error(f"API Key Error: {e}")
+        return False
+    return False
 
-try:
-    model = load_ai_model()
-    if not model:
-        st.stop()
-except:
+# محاولة الاتصال عند البدء
+if not configure_genai():
+    st.error("⚠️ لم يتم العثور على مفاتيح API صالحة. يرجى مراجعة Secrets.")
     st.stop()
 
-# دالة التوليد الآمنة
-def safe_generate_content(model, prompt):
+# دالة التوليد الآمنة (بدون كاش لتفادي المشاكل)
+def safe_generate_content(prompt_content):
     max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            return model.generate_content(prompt)
-        except Exception as e:
-            if "429" in str(e) or "Quota" in str(e):
-                time.sleep(1)
-                st.cache_resource.clear()
-                continue
-            else:
-                raise e
-    raise Exception("Busy")
-
-
-# ==========================================
-# 🎨 الواجهة
-# ==========================================
-
-def draw_header():
-    st.markdown("""
-        <style>
-        .header-container {
-            padding: 1.5rem;
-            border-radius: 15px;
-            background: linear-gradient(120deg, #89f7fe 0%, #66a6ff 100%);
-            color: #1a2a6c;
-            text-align: center;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            margin-bottom: 1rem;
-        }
-        .main-title {
-            font-size: 2.2rem;
-            font-weight: 900;
-            margin: 0;
-            font-family: 'Segoe UI', sans-serif;
-        }
-        .sub-text {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-top: 5px;
-        }
-        </style>
-        <div class="header-container">
-            <div class="main-title">🧬 AI Science Tutor</div>
-            <div class="sub-text">Under Supervision of: Mr. Elsayed Elbadawy</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-if "auth_status" not in st.session_state:
-    st.session_state.auth_status = False
-    st.session_state.user_type = "none"
-    st.session_state.chat_history = []
-    st.session_state.student_grade = ""
-    st.session_state.study_lang = ""
-    st.session_state.quiz_active = False
-    st.session_state.current_quiz_question = ""
-    st.session_state.current_xp = 0
-
-# --- شاشة الدخول ---
-if not st.session_state.auth_status:
-    draw_header()
-    col1, col2, col3 = st.columns([1,2,1])
-    with col2:
-        st.info(f"💡 {random.choice(DAILY_FACTS)}")
-        
-        with st.form("login_form"):
-            student_name = st.text_input("Name / اسمك الثلاثي:")
-            
-            all_stages = ["الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي",
-                          "الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي",
-                          "الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
-            selected_grade = st.selectbox("Grade / الصف الدراسي:", all_stages)
-            
-            study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
-            pwd = st.text_input("Access Code / كود الدخول:", type="password")
-            
-            submit_login = st.form_submit_button("Login / دخول", use_container_width=True)
-        
-        if submit_login:
-            if (not student_name) and pwd != TEACHER_MASTER_KEY:
-                st.warning("⚠️ يرجى كتابة الاسم")
-            else:
-                with st.spinner("Connecting..."):
-                    daily_pass, _ = get_sheet_data()
-                    
-                    if pwd == TEACHER_MASTER_KEY:
-                        u_type = "teacher"; valid = True
-                    elif daily_pass and pwd == daily_pass:
-                        u_type = "student"; valid = True
-                    else:
-                        u_type = "none"; valid = False
-                    
-                    if valid:
-                        st.session_state.auth_status = True
-                        st.session_state.user_type = u_type
-                        st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
-                        
-                        st.session_state.student_grade = selected_grade
-                        st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
-                        st.session_state.start_time = time.time()
-                        
-                        log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
-                        
-                        try:
-                            st.session_state.current_xp = get_current_xp(st.session_state.user_name)
-                        except:
-                            st.session_state.current_xp = 0
-
-                        st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
-                    else:
-                        st.error("Code Error")
-    st.stop()
-
-# --- الوقت ---
-time_up = False
-remaining_minutes = 0
-if st.session_state.user_type == "student":
-    elapsed = time.time() - st.session_state.start_time
-    allowed = SESSION_DURATION_MINUTES * 60
-    if elapsed > allowed:
-        time_up = True
-    else:
-        remaining_minutes = int((allowed - elapsed) // 60)
-
-if time_up and st.session_state.user_type == "student":
-    st.error("Session Expired"); st.stop()
-
-# --- التطبيق ---
-draw_header()
-
-col_lang, col_stat = st.columns([2,1])
-with col_lang:
-    language = st.radio("Speaking Language / لغة التحدث:", ["العربية", "English"], horizontal=True)
-
-lang_code = "ar-EG" if language == "العربية" else "en-US"
-voice_code, sr_lang = get_voice_config(language)
-
-with st.sidebar:
-    st.write(f"👤 **{st.session_state.user_name}**")
-    if st.session_state.user_type == "student":
-        st.metric("🌟 Your XP", st.session_state.current_xp)
-        if st.session_state.current_xp >= 100:
-            st.success("🎉 100 XP Reached!")
-            if st.button("🎓 Certificate"):
-                st.download_button("⬇️ Download", create_certificate(st.session_state.user_name), "Certificate.txt")
-        st.info(f"📚 {st.session_state.student_grade}")
-        
-        st.markdown("---")
-        st.subheader("🏆 Leaderboard")
-        leaders = get_leaderboard()
-        if leaders:
-            for i, leader in enumerate(leaders):
-                medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
-                st.write(f"{medal} **{leader['Student_Name']}**: {leader['XP']} XP")
+    # إعادة ضبط المفاتيح قبل كل محاولة
+    configure_genai()
     
-    if st.session_state.user_type == "teacher":
-        st.success("👨‍🏫 Admin Dashboard")
-        st.markdown("---")
-        with st.expander("📊 Stats"):
-            count, last_qs = get_stats_for_admin()
-            st.metric("Logins", count)
-            for q in last_qs:
-                if len(q) > 3:
-                    st.caption(f"- {q[3][:25]}...")
+    # تحديد الموديل
+    model = None
+    try:
+        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # نفضل flash
         
-        with st.expander("🔑 Password"):
-            new_p = st.text_input("New Code:")
-            if st.button("Update"):
-                if update_daily_password(new_p):
-                    st.success("Updated!")
-                else:
-                    st.error("Failed")
-        
-        with st.expander("⚠️ Danger"):
-            if st.button("🗑️ Clear Logs"):
-                if clear_old_data():
-                    st.success("Cleared!")
-                else:
-                    st.error("Failed")
-    else:
-        st.metric("⏳ Time Left", f"{remaining_minutes} min")
-        st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
-        st.markdown("---")
-        if st.session_state.chat_history:
-            chat_txt = get_chat_text(st.session_state.chat_history)
-            st.download_button("📥 Save Chat", chat_txt, file_name="Science_Session.txt")
-
-    st.markdown("---")
-    if DRIVE_FOLDER_ID:
-        service = get_drive_service()
-        if service:
-            files = list_drive_files(service, DRIVE_FOLDER_ID)
-            if files:
-                st.subheader("📚 Library")
-                sel_file = st.selectbox("Book:", [f['name'] for f in files])
-                if st.button("Load Book", use_container_width=True):
-                    fid = next(f['id'] for f in files if f['name'] == sel_file)
-                    with st.spinner("Loading..."):
-                        st.session_state.ref_text = download_pdf_text(service, fid)
-                        st.toast("Book Loaded! ✅")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
-user_input = ""
-input_mode = "text"
-
-with tab1:
-    st.caption("Click mic to speak")
-    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
-    if audio_in: 
-        user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        st.session_state.current_xp += 10
-        update_xp(st.session_state.user_name, 10)
-
-with tab2:
-    txt_in = st.text_area("Write here:")
-    if st.button("Send", use_container_width=True): 
-        user_input = txt_in
-        st.session_state.current_xp += 5
-        update_xp(st.session_state.user_name, 5)
