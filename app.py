@@ -75,12 +75,13 @@ def update_daily_password(new_pass):
     except:
         return False
 
-# --- دوال التسجيل ---
+# --- دوال التسجيل (مبسطة جداً) ---
 
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
     if not client: return
     try:
+        # محاولة الفتح والكتابة في خطوة واحدة محمية
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
         except:
@@ -96,11 +97,7 @@ def log_activity(user_name, input_type, question_text):
     client = get_gspread_client()
     if not client: return
     try:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-        except:
-            return 
-        
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         
@@ -116,10 +113,73 @@ def update_xp(user_name, points_to_add):
     client = get_gspread_client()
     if not client: return 0
     try:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except:
-            return 0
-        
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
-        current_xp 
+        
+        current_xp = 0
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            current_xp = int(val) if val else 0
+            new_xp = current_xp + points_to_add
+            sheet.update_cell(cell.row, 2, new_xp)
+            return new_xp
+        else:
+            sheet.append_row([user_name, points_to_add])
+            return points_to_add
+    except:
+        return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            return int(val) if val else 0
+        return 0
+    except:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        if not data: return []
+        
+        df = pd.DataFrame(data)
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        top_5 = df.sort_values(by='XP', ascending=False).head(5)
+        return top_5.to_dict('records')
+    except:
+        return []
+
+def clear_old_data():
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        names = ["Logs", "Activity", "Gamification"]
+        for name in names:
+            try:
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(name)
+                ws.resize(rows=1)
+                ws.resize(rows=100)
+            except:
+                pass
+        return True
+    except:
+        return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if not client: return 0, []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        # استخدام try داخلي بسيط لتجنب توقف الدالة بالكامل
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        
+        try: 
