@@ -75,7 +75,7 @@ def update_daily_password(new_pass):
     except:
         return False
 
-# --- دوال التسجيل ---
+# --- دوال التسجيل والأنشطة ---
 
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
@@ -144,9 +144,9 @@ def get_current_xp(user_name):
         if cell:
             val = sheet.cell(cell.row, 2).value
             return int(val) if val else 0
+        return 0
     except:
         return 0
-    return 0
 
 def get_leaderboard():
     client = get_gspread_client()
@@ -269,37 +269,36 @@ def speech_to_text(audio_bytes, lang_code):
     except:
         return None
 
+# 🔥 تعديل دالة التحميل لاستخدام القائمة 🔥
 @st.cache_resource
 def load_ai_model():
-    if "GOOGLE_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        active_model_name = next((m for m in all_models if 'flash' in m), None)
-        if not active_model_name:
-            active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
-        return genai.GenerativeModel(active_model_name)
+    try:
+        # محاولة قراءة قائمة المفاتيح
+        api_key = ""
+        if "GOOGLE_API_KEYS" in st.secrets:
+            keys = st.secrets["GOOGLE_API_KEYS"]
+            api_key = random.choice(keys)
+        elif "GOOGLE_API_KEY" in st.secrets:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+        
+        if api_key:
+            genai.configure(api_key=api_key)
+            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            active_model_name = next((m for m in all_models if 'flash' in m), None)
+            if not active_model_name:
+                active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
+            return genai.GenerativeModel(active_model_name)
+    except:
+        pass
     return None
 
 try:
     model = load_ai_model()
     if not model:
+        st.error("Error connecting to AI. Please check keys.")
         st.stop()
 except:
     st.stop()
-
-# 🔥 دالة آمنة لتوليد المحتوى مع المحاولة التلقائية عند الخطأ 🔥
-def safe_generate_content(prompt_content):
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            return model.generate_content(prompt_content)
-        except Exception as e:
-            if "429" in str(e): # إذا كان الخطأ بسبب الضغط
-                time.sleep(2) # انتظر ثانيتين وحاول مرة أخرى
-                continue
-            else:
-                raise e # إذا كان خطأ آخر، أظهره
-    raise Exception("السيرفر مشغول جداً حالياً، يرجى الانتظار دقيقة والمحاولة.")
 
 
 # ==========================================
@@ -542,7 +541,7 @@ with tab4:
         """
         try:
             with st.spinner("Generating..."):
-                response = safe_generate_content(q_prompt) # استخدام الدالة الآمنة
+                response = model.generate_content(q_prompt)
                 st.session_state.current_quiz_question = response.text
                 st.session_state.quiz_active = True
                 st.rerun()
@@ -563,7 +562,7 @@ with tab4:
                 Lang: Arabic.
                 """
                 with st.spinner("Checking..."):
-                    result = safe_generate_content(check_prompt)
+                    result = model.generate_content(check_prompt)
                     st.success("📝 النتيجة:")
                     st.write(result.text)
                     if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
@@ -616,12 +615,12 @@ if user_input and input_mode != "quiz":
         
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
-                response = safe_generate_content([sys_prompt, user_input[0], user_input[1]])
+                response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
              else:
                 st.error("Model error.")
                 st.stop()
         else:
-            response = safe_generate_content(f"{sys_prompt}\nInput: {user_input}")
+            response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
         
         if input_mode != "analysis":
             st.session_state.chat_history.append((str(user_input)[:50], response.text))
@@ -657,6 +656,6 @@ if user_input and input_mode != "quiz":
         
     except Exception as e:
         if "429" in str(e):
-            st.error("🚦 عذراً، السيرفر مزدحم الآن. يرجى الانتظار دقيقة واحدة والمحاولة.")
+            st.error("🚦 Please wait 1 minute.")
         else:
             st.error(f"Error: {e}")
