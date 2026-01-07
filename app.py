@@ -75,6 +75,8 @@ def update_daily_password(new_pass):
     except:
         return False
 
+# --- دوال التسجيل ---
+
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
     if not client: return
@@ -97,7 +99,7 @@ def log_activity(user_name, input_type, question_text):
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
         except:
-            return
+            return 
         
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -120,6 +122,7 @@ def update_xp(user_name, points_to_add):
             return 0
         
         cell = sheet.find(user_name)
+        current_xp = 0
         if cell:
             val = sheet.cell(cell.row, 2).value
             current_xp = int(val) if val else 0
@@ -141,9 +144,9 @@ def get_current_xp(user_name):
         if cell:
             val = sheet.cell(cell.row, 2).value
             return int(val) if val else 0
-        return 0
     except:
         return 0
+    return 0
 
 def get_leaderboard():
     client = get_gspread_client()
@@ -181,20 +184,9 @@ def get_stats_for_admin():
     if not client: return 0, []
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
-        # استخدام try داخلي بسيط
-        try: 
-            logs = sheet.worksheet("Logs").get_all_values()
-        except: 
-            logs = []
-        
-        try: 
-            qs = sheet.worksheet("Activity").get_all_values()
-        except: 
-            qs = []
-        
-        count = len(logs)-1 if logs else 0
-        last_qs = qs[-5:] if qs else []
-        return count, last_qs
+        logs = sheet.worksheet("Logs").get_all_values()
+        qs = sheet.worksheet("Activity").get_all_values()
+        return len(logs)-1, qs[-5:]
     except:
         return 0, []
 
@@ -294,6 +286,20 @@ try:
         st.stop()
 except:
     st.stop()
+
+# 🔥 دالة آمنة لتوليد المحتوى مع المحاولة التلقائية عند الخطأ 🔥
+def safe_generate_content(prompt_content):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return model.generate_content(prompt_content)
+        except Exception as e:
+            if "429" in str(e): # إذا كان الخطأ بسبب الضغط
+                time.sleep(2) # انتظر ثانيتين وحاول مرة أخرى
+                continue
+            else:
+                raise e # إذا كان خطأ آخر، أظهره
+    raise Exception("السيرفر مشغول جداً حالياً، يرجى الانتظار دقيقة والمحاولة.")
 
 
 # ==========================================
@@ -536,7 +542,7 @@ with tab4:
         """
         try:
             with st.spinner("Generating..."):
-                response = model.generate_content(q_prompt)
+                response = safe_generate_content(q_prompt) # استخدام الدالة الآمنة
                 st.session_state.current_quiz_question = response.text
                 st.session_state.quiz_active = True
                 st.rerun()
@@ -557,7 +563,7 @@ with tab4:
                 Lang: Arabic.
                 """
                 with st.spinner("Checking..."):
-                    result = model.generate_content(check_prompt)
+                    result = safe_generate_content(check_prompt)
                     st.success("📝 النتيجة:")
                     st.write(result.text)
                     if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
@@ -610,12 +616,12 @@ if user_input and input_mode != "quiz":
         
         if input_mode == "image":
              if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
-                response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
+                response = safe_generate_content([sys_prompt, user_input[0], user_input[1]])
              else:
                 st.error("Model error.")
                 st.stop()
         else:
-            response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
+            response = safe_generate_content(f"{sys_prompt}\nInput: {user_input}")
         
         if input_mode != "analysis":
             st.session_state.chat_history.append((str(user_input)[:50], response.text))
@@ -650,4 +656,7 @@ if user_input and input_mode != "quiz":
             st.audio(audio, format='audio/mp3', autoplay=True)
         
     except Exception as e:
-        st.error(f"Error: {e}")
+        if "429" in str(e):
+            st.error("🚦 عذراً، السيرفر مزدحم الآن. يرجى الانتظار دقيقة واحدة والمحاولة.")
+        else:
+            st.error(f"Error: {e}")
