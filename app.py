@@ -58,41 +58,60 @@ def get_gspread_client():
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client: return None, None
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME)
-        daily_pass = str(sheet.sheet1.acell('B1').value).strip()
-        return daily_pass, sheet
-    except:
-        return None, None
+    if client:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME)
+            daily_pass = str(sheet.sheet1.acell('B1').value).strip()
+            return daily_pass, sheet
+        except:
+            return None, None
+    return None, None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if not client: return False
-    try:
-        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
-        return True
-    except:
-        return False
+    if client:
+        try:
+            client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
+            return True
+        except:
+            return False
+    return False
 
-# --- تم إصلاح هيكل الدوال التالية بالكامل ---
-
+# --- تم تبسيط هذه الدالة لمنع الخطأ ---
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
-    if not client: return
+    if not client:
+        return
 
     try:
-        # محاولة فتح صفحة Logs
+        sheet = None
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
         except:
-            # إذا فشل، نفتح الصفحة الأولى
             sheet = client.open(CONTROL_SHEET_NAME).sheet1
         
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now, user_type, user_name, details])
+        
+        # وضع البيانات في متغير منفصل لضمان إغلاق الأقواس
+        row_data = [now, user_type, user_name, details]
+        sheet.append_row(row_data)
     except:
         pass
 
-def log_activity(user_name, 
+def log_activity(user_name, input_type, question_text):
+    client = get_gspread_client()
+    if not client:
+        return
+
+    try:
+        sheet = None
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        
