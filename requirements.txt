@@ -13,3 +13,4 @@ google-auth-oauthlib
 gspread
 fpdf
 pandas
+graphviz
