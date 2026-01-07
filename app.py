@@ -75,13 +75,77 @@ def update_daily_password(new_pass):
         except: return False
     return False
 
+# --- دالة تسجيل الدخول (تم إصلاح الخطأ هنا) ---
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
     if client:
         try:
-            try: 
+            # محاولة فتح صفحة Logs، وإذا فشلت نفتح الصفحة الرئيسية
+            try:
                 sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except: 
+            except:
                 sheet = client.open(CONTROL_SHEET_NAME).sheet1
             
-            tz 
+            tz = pytz.timezone('Africa/Cairo')
+            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([now, user_type, user_name, details])
+        except:
+            pass
+
+# --- دالة تسجيل النشاط (تم إصلاح التنسيق) ---
+def log_activity(user_name, input_type, question_text):
+    client = get_gspread_client()
+    if client:
+        try:
+            try:
+                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+            except:
+                return # الخروج إذا لم توجد الصفحة
+            
+            tz = pytz.timezone('Africa/Cairo')
+            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            
+            final_text = question_text
+            if isinstance(question_text, list): 
+                final_text = f"[Image] {question_text[0]}"
+            
+            sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+        except:
+            pass
+
+def update_xp(user_name, points_to_add):
+    client = get_gspread_client()
+    if client:
+        try:
+            try: 
+                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            except: return 0
+            
+            cell = sheet.find(user_name)
+            current_xp = 0
+            if cell:
+                current_xp = int(sheet.cell(cell.row, 2).value)
+                new_xp = current_xp + points_to_add
+                sheet.update_cell(cell.row, 2, new_xp)
+                return new_xp
+            else:
+                sheet.append_row([user_name, points_to_add])
+                return points_to_add
+        except: return 0
+    return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if client:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            cell = sheet.find(user_name)
+            if cell: return int(sheet.cell(cell.row, 2).value)
+        except: return 0
+    return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if client:
+        try:
+            try: sheet = 
