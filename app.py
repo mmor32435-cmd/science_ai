@@ -33,7 +33,8 @@ DAILY_FACTS = [
     "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
     "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
-    "هل تعلم؟ العسل لا يفسد أبداً! 🍯"
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
+    "هل تعلم؟ سرعة الضوء 300,000 كم/ث! ⚡"
 ]
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
@@ -170,8 +171,8 @@ def get_chat_text(history):
     return text
 
 def create_certificate(student_name):
-    # نسخة مبسطة للشهادة النصية لتجنب مشاكل الخطوط العربية
-    return f"Certificate of Excellence\nPresented to: {student_name}\nFor Outstanding Performance in Science.\nSigned: Mr. Elsayed Elbadawy".encode('utf-8')
+    # شهادة نصية بسيطة لتجنب أخطاء الخطوط
+    return f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy".encode('utf-8')
 
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
@@ -205,24 +206,15 @@ def get_voice_config(lang):
 
 # 🔥 دالة التنظيف الصوتي المتقدمة 🔥
 def clean_text_for_audio(text):
-    # 1. إزالة أوامر LaTeX المزعجة
-    text = re.sub(r'\\begin\{.*?\}', '', text) # يحذف begin{itemize}
-    text = re.sub(r'\\end\{.*?\}', '', text)   # يحذف end{itemize}
-    text = re.sub(r'\\item', '', text)         # يحذف item
-    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) # يحول textbf{word} إلى word
-    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) # يحذف الميلان
-    
-    # 2. إزالة رموز الماركداون
-    text = text.replace('*', '')  # النجوم
-    text = text.replace('#', '')  # الشبابيك
-    text = text.replace('-', '')  # الشرطات
-    text = text.replace('_', '')  # الشرطات السفلية
-    text = text.replace('`', '')  # الكود
-    
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = re.sub(r'\\item', '', text)         
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
+    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', '').replace('`', '')
     return text
 
 async def generate_audio_stream(text, voice_code):
-    # استخدام الدالة المنظفة الجديدة
     clean_text = clean_text_for_audio(text)
     communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
     mp3_fp = BytesIO()
@@ -303,12 +295,14 @@ if not st.session_state.auth_status:
         st.info(f"💡 {random.choice(DAILY_FACTS)}")
         
         student_name = st.text_input("Name / اسمك الثلاثي:")
+        
         stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
         grade_options = []
         if stage == "المرحلة الابتدائية": grade_options = ["الصف الرابع", "الصف الخامس", "الصف السادس"]
         elif stage == "المرحلة الإعدادية": grade_options = ["الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي"]
         elif stage == "المرحلة الثانوية": grade_options = ["الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
         selected_grade = st.selectbox("Grade / الصف:", grade_options) if grade_options else None
+        
         study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
         pwd = st.text_input("Access Code / كود الدخول:", type="password")
         
@@ -415,51 +409,4 @@ with st.sidebar:
                 st.subheader("📚 Library")
                 sel_file = st.selectbox("Book:", [f['name'] for f in files])
                 if st.button("Load Book", use_container_width=True):
-                    fid = next(f['id'] for f in files if f['name'] == sel_file)
-                    with st.spinner("Loading..."):
-                        st.session_state.ref_text = download_pdf_text(service, fid)
-                        st.toast("Book Loaded! ✅")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
-user_input = ""
-input_mode = "text"
-
-with tab1:
-    st.caption("Click mic to speak")
-    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
-    if audio_in: 
-        user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        new_xp = update_xp(st.session_state.user_name, 10)
-        st.session_state.current_xp = new_xp
-
-with tab2:
-    txt_in = st.text_area("Write here:")
-    if st.button("Send", use_container_width=True): 
-        user_input = txt_in
-        new_xp = update_xp(st.session_state.user_name, 5)
-        st.session_state.current_xp = new_xp
-
-with tab3:
-    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
-    up_q = st.text_input("Details:")
-    if st.button("Analyze", use_container_width=True) and up_file:
-        if up_file.type == 'application/pdf':
-             pdf = PyPDF2.PdfReader(up_file)
-             ext = ""
-             for p in pdf.pages: ext += p.extract_text()
-             user_input = f"PDF:\n{ext}\nQ: {up_q}"
-        else:
-            img = Image.open(up_file)
-            st.image(img, width=300)
-            user_input = [up_q if up_q else "Explain", img]
-            input_mode = "image"
-        new_xp = update_xp(st.session_state.user_name, 15)
-        st.session_state.current_xp = new_xp
-
-with tab4:
-    st.info(f"Quiz for: **{st.session_state.student_grade}**")
-    
-    if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
-        grade = st.session_state.student_grade
-        system = st.session_state.study_lang
-        
+                    fid = next(f['id'] for f in 
