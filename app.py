@@ -18,7 +18,8 @@ import gspread
 from fpdf import FPDF
 import pandas as pd
 import random
-import graphviz 
+import graphviz
+import threading # مكتبة السرعة (المعالجة الخلفية)
 
 # ==========================================
 # 🎛️ إعدادات التحكم
@@ -77,126 +78,107 @@ def update_daily_password(new_pass):
             return False
     return False
 
-# --- تم إصلاح الدالة هنا ---
+# --- التسجيل في الخلفية (Threaded) ---
+def _log_login_bg(user_name, user_type, details):
+    client = get_gspread_client()
+    if client:
+        try:
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+            except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
+            tz = pytz.timezone('Africa/Cairo')
+            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([now, user_type, user_name, details])
+        except: pass
+
 def log_login_to_sheet(user_name, user_type, details=""):
+    # تشغيل في خيط منفصل لعدم تعطيل التطبيق
+    threading.Thread(target=_log_login_bg, args=(user_name, user_type, details)).start()
+
+def _log_activity_bg(user_name, input_type, question_text):
     client = get_gspread_client()
-    if not client:
-        return
-
-    try:
+    if client:
         try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-        except:
-            sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        
-        tz = pytz.timezone('Africa/Cairo')
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now, user_type, user_name, details])
-    except:
-        pass
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+            except: return
+            tz = pytz.timezone('Africa/Cairo')
+            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            final_text = question_text
+            if isinstance(question_text, list): final_text = f"[Image] {question_text[0]}"
+            sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+        except: pass
 
-# --- تم إصلاح الدالة هنا ---
 def log_activity(user_name, input_type, question_text):
-    client = get_gspread_client()
-    if not client:
-        return
+    threading.Thread(target=_log_activity_bg, args=(user_name, input_type, question_text)).start()
 
-    try:
+def _update_xp_bg(user_name, points_to_add):
+    client = get_gspread_client()
+    if client:
         try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-        except:
-            return # إذا لم توجد الصفحة، نخرج
-        
-        tz = pytz.timezone('Africa/Cairo')
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        
-        final_text = question_text
-        if isinstance(question_text, list):
-            final_text = f"[Image] {question_text[0]}"
-        
-        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
-    except:
-        pass
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            except: return
+            cell = sheet.find(user_name)
+            if cell:
+                current_xp = int(sheet.cell(cell.row, 2).value)
+                sheet.update_cell(cell.row, 2, current_xp + points_to_add)
+            else:
+                sheet.append_row([user_name, points_to_add])
+        except: pass
 
 def update_xp(user_name, points_to_add):
-    client = get_gspread_client()
-    if not client: return 0
-
-    try:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except:
-            return 0
-        
-        cell = sheet.find(user_name)
-        current_xp = 0
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            current_xp = int(val) if val else 0
-            new_xp = current_xp + points_to_add
-            sheet.update_cell(cell.row, 2, new_xp)
-            return new_xp
-        else:
-            sheet.append_row([user_name, points_to_add])
-            return points_to_add
-    except:
-        return 0
+    # تحديث واجهة المستخدم فوراً (الوهم بالسرعة)
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points_to_add
+    # الحفظ في الشيت في الخلفية
+    threading.Thread(target=_update_xp_bg, args=(user_name, points_to_add)).start()
+    return st.session_state.current_xp
 
 def get_current_xp(user_name):
     client = get_gspread_client()
-    if not client: return 0
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        cell = sheet.find(user_name)
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            return int(val) if val else 0
-    except:
-        return 0
+    if client:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            cell = sheet.find(user_name)
+            if cell: return int(sheet.cell(cell.row, 2).value)
+        except: return 0
     return 0
 
 def get_leaderboard():
     client = get_gspread_client()
-    if not client: return []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        data = sheet.get_all_records()
-        if not data: return []
-        
-        df = pd.DataFrame(data)
-        # تحويل القيم لأرقام لضمان الترتيب الصحيح
-        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
-        top_5 = df.sort_values(by='XP', ascending=False).head(5)
-        return top_5.to_dict('records')
-    except:
-        return []
+    if client:
+        try:
+            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+            except: return []
+            data = sheet.get_all_records()
+            if not data: return []
+            df = pd.DataFrame(data)
+            df['XP'] = pd.to_numeric(df['XP'])
+            top_5 = df.sort_values(by='XP', ascending=False).head(5)
+            return top_5.to_dict('records')
+        except: return []
+    return []
 
 def clear_old_data():
     client = get_gspread_client()
-    if not client: return False
-    try:
-        names = ["Logs", "Activity", "Gamification"]
-        for name in names:
-            try:
-                ws = client.open(CONTROL_SHEET_NAME).worksheet(name)
-                ws.resize(rows=1)
-                ws.resize(rows=100)
-            except:
-                pass
-        return True
-    except:
-        return False
+    if client:
+        try:
+            for s in ["Logs", "Activity", "Gamification"]:
+                try: 
+                    ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                    ws.resize(rows=1); ws.resize(rows=100)
+                except: pass
+            return True
+        except: return False
+    return False
 
 def get_stats_for_admin():
     client = get_gspread_client()
-    if not client: return 0, []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME)
-        logs = sheet.worksheet("Logs").get_all_values()
-        qs = sheet.worksheet("Activity").get_all_values()
-        return len(logs)-1, qs[-5:]
-    except:
-        return 0, []
+    if client:
+        try:
+            logs = client.open(CONTROL_SHEET_NAME).worksheet("Logs").get_all_values()
+            qs = client.open(CONTROL_SHEET_NAME).worksheet("Activity").get_all_values()
+            return len(logs)-1, qs[-5:]
+        except: return 0, []
+    return 0, []
 
 def get_chat_text(history):
     text = "--- Chat History ---\n\n"
@@ -214,15 +196,12 @@ def get_drive_service():
         try:
             creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
             return build('drive', 'v3', credentials=creds)
-        except:
-            return None
+        except: return None
     return None
 
 def list_drive_files(service, folder_id):
-    try:
-        return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
-    except:
-        return []
+    try: return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
+    except: return []
 
 def download_pdf_text(service, file_id):
     try:
@@ -230,32 +209,25 @@ def download_pdf_text(service, file_id):
         file_io = BytesIO()
         downloader = MediaIoBaseDownload(file_io, request)
         done = False
-        while done is False:
-            status, done = downloader.next_chunk()
+        while done is False: status, done = downloader.next_chunk()
         file_io.seek(0)
         reader = PyPDF2.PdfReader(file_io)
         text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
+        for page in reader.pages: text += page.extract_text() + "\n"
         return text
-    except:
-        return ""
+    except: return ""
 
 def get_voice_config(lang):
-    if lang == "English":
-        return "en-US-AndrewNeural", "en-US"
-    else:
-        return "ar-EG-ShakirNeural", "ar-EG"
+    if lang == "English": return "en-US-AndrewNeural", "en-US"
+    else: return "ar-EG-ShakirNeural", "ar-EG"
 
 def clean_text_for_audio(text):
-    # إزالة أوامر LaTeX
     text = re.sub(r'\\begin\{.*?\}', '', text) 
     text = re.sub(r'\\end\{.*?\}', '', text)   
     text = re.sub(r'\\item', '', text)         
     text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
     text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
     text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
-    # إزالة الرموز
     text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
     return text
 
@@ -264,8 +236,7 @@ async def generate_audio_stream(text, voice_code):
     communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
     mp3_fp = BytesIO()
     async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            mp3_fp.write(chunk["data"])
+        if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
     return mp3_fp
 
 def speech_to_text(audio_bytes, lang_code):
@@ -276,8 +247,7 @@ def speech_to_text(audio_bytes, lang_code):
             r.adjust_for_ambient_noise(source, duration=0.5)
             audio_data = r.record(source)
             return r.recognize_google(audio_data, language=lang_code)
-    except:
-        return None
+    except: return None
 
 @st.cache_resource
 def load_ai_model():
@@ -285,17 +255,14 @@ def load_ai_model():
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         active_model_name = next((m for m in all_models if 'flash' in m), None)
-        if not active_model_name:
-            active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
+        if not active_model_name: active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
         return genai.GenerativeModel(active_model_name)
     return None
 
 try:
     model = load_ai_model()
-    if not model:
-        st.stop()
-except:
-    st.stop()
+    if not model: st.stop()
+except: st.stop()
 
 
 # ==========================================
@@ -386,7 +353,15 @@ if not st.session_state.auth_status:
                         st.session_state.start_time = time.time()
                         
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
-                        st.session_state.current_xp = get_current_xp(st.session_state.user_name)
+                        
+                        # تحميل النقاط في الخلفية (أسرع)
+                        try:
+                            # نعطي قيمة افتراضية حتى يتم التحميل
+                            st.session_state.current_xp = 0
+                            # يمكن استخدام خيط لتحميل النقاط لاحقاً، لكن للقراءة سنتركها الآن لضمان الدقة
+                            st.session_state.current_xp = get_current_xp(st.session_state.user_name)
+                        except: pass
+
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
                         st.error("Code Error")
@@ -487,15 +462,17 @@ with tab1:
     audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
     if audio_in: 
         user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        new_xp = update_xp(st.session_state.user_name, 10)
-        st.session_state.current_xp = new_xp
+        # تحديث النقاط في الواجهة فوراً
+        st.session_state.current_xp += 10
+        update_xp(st.session_state.user_name, 10)
 
 with tab2:
     txt_in = st.text_area("Write here:")
     if st.button("Send", use_container_width=True): 
         user_input = txt_in
-        new_xp = update_xp(st.session_state.user_name, 5)
-        st.session_state.current_xp = new_xp
+        # تحديث النقاط في الواجهة فوراً
+        st.session_state.current_xp += 5
+        update_xp(st.session_state.user_name, 5)
 
 with tab3:
     up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
@@ -511,8 +488,9 @@ with tab3:
             st.image(img, width=300)
             user_input = [up_q if up_q else "Explain", img]
             input_mode = "image"
-        new_xp = update_xp(st.session_state.user_name, 15)
-        st.session_state.current_xp = new_xp
+        # تحديث النقاط
+        st.session_state.current_xp += 15
+        update_xp(st.session_state.user_name, 15)
 
 with tab4:
     st.info(f"Quiz for: **{st.session_state.student_grade}**")
@@ -557,8 +535,9 @@ with tab4:
                     st.write(result.text)
                     if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
                         st.balloons()
-                        new_xp = update_xp(st.session_state.user_name, 50)
-                        st.session_state.current_xp = new_xp
+                        # تحديث النقاط
+                        st.session_state.current_xp += 50
+                        update_xp(st.session_state.user_name, 50)
                         st.toast("🎉 +50 XP!")
                     st.session_state.quiz_active = False
                     st.session_state.current_quiz_question = ""
