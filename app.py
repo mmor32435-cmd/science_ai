@@ -171,7 +171,6 @@ def get_chat_text(history):
     return text
 
 def create_certificate(student_name):
-    # شهادة نصية بسيطة لتجنب أخطاء الخطوط
     return f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy".encode('utf-8')
 
 def get_drive_service():
@@ -204,7 +203,6 @@ def get_voice_config(lang):
     if lang == "English": return "en-US-AndrewNeural", "en-US"
     else: return "ar-EG-ShakirNeural", "ar-EG"
 
-# 🔥 دالة التنظيف الصوتي المتقدمة 🔥
 def clean_text_for_audio(text):
     text = re.sub(r'\\begin\{.*?\}', '', text) 
     text = re.sub(r'\\end\{.*?\}', '', text)   
@@ -295,14 +293,12 @@ if not st.session_state.auth_status:
         st.info(f"💡 {random.choice(DAILY_FACTS)}")
         
         student_name = st.text_input("Name / اسمك الثلاثي:")
-        
         stage = st.selectbox("Stage / المرحلة:", ["اختر المرحلة...", "المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"])
         grade_options = []
         if stage == "المرحلة الابتدائية": grade_options = ["الصف الرابع", "الصف الخامس", "الصف السادس"]
         elif stage == "المرحلة الإعدادية": grade_options = ["الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي"]
         elif stage == "المرحلة الثانوية": grade_options = ["الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
         selected_grade = st.selectbox("Grade / الصف:", grade_options) if grade_options else None
-        
         study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
         pwd = st.text_input("Access Code / كود الدخول:", type="password")
         
@@ -312,7 +308,6 @@ if not st.session_state.auth_status:
             else:
                 with st.spinner("Connecting..."):
                     daily_pass, _ = get_sheet_data()
-                    
                     if pwd == TEACHER_MASTER_KEY:
                         u_type = "teacher"; valid = True
                     elif daily_pass and pwd == daily_pass:
@@ -324,12 +319,10 @@ if not st.session_state.auth_status:
                         st.session_state.auth_status = True
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
-                        
                         final_grade = f"{stage} - {selected_grade}" if selected_grade else "General"
                         st.session_state.student_grade = final_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
                         st.session_state.start_time = time.time()
-                        
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{final_grade} | {st.session_state.study_lang}")
                         st.session_state.current_xp = get_current_xp(st.session_state.user_name)
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
@@ -409,4 +402,83 @@ with st.sidebar:
                 st.subheader("📚 Library")
                 sel_file = st.selectbox("Book:", [f['name'] for f in files])
                 if st.button("Load Book", use_container_width=True):
-                    fid = next(f['id'] for f in 
+                    fid = next(f['id'] for f in files if f['name'] == sel_file)
+                    with st.spinner("Loading..."):
+                        st.session_state.ref_text = download_pdf_text(service, fid)
+                        st.toast("Book Loaded! ✅")
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
+user_input = ""
+input_mode = "text"
+
+with tab1:
+    st.caption("Click mic to speak")
+    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
+    if audio_in: 
+        user_input = speech_to_text(audio_in['bytes'], sr_lang)
+        update_xp(st.session_state.user_name, 10)
+
+with tab2:
+    txt_in = st.text_area("Write here:")
+    if st.button("Send", use_container_width=True): 
+        user_input = txt_in
+        update_xp(st.session_state.user_name, 5)
+
+with tab3:
+    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
+    up_q = st.text_input("Details:")
+    if st.button("Analyze", use_container_width=True) and up_file:
+        if up_file.type == 'application/pdf':
+             pdf = PyPDF2.PdfReader(up_file)
+             ext = ""
+             for p in pdf.pages: ext += p.extract_text()
+             user_input = f"PDF:\n{ext}\nQ: {up_q}"
+        else:
+            img = Image.open(up_file)
+            st.image(img, width=300)
+            user_input = [up_q if up_q else "Explain", img]
+            input_mode = "image"
+        update_xp(st.session_state.user_name, 15)
+
+with tab4:
+    st.info(f"Quiz for: **{st.session_state.student_grade}**")
+    if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
+        grade = st.session_state.student_grade
+        system = st.session_state.study_lang
+        ref_context = st.session_state.get("ref_text", "")
+        source = f"Source: {ref_context[:30000]}" if ref_context else "Source: Egyptian Curriculum."
+        
+        q_prompt = f"""
+        Generate ONE multiple-choice question.
+        Target: Student in {grade} ({system}).
+        {source}
+        Constraint: Strictly from source/curriculum. No LaTeX in text.
+        Output: Question and 4 options. NO Answer yet.
+        Language: Arabic.
+        """
+        try:
+            with st.spinner("Generating..."):
+                response = model.generate_content(q_prompt)
+                st.session_state.current_quiz_question = response.text
+                st.session_state.quiz_active = True
+                st.rerun()
+        except: pass
+
+    if st.session_state.quiz_active and st.session_state.current_quiz_question:
+        st.markdown("---")
+        st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
+        student_ans = st.text_input("✍️ إجابتك:")
+        if st.button("✅ Check Answer", use_container_width=True):
+            if student_ans:
+                check_prompt = f"""
+                Question: {st.session_state.current_quiz_question}
+                Student Answer: {student_ans}
+                Task: Correct based on Egyptian Curriculum.
+                Output: Correct/Wrong + Explanation. Score(10/10).
+                Lang: Arabic.
+                """
+                with st.spinner("Checking..."):
+                    result = model.generate_content(check_prompt)
+                    st.success("📝 النتيجة:")
+                    st.write(result.text)
+                    
