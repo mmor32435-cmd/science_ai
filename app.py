@@ -163,8 +163,41 @@ def get_leaderboard():
     except:
         return []
 
+# 🔥 تم إصلاح دالة الحذف هنا لتكون واضحة جداً 🔥
 def clear_old_data():
     client = get_gspread_client()
-    if not client: return False
+    if not client:
+        return False
+    
     try:
-        for s 
+        # قائمة الصفحات المراد تنظيفها
+        pages_to_clean = ["Logs", "Activity", "Gamification"]
+        
+        for page_name in pages_to_clean:
+            try:
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(page_name)
+                ws.resize(rows=1)
+                ws.resize(rows=100)
+            except:
+                pass
+        return True
+    except:
+        return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if not client: return 0, []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
+    except:
+        return 0, []
+
+def get_chat_text(history):
+    text = "--- Chat History ---\n\n"
+    for q, a in history:
+        text += f"Student: {q}\nAI Tutor: 
