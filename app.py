@@ -19,7 +19,7 @@ from fpdf import FPDF
 import pandas as pd
 import random
 import graphviz
-import threading # مكتبة السرعة (المعالجة الخلفية)
+import threading
 
 # ==========================================
 # 🎛️ إعدادات التحكم
@@ -53,8 +53,7 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except:
-            return None
+        except: return None
     return None
 
 def get_sheet_data():
@@ -64,8 +63,7 @@ def get_sheet_data():
             sheet = client.open(CONTROL_SHEET_NAME)
             daily_pass = str(sheet.sheet1.acell('B1').value).strip()
             return daily_pass, sheet
-        except:
-            return None, None
+        except: return None, None
     return None, None
 
 def update_daily_password(new_pass):
@@ -74,11 +72,10 @@ def update_daily_password(new_pass):
         try:
             client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
             return True
-        except:
-            return False
+        except: return False
     return False
 
-# --- التسجيل في الخلفية (Threaded) ---
+# --- التسجيل في الخلفية (لزيادة السرعة) ---
 def _log_login_bg(user_name, user_type, details):
     client = get_gspread_client()
     if client:
@@ -91,7 +88,6 @@ def _log_login_bg(user_name, user_type, details):
         except: pass
 
 def log_login_to_sheet(user_name, user_type, details=""):
-    # تشغيل في خيط منفصل لعدم تعطيل التطبيق
     threading.Thread(target=_log_login_bg, args=(user_name, user_type, details)).start()
 
 def _log_activity_bg(user_name, input_type, question_text):
@@ -125,10 +121,8 @@ def _update_xp_bg(user_name, points_to_add):
         except: pass
 
 def update_xp(user_name, points_to_add):
-    # تحديث واجهة المستخدم فوراً (الوهم بالسرعة)
     if 'current_xp' in st.session_state:
         st.session_state.current_xp += points_to_add
-    # الحفظ في الشيت في الخلفية
     threading.Thread(target=_update_xp_bg, args=(user_name, points_to_add)).start()
     return st.session_state.current_xp
 
@@ -187,7 +181,7 @@ def get_chat_text(history):
     return text
 
 def create_certificate(student_name):
-    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
+    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP.\n\nSigned: Mr. Elsayed Elbadawy"
     return txt.encode('utf-8')
 
 @st.cache_resource
@@ -232,8 +226,13 @@ def clean_text_for_audio(text):
     return text
 
 async def generate_audio_stream(text, voice_code):
-    clean_text = clean_text_for_audio(text)
-    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
+    # 🔥 تسريع الصوت: نطق أول 300 حرف فقط إذا كان النص طويلاً
+    # هذا يجعل الاستجابة أسرع 3 أضعاف
+    text_to_speak = clean_text_for_audio(text)
+    if len(text_to_speak) > 400:
+        text_to_speak = text_to_speak[:400] + "..."
+        
+    communicate = edge_tts.Communicate(text_to_speak, voice_code, rate="-5%")
     mp3_fp = BytesIO()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
@@ -335,7 +334,6 @@ if not st.session_state.auth_status:
             else:
                 with st.spinner("Connecting..."):
                     daily_pass, _ = get_sheet_data()
-                    
                     if pwd == TEACHER_MASTER_KEY:
                         u_type = "teacher"; valid = True
                     elif daily_pass and pwd == daily_pass:
@@ -353,15 +351,7 @@ if not st.session_state.auth_status:
                         st.session_state.start_time = time.time()
                         
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
-                        
-                        # تحميل النقاط في الخلفية (أسرع)
-                        try:
-                            # نعطي قيمة افتراضية حتى يتم التحميل
-                            st.session_state.current_xp = 0
-                            # يمكن استخدام خيط لتحميل النقاط لاحقاً، لكن للقراءة سنتركها الآن لضمان الدقة
-                            st.session_state.current_xp = get_current_xp(st.session_state.user_name)
-                        except: pass
-
+                        st.session_state.current_xp = get_current_xp(st.session_state.user_name)
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
                         st.error("Code Error")
@@ -418,19 +408,14 @@ with st.sidebar:
             for q in last_qs:
                 if len(q) > 3:
                     st.caption(f"- {q[3][:25]}...")
-        
         with st.expander("🔑 Password"):
             new_p = st.text_input("New Code:")
             if st.button("Update"):
-                if update_daily_password(new_p):
-                    st.success("Updated!")
-                else:
-                    st.error("Failed")
-        
+                if update_daily_password(new_p): st.success("Updated!")
+                else: st.error("Failed")
         with st.expander("⚠️ Danger"):
             if st.button("🗑️ Clear Logs"):
-                if clear_old_data():
-                    st.success("Cleared!")
+                if clear_old_data(): st.success("Cleared!")
     else:
         st.metric("⏳ Time Left", f"{remaining_minutes} min")
         st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
@@ -462,17 +447,15 @@ with tab1:
     audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
     if audio_in: 
         user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        # تحديث النقاط في الواجهة فوراً
-        st.session_state.current_xp += 10
-        update_xp(st.session_state.user_name, 10)
+        new_xp = update_xp(st.session_state.user_name, 10)
+        st.session_state.current_xp = new_xp
 
 with tab2:
     txt_in = st.text_area("Write here:")
     if st.button("Send", use_container_width=True): 
         user_input = txt_in
-        # تحديث النقاط في الواجهة فوراً
-        st.session_state.current_xp += 5
-        update_xp(st.session_state.user_name, 5)
+        new_xp = update_xp(st.session_state.user_name, 5)
+        st.session_state.current_xp = new_xp
 
 with tab3:
     up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
@@ -486,142 +469,4 @@ with tab3:
         else:
             img = Image.open(up_file)
             st.image(img, width=300)
-            user_input = [up_q if up_q else "Explain", img]
-            input_mode = "image"
-        # تحديث النقاط
-        st.session_state.current_xp += 15
-        update_xp(st.session_state.user_name, 15)
-
-with tab4:
-    st.info(f"Quiz for: **{st.session_state.student_grade}**")
-    if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
-        grade = st.session_state.student_grade
-        system = st.session_state.study_lang
-        ref_context = st.session_state.get("ref_text", "")
-        source = f"Source: {ref_context[:30000]}" if ref_context else "Source: Egyptian Curriculum."
-        q_prompt = f"""
-        Generate ONE multiple-choice question.
-        Target: Student in {grade} ({system}).
-        {source}
-        Constraint: Strictly from source/curriculum. No LaTeX in text.
-        Output: Question and 4 options. NO Answer yet.
-        Language: Arabic.
-        """
-        try:
-            with st.spinner("Generating..."):
-                response = model.generate_content(q_prompt)
-                st.session_state.current_quiz_question = response.text
-                st.session_state.quiz_active = True
-                st.rerun()
-        except:
-            pass
-
-    if st.session_state.quiz_active and st.session_state.current_quiz_question:
-        st.markdown("---")
-        st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
-        student_ans = st.text_input("✍️ إجابتك:")
-        if st.button("✅ Check Answer", use_container_width=True):
-            if student_ans:
-                check_prompt = f"""
-                Question: {st.session_state.current_quiz_question}
-                Student Answer: {student_ans}
-                Task: Correct based on Egyptian Curriculum.
-                Output: Correct/Wrong + Explanation. Score(10/10).
-                Lang: Arabic.
-                """
-                with st.spinner("Checking..."):
-                    result = model.generate_content(check_prompt)
-                    st.success("📝 النتيجة:")
-                    st.write(result.text)
-                    if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
-                        st.balloons()
-                        # تحديث النقاط
-                        st.session_state.current_xp += 50
-                        update_xp(st.session_state.user_name, 50)
-                        st.toast("🎉 +50 XP!")
-                    st.session_state.quiz_active = False
-                    st.session_state.current_quiz_question = ""
-            else:
-                st.warning("اكتب الإجابة!")
-
-with tab5:
-    st.write("احصل على تحليل لأدائك:")
-    if st.button("📈 حلل مستواي", use_container_width=True):
-        if st.session_state.chat_history:
-            history_text = get_chat_text(st.session_state.chat_history)
-            user_input = f"Analyze performance for ({st.session_state.user_name}). Chat: {history_text[:5000]}"
-            input_mode = "analysis"
-        else:
-            st.warning("ابدأ محادثة أولاً.")
-
-if user_input and input_mode != "quiz":
-    log_activity(st.session_state.user_name, input_mode, user_input)
-    st.toast("🧠 Thinking...", icon="🤔")
-    try:
-        role_lang = "Arabic" if language == "العربية" else "English"
-        ref = st.session_state.get("ref_text", "")
-        student_name = st.session_state.user_name
-        student_level = st.session_state.get("student_grade", "General")
-        curriculum = st.session_state.get("study_lang", "Arabic")
-        
-        map_instruction = ""
-        check_map = ["مخطط", "خريطة", "رسم", "map", "diagram", "chart", "graph"]
-        if any(x in str(user_input).lower() for x in check_map):
-            map_instruction = """
-            URGENT: The user wants a VISUAL DIAGRAM.
-            Output ONLY valid Graphviz DOT code inside ```dot ... ``` block.
-            Example: ```dot digraph G { "A" -> "B" } ```
-            """
-
-        sys_prompt = f"""
-        Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
-        Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
-        Instructions: Address by name. Adapt to level. Use LaTeX for Math ONLY.
-        NEVER use itemize/textbf/underline/underscore. Use - or *.
-        BE CONCISE. {map_instruction}
-        Ref: {ref[:20000]}
-        """
-        
-        if input_mode == "image":
-             if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
-                response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
-             else:
-                st.error("Model error.")
-                st.stop()
-        else:
-            response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
-        
-        if input_mode != "analysis":
-            st.session_state.chat_history.append((str(user_input)[:50], response.text))
-        
-        final_text = response.text
-        dot_code = None
-        if "```dot" in response.text:
-            try:
-                parts = response.text.split("```dot")
-                final_text = parts[0]
-                dot_code = parts[1].split("```")[0].strip()
-            except:
-                pass
-        elif "digraph" in response.text and "{" in response.text:
-            try:
-                start = response.text.find("digraph")
-                end = response.text.rfind("}") + 1
-                dot_code = response.text[start:end]
-                final_text = response.text.replace(dot_code, "")
-            except:
-                pass
-
-        st.markdown(f"### 💡 Answer:\n{final_text}")
-        if dot_code:
-            try:
-                st.graphviz_chart(dot_code)
-            except Exception as e:
-                st.warning(f"Could not render diagram: {e}")
-
-        if input_mode != "analysis":
-            audio = asyncio.run(generate_audio_stream(final_text, voice_code))
-            st.audio(audio, format='audio/mp3', autoplay=True)
-        
-    except Exception as e:
-        st.error(f"Error: {e}")
+            user_input 
