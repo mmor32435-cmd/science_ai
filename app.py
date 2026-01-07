@@ -58,76 +58,41 @@ def get_gspread_client():
 
 def get_sheet_data():
     client = get_gspread_client()
-    if client:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME)
-            val = sheet.sheet1.acell('B1').value
-            return str(val).strip()
-        except:
-            return None
-    return None
+    if not client: return None, None
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        daily_pass = str(sheet.sheet1.acell('B1').value).strip()
+        return daily_pass, sheet
+    except:
+        return None, None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if client:
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).sheet1
-            sheet.update_acell('B1', new_pass)
-            return True
-        except:
-            return False
-    return False
+    if not client: return False
+    try:
+        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
+        return True
+    except:
+        return False
+
+# --- تم إصلاح هيكل الدوال التالية بالكامل ---
 
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
-    if client:
-        try:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except:
-                sheet = client.open(CONTROL_SHEET_NAME).sheet1
-            
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_type, user_name, details])
-        except:
-            pass
+    if not client: return
 
-def log_activity(user_name, input_type, question_text):
-    client = get_gspread_client()
-    if client:
+    try:
+        # محاولة فتح صفحة Logs
         try:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-            except:
-                return 
-            
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            
-            final_text = question_text
-            if isinstance(question_text, list):
-                final_text = f"[Image] {question_text[0]}"
-            
-            sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
         except:
-            pass
+            # إذا فشل، نفتح الصفحة الأولى
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now, user_type, user_name, details])
+    except:
+        pass
 
-def update_xp(user_name, points_to_add):
-    client = get_gspread_client()
-    if client:
-        try:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-            except:
-                return 0
-            
-            cell = sheet.find(user_name)
-            current_xp = 0
-            if cell:
-                val = sheet.cell(cell.row, 2).value
-                current_xp = int(val)
-                new_xp = current_xp + points_to_add
-                sheet.update_cell(cell.row, 2, new_xp)
-                return new_xp
-            
+def log_activity(user_name, 
