@@ -75,7 +75,7 @@ def update_daily_password(new_pass):
     except:
         return False
 
-# --- دوال التسجيل والأنشطة ---
+# --- دوال التسجيل ---
 
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
@@ -167,26 +167,24 @@ def clear_old_data():
     client = get_gspread_client()
     if not client: return False
     try:
-        names = ["Logs", "Activity", "Gamification"]
-        for name in names:
-            try:
-                ws = client.open(CONTROL_SHEET_NAME).worksheet(name)
-                ws.resize(rows=1)
-                ws.resize(rows=100)
-            except:
-                pass
+        for s in ["Logs", "Activity", "Gamification"]:
+            try: 
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                ws.resize(rows=1); ws.resize(rows=100)
+            except: pass
         return True
-    except:
-        return False
+    except: return False
 
 def get_stats_for_admin():
     client = get_gspread_client()
     if not client: return 0, []
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
-        logs = sheet.worksheet("Logs").get_all_values()
-        qs = sheet.worksheet("Activity").get_all_values()
-        return len(logs)-1, qs[-5:]
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
     except:
         return 0, []
 
@@ -269,18 +267,21 @@ def speech_to_text(audio_bytes, lang_code):
     except:
         return None
 
-# 🔥 تعديل دالة التحميل لاستخدام القائمة 🔥
+# 🔥 دالة تحميل الموديل (تدعم قائمة المفاتيح) 🔥
 @st.cache_resource
 def load_ai_model():
     try:
-        # محاولة قراءة قائمة المفاتيح
-        api_key = ""
+        api_key = None
+        # 1. البحث عن القائمة أولاً
         if "GOOGLE_API_KEYS" in st.secrets:
-            keys = st.secrets["GOOGLE_API_KEYS"]
-            api_key = random.choice(keys)
-        elif "GOOGLE_API_KEY" in st.secrets:
-            api_key = st.secrets["GOOGLE_API_KEY"]
+            keys_list = st.secrets["GOOGLE_API_KEYS"]
+            if isinstance(keys_list, list) and len(keys_list) > 0:
+                api_key = random.choice(keys_list)
         
+        # 2. إذا لم نجد قائمة، نبحث عن مفتاح واحد
+        if not api_key and "GOOGLE_API_KEY" in st.secrets:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            
         if api_key:
             genai.configure(api_key=api_key)
             all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -295,7 +296,6 @@ def load_ai_model():
 try:
     model = load_ai_model()
     if not model:
-        st.error("Error connecting to AI. Please check keys.")
         st.stop()
 except:
     st.stop()
@@ -488,174 +488,4 @@ with st.sidebar:
                         st.session_state.ref_text = download_pdf_text(service, fid)
                         st.toast("Book Loaded! ✅")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
-user_input = ""
-input_mode = "text"
-
-with tab1:
-    st.caption("Click mic to speak")
-    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
-    if audio_in: 
-        user_input = speech_to_text(audio_in['bytes'], sr_lang)
-        st.session_state.current_xp += 10
-        update_xp(st.session_state.user_name, 10)
-
-with tab2:
-    txt_in = st.text_area("Write here:")
-    if st.button("Send", use_container_width=True): 
-        user_input = txt_in
-        st.session_state.current_xp += 5
-        update_xp(st.session_state.user_name, 5)
-
-with tab3:
-    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
-    up_q = st.text_input("Details:")
-    if st.button("Analyze", use_container_width=True) and up_file:
-        if up_file.type == 'application/pdf':
-             pdf = PyPDF2.PdfReader(up_file)
-             ext = ""
-             for p in pdf.pages: ext += p.extract_text()
-             user_input = f"PDF:\n{ext}\nQ: {up_q}"
-        else:
-            img = Image.open(up_file)
-            st.image(img, width=300)
-            user_input = [up_q if up_q else "Explain", img]
-            input_mode = "image"
-        st.session_state.current_xp += 15
-        update_xp(st.session_state.user_name, 15)
-
-with tab4:
-    st.info(f"Quiz for: **{st.session_state.student_grade}**")
-    if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
-        grade = st.session_state.student_grade
-        system = st.session_state.study_lang
-        ref_context = st.session_state.get("ref_text", "")
-        source = f"Source: {ref_context[:30000]}" if ref_context else "Source: Egyptian Curriculum."
-        q_prompt = f"""
-        Generate ONE multiple-choice question.
-        Target: Student in {grade} ({system}).
-        {source}
-        Constraint: Strictly from source/curriculum. No LaTeX in text.
-        Output: Question and 4 options. NO Answer yet.
-        Language: Arabic.
-        """
-        try:
-            with st.spinner("Generating..."):
-                response = model.generate_content(q_prompt)
-                st.session_state.current_quiz_question = response.text
-                st.session_state.quiz_active = True
-                st.rerun()
-        except:
-            pass
-
-    if st.session_state.quiz_active and st.session_state.current_quiz_question:
-        st.markdown("---")
-        st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
-        student_ans = st.text_input("✍️ إجابتك:")
-        if st.button("✅ Check Answer", use_container_width=True):
-            if student_ans:
-                check_prompt = f"""
-                Question: {st.session_state.current_quiz_question}
-                Student Answer: {student_ans}
-                Task: Correct based on Egyptian Curriculum.
-                Output: Correct/Wrong + Explanation. Score(10/10).
-                Lang: Arabic.
-                """
-                with st.spinner("Checking..."):
-                    result = model.generate_content(check_prompt)
-                    st.success("📝 النتيجة:")
-                    st.write(result.text)
-                    if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
-                        st.balloons()
-                        st.session_state.current_xp += 50
-                        update_xp(st.session_state.user_name, 50)
-                        st.toast("🎉 +50 XP!")
-                    st.session_state.quiz_active = False
-                    st.session_state.current_quiz_question = ""
-            else:
-                st.warning("اكتب الإجابة!")
-
-with tab5:
-    st.write("احصل على تحليل لأدائك:")
-    if st.button("📈 حلل مستواي", use_container_width=True):
-        if st.session_state.chat_history:
-            history_text = get_chat_text(st.session_state.chat_history)
-            user_input = f"Analyze performance for ({st.session_state.user_name}). Chat: {history_text[:5000]}"
-            input_mode = "analysis"
-        else:
-            st.warning("ابدأ محادثة أولاً.")
-
-if user_input and input_mode != "quiz":
-    log_activity(st.session_state.user_name, input_mode, user_input)
-    st.toast("🧠 Thinking...", icon="🤔")
-    try:
-        role_lang = "Arabic" if language == "العربية" else "English"
-        ref = st.session_state.get("ref_text", "")
-        student_name = st.session_state.user_name
-        student_level = st.session_state.get("student_grade", "General")
-        curriculum = st.session_state.get("study_lang", "Arabic")
-        
-        map_instruction = ""
-        check_map = ["مخطط", "خريطة", "رسم", "map", "diagram", "chart", "graph"]
-        if any(x in str(user_input).lower() for x in check_map):
-            map_instruction = """
-            URGENT: The user wants a VISUAL DIAGRAM.
-            Output ONLY valid Graphviz DOT code inside ```dot ... ``` block.
-            Example: ```dot digraph G { "A" -> "B" } ```
-            """
-
-        sys_prompt = f"""
-        Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
-        Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
-        Instructions: Address by name. Adapt to level. Use LaTeX for Math ONLY.
-        NEVER use itemize/textbf/underline.
-        BE CONCISE. {map_instruction}
-        Ref: {ref[:20000]}
-        """
-        
-        if input_mode == "image":
-             if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
-                response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
-             else:
-                st.error("Model error.")
-                st.stop()
-        else:
-            response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
-        
-        if input_mode != "analysis":
-            st.session_state.chat_history.append((str(user_input)[:50], response.text))
-        
-        final_text = response.text
-        dot_code = None
-        if "```dot" in response.text:
-            try:
-                parts = response.text.split("```dot")
-                final_text = parts[0]
-                dot_code = parts[1].split("```")[0].strip()
-            except:
-                pass
-        elif "digraph" in response.text and "{" in response.text:
-            try:
-                start = response.text.find("digraph")
-                end = response.text.rfind("}") + 1
-                dot_code = response.text[start:end]
-                final_text = response.text.replace(dot_code, "")
-            except:
-                pass
-
-        st.markdown(f"### 💡 Answer:\n{final_text}")
-        if dot_code:
-            try:
-                st.graphviz_chart(dot_code)
-            except Exception as e:
-                st.warning(f"Could not render diagram: {e}")
-
-        if input_mode != "analysis":
-            audio = asyncio.run(generate_audio_stream(final_text, voice_code))
-            st.audio(audio, format='audio/mp3', autoplay=True)
-        
-    except Exception as e:
-        if "429" in str(e):
-            st.error("🚦 Please wait 1 minute.")
-        else:
-            st.error(f"Error: {e}")
+tab1, 
