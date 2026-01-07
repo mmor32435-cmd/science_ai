@@ -33,14 +33,13 @@ DAILY_FACTS = [
     "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
     "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
-    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
-    "هل تعلم؟ سرعة الضوء 300,000 كم/ث! ⚡"
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯"
 ]
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 # ==========================================
-# 🛠️ الخدمات (شيت، درايف، صوت)
+# 🛠️ الخدمات
 # ==========================================
 
 def get_gspread_client():
@@ -319,6 +318,7 @@ if not st.session_state.auth_status:
                         st.session_state.auth_status = True
                         st.session_state.user_type = u_type
                         st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
+                        
                         final_grade = f"{stage} - {selected_grade}" if selected_grade else "General"
                         st.session_state.student_grade = final_grade
                         st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
@@ -439,4 +439,133 @@ with tab3:
             img = Image.open(up_file)
             st.image(img, width=300)
             user_input = [up_q if up_q else "Explain", img]
-            input_mode 
+            input_mode = "image"
+        new_xp = update_xp(st.session_state.user_name, 15)
+        st.session_state.current_xp = new_xp
+
+with tab4:
+    st.info(f"Quiz for: **{st.session_state.student_grade}**")
+    if st.button("🎲 Generate Question / سؤال جديد", use_container_width=True):
+        grade = st.session_state.student_grade
+        system = st.session_state.study_lang
+        ref_context = st.session_state.get("ref_text", "")
+        source = f"Source: {ref_context[:30000]}" if ref_context else "Source: Egyptian Curriculum."
+        q_prompt = f"""
+        Generate ONE multiple-choice question.
+        Target: Student in {grade} ({system}).
+        {source}
+        Constraint: Strictly from source/curriculum. No LaTeX in text.
+        Output: Question and 4 options. NO Answer yet.
+        Language: Arabic.
+        """
+        try:
+            with st.spinner("Generating..."):
+                response = model.generate_content(q_prompt)
+                st.session_state.current_quiz_question = response.text
+                st.session_state.quiz_active = True
+                st.rerun()
+        except: pass
+
+    if st.session_state.quiz_active and st.session_state.current_quiz_question:
+        st.markdown("---")
+        st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
+        student_ans = st.text_input("✍️ إجابتك:")
+        if st.button("✅ Check Answer", use_container_width=True):
+            if student_ans:
+                check_prompt = f"""
+                Question: {st.session_state.current_quiz_question}
+                Student Answer: {student_ans}
+                Task: Correct based on Egyptian Curriculum.
+                Output: Correct/Wrong + Explanation. Score(10/10).
+                Lang: Arabic.
+                """
+                with st.spinner("Checking..."):
+                    result = model.generate_content(check_prompt)
+                    st.success("📝 النتيجة:")
+                    st.write(result.text)
+                    if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
+                        st.balloons()
+                        new_xp = update_xp(st.session_state.user_name, 50)
+                        st.session_state.current_xp = new_xp
+                        st.toast("🎉 +50 XP!")
+                    st.session_state.quiz_active = False
+                    st.session_state.current_quiz_question = ""
+            else: st.warning("اكتب الإجابة!")
+
+with tab5:
+    st.write("احصل على تحليل لأدائك:")
+    if st.button("📈 حلل مستواي", use_container_width=True):
+        if st.session_state.chat_history:
+            history_text = get_chat_text(st.session_state.chat_history)
+            user_input = f"Analyze performance for ({st.session_state.user_name}). Chat: {history_text[:5000]}"
+            input_mode = "analysis"
+        else: st.warning("ابدأ محادثة أولاً.")
+
+if user_input and input_mode != "quiz":
+    log_activity(st.session_state.user_name, input_mode, user_input)
+    st.toast("🧠 Thinking...", icon="🤔")
+    try:
+        role_lang = "Arabic" if language == "العربية" else "English"
+        ref = st.session_state.get("ref_text", "")
+        student_name = st.session_state.user_name
+        student_level = st.session_state.get("student_grade", "General")
+        curriculum = st.session_state.get("study_lang", "Arabic")
+        
+        map_instruction = ""
+        check_map = ["مخطط", "خريطة", "رسم", "map", "diagram", "chart", "graph"]
+        if any(x in str(user_input).lower() for x in check_map):
+            map_instruction = """
+            URGENT: The user wants a VISUAL DIAGRAM.
+            Output ONLY valid Graphviz DOT code inside ```dot ... ``` block.
+            Example: ```dot digraph G { "A" -> "B" } ```
+            """
+
+        sys_prompt = f"""
+        Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
+        Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
+        Instructions: Address by name. Adapt to level. Use LaTeX.
+        NEVER use itemize/textbf. Use - or *.
+        BE CONCISE. {map_instruction}
+        Ref: {ref[:20000]}
+        """
+        
+        if input_mode == "image":
+             if 'vision' in active_model_name or 'flash' in active_model_name or 'pro' in active_model_name:
+                response = model.generate_content([sys_prompt, user_input[0], user_input[1]])
+             else: st.error("Model error."); st.stop()
+        else:
+            response = model.generate_content(f"{sys_prompt}\nInput: {user_input}")
+        
+        if input_mode != "analysis":
+            st.session_state.chat_history.append((str(user_input)[:50], response.text))
+        
+        # تحسين عرض الإجابة: فصل النص عن كود الرسم
+        final_text = response.text
+        dot_code = None
+        
+        if "```dot" in response.text:
+            try:
+                parts = response.text.split("```dot")
+                final_text = parts[0] # النص فقط
+                dot_code = parts[1].split("```")[0].strip()
+            except: pass
+        elif "digraph" in response.text and "{" in response.text:
+            try:
+                start = response.text.find("digraph")
+                end = response.text.rfind("}") + 1
+                dot_code = response.text[start:end]
+                final_text = response.text.replace(dot_code, "") # إخفاء الكود
+            except: pass
+
+        st.markdown(f"### 💡 Answer:\n{final_text}")
+        
+        if dot_code:
+            try: st.graphviz_chart(dot_code)
+            except Exception as e: st.warning(f"Could not render diagram: {e}")
+
+        if input_mode != "analysis":
+            audio = asyncio.run(generate_audio_stream(final_text, voice_code))
+            st.audio(audio, format='audio/mp3', autoplay=True)
+        
+    except Exception as e:
+        st.error(f"Error: {e}")
