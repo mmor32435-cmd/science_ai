@@ -271,32 +271,18 @@ def speech_to_text(audio_bytes, lang_code):
     except:
         return None
 
-# 🔥 دالة إعداد وتدوير المفاتيح 🔥
-def configure_ai_keys():
+# 🔥 دالة تحميل الموديل (تم إصلاح خطأ المسافة البادئة هنا) 🔥
+@st.cache_resource
+def load_ai_model():
     try:
         api_key = None
         if "GOOGLE_API_KEYS" in st.secrets:
             keys = st.secrets["GOOGLE_API_KEYS"]
             if isinstance(keys, list) and len(keys) > 0:
-                api_key = random.choice(keys) # اختيار عشوائي من القائمة
+                api_key = random.choice(keys)
         elif "GOOGLE_API_KEY" in st.secrets:
             api_key = st.secrets["GOOGLE_API_KEY"]
             
         if api_key:
             genai.configure(api_key=api_key)
-            return True
-    except: pass
-    return False
-
-# محاولة التهيئة الأولية
-configure_ai_keys()
-
-# دالة التوليد الآمنة (مع المحاولة وتغيير المفتاح عند الفشل)
-def safe_generate_content(prompt_content):
-    max_retries = 4 # 4 محاولات
-    for attempt in range(max_retries):
-        try:
-            # في كل مرة نختار أفضل موديل متاح
-            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            active = next((m for m in all_models if 'flash' in m), None)
-            if not active: 
+            all_models 
