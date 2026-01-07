@@ -79,11 +79,9 @@ def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
     if client:
         try:
-            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_type, user_name, details])
-        except: pass
-
-def log_activity(user_name, 
+            try: 
+                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+            except: 
+                sheet = client.open(CONTROL_SHEET_NAME).sheet1
+            
+            tz 
