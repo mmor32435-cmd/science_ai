@@ -1,11 +1,17 @@
 # app.py
-# AI Science Tutor Pro — Refactored + Fixes (Streamlit)
-# Notes:
-# - Put secrets in .streamlit/secrets.toml:
-#   TEACHER_MASTER_KEY="..."
-#   DRIVE_FOLDER_ID="..."
-#   GOOGLE_API_KEY="..."   (or GOOGLE_API_KEYS=["...","..."])
-#   [gcp_service_account] ... json fields ...
+# AI Science Tutor Pro — Full code with fixes + multi-key fallback
+# ---------------------------------------------------------------
+# Required files:
+# 1) app.py  (this file)
+# 2) .streamlit/secrets.toml  (keys + service account)
+# 3) requirements.txt
+#
+# secrets.toml example:
+# TEACHER_MASTER_KEY="ADMIN_2024"
+# DRIVE_FOLDER_ID=""
+# GOOGLE_API_KEYS=["KEY1","KEY2","KEY3"]  # recommended
+# # or GOOGLE_API_KEY="KEY1"
+# [gcp_service_account] ... (optional, needed for Sheets/Drive features)
 
 import streamlit as st
 import time
@@ -19,7 +25,6 @@ import pandas as pd
 import pytz
 from PIL import Image
 import PyPDF2
-import graphviz  # noqa: F401 (used by st.graphviz_chart)
 
 import edge_tts
 import speech_recognition as sr
@@ -37,9 +42,10 @@ from googleapiclient.http import MediaIoBaseDownload
 
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
-TEACHER_MASTER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "")
 CONTROL_SHEET_NAME = "App_Control"
 SESSION_DURATION_MINUTES = 60
+
+TEACHER_MASTER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "")
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 DAILY_FACTS = [
@@ -51,18 +57,21 @@ DAILY_FACTS = [
 ]
 
 if not TEACHER_MASTER_KEY:
-    st.error("Missing TEACHER_MASTER_KEY in secrets. Add it to .streamlit/secrets.toml")
+    st.error("Missing TEACHER_MASTER_KEY in secrets.toml")
     st.stop()
 
 # ==========================================
-# 🧰 Helpers (async, text, safety)
+# 🧰 Helpers
 # ==========================================
 
+def clip_text(s: str, n: int) -> str:
+    if not s:
+        return ""
+    return s if len(s) <= n else s[:n] + "..."
+
+
 def run_async(coro):
-    """
-    Safe async runner for Streamlit.
-    Avoids asyncio.run() issues when an event loop is already running.
-    """
+    """Safe async runner for Streamlit (avoids asyncio.run issues)."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -81,7 +90,6 @@ def run_async(coro):
 
 
 def clean_text_for_audio(text: str) -> str:
-    # Remove LaTeX environments / commands that TTS pronounces badly
     text = re.sub(r'\\begin\{.*?\}', '', text)
     text = re.sub(r'\\end\{.*?\}', '', text)
     text = re.sub(r'\\item', '', text)
@@ -89,7 +97,6 @@ def clean_text_for_audio(text: str) -> str:
     text = re.sub(r'\\textit\{(.*?)\}', r'\1', text)
     text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
     text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
-    # Trim excessive whitespace
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text
 
@@ -118,16 +125,14 @@ def speech_to_text(audio_bytes: bytes, lang_code: str) -> str | None:
 
 
 def get_voice_config(lang_label: str):
-    # lang_label expected: "English" or "العربية"
     if lang_label == "English":
         return "en-US-AndrewNeural", "en-US"
     return "ar-EG-ShakirNeural", "ar-EG"
 
 
-def clip_text(s: str, n: int) -> str:
-    if not s:
-        return ""
-    return s if len(s) <= n else s[:n] + "..."
+def _now_cairo_str() -> str:
+    tz = pytz.timezone("Africa/Cairo")
+    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ==========================================
@@ -174,15 +179,11 @@ def update_daily_password(new_pass: str) -> bool:
         return False
 
 
-def _now_cairo_str() -> str:
-    tz = pytz.timezone("Africa/Cairo")
-    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def log_login_to_sheet(user_name: str, user_type: str, details: str = ""):
     client = get_gspread_client()
     if not client:
         return
+
     sheet = None
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
@@ -191,6 +192,7 @@ def log_login_to_sheet(user_name: str, user_type: str, details: str = ""):
             sheet = client.open(CONTROL_SHEET_NAME).sheet1
         except Exception:
             return
+
     try:
         sheet.append_row([_now_cairo_str(), user_type, user_name, details])
     except Exception:
@@ -208,7 +210,7 @@ def log_activity(user_name: str, input_type: str, question_text):
 
     try:
         final_text = question_text
-        if isinstance(question_text, list) and len(question_text) >= 1:
+        if isinstance(question_text, list) and question_text:
             final_text = f"[Image] {question_text[0]}"
         ws.append_row([_now_cairo_str(), user_name, input_type, clip_text(str(final_text), 500)])
     except Exception:
@@ -263,8 +265,7 @@ def get_leaderboard():
         if not data:
             return []
         df = pd.DataFrame(data)
-        if "XP" not in df.columns or "Student_Name" not in df.columns:
-            # Expect headers: Student_Name | XP
+        if "Student_Name" not in df.columns or "XP" not in df.columns:
             return []
         df["XP"] = pd.to_numeric(df["XP"], errors="coerce").fillna(0).astype(int)
         top_5 = df.sort_values(by="XP", ascending=False).head(5)
@@ -306,8 +307,7 @@ def get_stats_for_admin():
         except Exception:
             qs = []
         logins = (len(logs) - 1) if logs else 0
-        last_qs = qs[-5:] if qs else []
-        return logins, last_qs
+        return logins, qs[-5:] if qs else []
     except Exception:
         return 0, []
 
@@ -346,74 +346,132 @@ def download_pdf_text(service, file_id: str) -> str:
             _, done = downloader.next_chunk()
         file_io.seek(0)
         reader = PyPDF2.PdfReader(file_io)
-        text_parts = []
+        parts = []
         for page in reader.pages:
-            text_parts.append(page.extract_text() or "")
-        return "\n".join(text_parts)
+            parts.append(page.extract_text() or "")
+        return "\n".join(parts)
     except Exception:
         return ""
 
 
 # ==========================================
-# 🤖 Gemini model loading + safe generate
+# 🤖 Gemini: multi-key rotation on 429
 # ==========================================
+
+def _get_api_keys():
+    keys = st.secrets.get("GOOGLE_API_KEYS", [])
+    out = []
+    if isinstance(keys, list):
+        for k in keys:
+            if isinstance(k, str) and k.strip():
+                out.append(k.strip())
+    one = st.secrets.get("GOOGLE_API_KEY", "")
+    if isinstance(one, str) and one.strip():
+        out.append(one.strip())
+
+    # de-dup
+    uniq = []
+    for k in out:
+        if k not in uniq:
+            uniq.append(k)
+    return uniq
+
+
+@st.cache_resource
+def _pick_model_name_with_key(api_key: str) -> str:
+    genai.configure(api_key=api_key)
+    all_models = [
+        m.name for m in genai.list_models()
+        if hasattr(m, "supported_generation_methods")
+        and "generateContent" in m.supported_generation_methods
+    ]
+    if not all_models:
+        raise RuntimeError("No generateContent models available")
+    active = next((m for m in all_models if "flash" in m.lower()), None)
+    if not active:
+        active = next((m for m in all_models if "pro" in m.lower()), all_models[0])
+    return active
+
+
+def _make_model(api_key: str):
+    genai.configure(api_key=api_key)
+    model_name = _pick_model_name_with_key(api_key)
+    return genai.GenerativeModel(model_name)
+
 
 @st.cache_resource
 def load_ai_model():
+    keys = _get_api_keys()
+    if not keys:
+        return None
+    # start with a random key
+    first = random.choice(keys)
     try:
-        api_key = None
-        if "GOOGLE_API_KEYS" in st.secrets:
-            keys = st.secrets["GOOGLE_API_KEYS"]
-            if isinstance(keys, list) and keys:
-                api_key = random.choice(keys)
-        elif "GOOGLE_API_KEY" in st.secrets:
-            api_key = st.secrets["GOOGLE_API_KEY"]
-
-        if not api_key:
-            return None
-
-        genai.configure(api_key=api_key)
-        all_models = [
-            m.name for m in genai.list_models()
-            if hasattr(m, "supported_generation_methods")
-            and "generateContent" in m.supported_generation_methods
-        ]
-        if not all_models:
-            return None
-
-        # Prefer flash then pro
-        active_model_name = next((m for m in all_models if "flash" in m.lower()), None)
-        if not active_model_name:
-            active_model_name = next((m for m in all_models if "pro" in m.lower()), all_models[0])
-
-        return genai.GenerativeModel(active_model_name)
+        return _make_model(first)
     except Exception:
+        # fallback: try others
+        for k in keys:
+            try:
+                return _make_model(k)
+            except Exception:
+                continue
         return None
 
 
-def safe_generate_content(model, prompt):
-    if not model:
-        raise RuntimeError("AI Not Connected")
+def safe_generate_content(prompt):
+    """
+    Uses current cached model first, then rotates across keys on 429/quota.
+    """
+    keys = _get_api_keys()
+    if not keys:
+        raise RuntimeError("No API keys in secrets")
+
+    # Try current model first
+    m0 = st.session_state.get("_gemini_model")
+    if m0 is None:
+        m0 = load_ai_model()
+        st.session_state["_gemini_model"] = m0
 
     last_err = None
-    for _ in range(3):
+
+    # Order: current model -> keys shuffled
+    shuffled = keys[:]
+    random.shuffle(shuffled)
+
+    # Try with current model
+    if m0 is not None:
         try:
-            return model.generate_content(prompt)
+            return m0.generate_content(prompt)
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            if ("429" not in msg) and ("Quota" not in msg):
+                raise
+
+    # Rotate keys on 429
+    for k in shuffled:
+        try:
+            m = _make_model(k)
+            st.session_state["_gemini_model"] = m
+            return m.generate_content(prompt)
         except Exception as e:
             last_err = e
             msg = str(e)
             if "429" in msg or "Quota" in msg:
-                time.sleep(1.2)
+                time.sleep(1.0)
                 continue
             raise
-    raise RuntimeError(f"Busy: {last_err}")
+
+    raise RuntimeError(f"Busy/Quota on all keys: {last_err}")
 
 
-model = load_ai_model()
-if not model:
-    st.error("AI model not connected. Check GOOGLE_API_KEY(S) in secrets.")
+# Initialize model early (for fast fail)
+if "_gemini_model" not in st.session_state:
+    st.session_state["_gemini_model"] = load_ai_model()
+
+if not st.session_state["_gemini_model"]:
+    st.error("AI model not connected. Check GOOGLE_API_KEYS/GOOGLE_API_KEY in secrets.toml")
     st.stop()
-
 
 # ==========================================
 # 🎨 UI helpers
@@ -490,7 +548,7 @@ if "auth_status" not in st.session_state:
 
 
 # ==========================================
-# 🔐 Login screen
+# 🔐 Login
 # ==========================================
 
 if not st.session_state.auth_status:
@@ -501,6 +559,7 @@ if not st.session_state.auth_status:
 
         with st.form("login_form"):
             student_name = st.text_input("Name / اسمك الثلاثي:")
+
             all_stages = [
                 "الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي",
                 "الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي",
@@ -557,7 +616,7 @@ if not st.session_state.auth_status:
 
 
 # ==========================================
-# ⏳ Session time limit (students)
+# ⏳ Session time limit
 # ==========================================
 
 time_up = False
@@ -597,7 +656,7 @@ with st.sidebar:
 
         if st.session_state.current_xp >= 100:
             st.success("🎉 100 XP Reached!")
-            if st.button("🎓 Certificate"):
+            if st.button("🎓 Certificate", use_container_width=True):
                 st.download_button(
                     "⬇️ Download",
                     create_certificate(st.session_state.user_name),
@@ -656,7 +715,6 @@ with st.sidebar:
             )
 
     st.markdown("---")
-    # Drive Library
     if DRIVE_FOLDER_ID:
         service = get_drive_service()
         if service:
@@ -672,13 +730,12 @@ with st.sidebar:
                     st.success("Book Loaded ✅")
 
 
-# Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
 
 user_input = ""
 input_mode = "text"
 
-# 1) Voice
+# Voice
 with tab1:
     st.caption("Click mic to speak")
     audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key="mic", format="wav")
@@ -689,11 +746,10 @@ with tab1:
         else:
             user_input = spoken
             input_mode = "voice"
-            # XP: prefer sheet source
             new_xp = update_xp(st.session_state.user_name, 10)
             st.session_state.current_xp = new_xp if new_xp else (st.session_state.current_xp + 10)
 
-# 2) Text chat
+# Chat
 with tab2:
     txt_in = st.text_area("Write here:")
     if st.button("Send", use_container_width=True):
@@ -705,7 +761,7 @@ with tab2:
             new_xp = update_xp(st.session_state.user_name, 5)
             st.session_state.current_xp = new_xp if new_xp else (st.session_state.current_xp + 5)
 
-# 3) File (Image/PDF)
+# File
 with tab3:
     up_file = st.file_uploader("Image/PDF", type=["png", "jpg", "jpeg", "pdf"])
     up_q = st.text_input("Details:")
@@ -735,7 +791,7 @@ with tab3:
             new_xp = update_xp(st.session_state.user_name, 15)
             st.session_state.current_xp = new_xp if new_xp else (st.session_state.current_xp + 15)
 
-# 4) Quiz
+# Quiz
 with tab4:
     st.info(f"Quiz for: **{st.session_state.student_grade}**")
 
@@ -760,7 +816,7 @@ Language: Arabic.
 """
         try:
             with st.spinner("Generating..."):
-                response = safe_generate_content(model, q_prompt)
+                response = safe_generate_content(q_prompt)
             st.session_state.current_quiz_question = (response.text or "").strip()
             st.session_state.quiz_active = True
             st.rerun()
@@ -790,11 +846,10 @@ Language: Arabic.
 """
                 try:
                     with st.spinner("Checking..."):
-                        result = safe_generate_content(model, check_prompt)
+                        result = safe_generate_content(check_prompt)
                     st.success("📝 النتيجة:")
                     st.write(result.text)
 
-                    # Reward only if clearly correct
                     verdict = (result.text or "")
                     is_correct = ("صح" in verdict) or ("Correct" in verdict) or ("Score: 10/10" in verdict) or ("10/10" in verdict)
                     if is_correct:
@@ -808,7 +863,7 @@ Language: Arabic.
                 except Exception as e:
                     st.error(f"Check error: {e}")
 
-# 5) Report
+# Report
 with tab5:
     st.write("احصل على تحليل لأدائك:")
     if st.button("📈 حلل مستواي", use_container_width=True):
@@ -821,11 +876,10 @@ with tab5:
 
 
 # ==========================================
-# 🧠 Response generation (Chat/Voice/File/Analysis)
+# 🧠 Response generation
 # ==========================================
 
 if user_input and input_mode != "quiz":
-    # Log activity
     log_activity(st.session_state.user_name, input_mode, user_input)
 
     role_lang = "Arabic" if language == "العربية" else "English"
@@ -834,11 +888,10 @@ if user_input and input_mode != "quiz":
     student_level = st.session_state.get("student_grade", "General")
     curriculum = st.session_state.get("study_lang", "Arabic")
 
-    # Detect if user wants a diagram
+    # Map detection
     map_instruction = ""
     check_map = ["مخطط", "خريطة", "رسم", "map", "diagram", "chart", "graph"]
-    user_text_for_check = str(user_input).lower()
-    if any(x in user_text_for_check for x in check_map):
+    if any(x in str(user_input).lower() for x in check_map):
         map_instruction = """
 URGENT: The user wants a VISUAL DIAGRAM.
 Output ONLY valid Graphviz DOT code inside a fenced block:
