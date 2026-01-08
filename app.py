@@ -53,7 +53,8 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except: return None
+        except:
+            return None
     return None
 
 def get_sheet_data():
@@ -63,7 +64,8 @@ def get_sheet_data():
         sheet = client.open(CONTROL_SHEET_NAME)
         daily_pass = str(sheet.sheet1.acell('B1').value).strip()
         return daily_pass, sheet
-    except: return None, None
+    except:
+        return None, None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
@@ -71,289 +73,46 @@ def update_daily_password(new_pass):
     try:
         client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
-    except: return False
+    except:
+        return False
+
+# --- دوال التسجيل ---
 
 def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
     if not client: return
     try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-        except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([now, user_type, user_name, details])
-    except: pass
+    except:
+        pass
 
 def log_activity(user_name, input_type, question_text):
     client = get_gspread_client()
     if not client: return
     try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-        except: return 
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return 
+        
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
         final_text = question_text
-        if isinstance(question_text, list): final_text = f"[Image] {question_text[0]}"
+        if isinstance(question_text, list):
+            final_text = f"[Image] {question_text[0]}"
+        
         sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
-    except: pass
+    except:
+        pass
 
 def update_xp(user_name, points_to_add):
     client = get_gspread_client()
-    if not client: return 0
-    try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except: return 0
-        cell = sheet.find(user_name)
-        current_xp = 0
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            current_xp = int(val) if val else 0
-            new_xp = current_xp + points_to_add
-            sheet.update_cell(cell.row, 2, new_xp)
-            return new_xp
-        else:
-            sheet.append_row([user_name, points_to_add])
-            return points_to_add
-    except: return 0
-
-def get_current_xp(user_name):
-    client = get_gspread_client()
-    if not client: return 0
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        cell = sheet.find(user_name)
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            return int(val) if val else 0
-        return 0
-    except: return 0
-
-def get_leaderboard():
-    client = get_gspread_client()
-    if not client: return []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        data = sheet.get_all_records()
-        if not data: return []
-        df = pd.DataFrame(data)
-        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
-        top_5 = df.sort_values(by='XP', ascending=False).head(5)
-        return top_5.to_dict('records')
-    except: return []
-
-def clear_old_data():
-    client = get_gspread_client()
-    if not client: return False
-    try:
-        for s in ["Logs", "Activity", "Gamification"]:
-            try: 
-                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
-                ws.resize(rows=1); ws.resize(rows=100)
-            except: pass
-        return True
-    except: return False
-
-def get_stats_for_admin():
-    client = get_gspread_client()
-    if not client: return 0, []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME)
-        try: logs = sheet.worksheet("Logs").get_all_values()
-        except: logs = []
-        try: qs = sheet.worksheet("Activity").get_all_values()
-        except: qs = []
-        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
-    except: return 0, []
-
-def get_chat_text(history):
-    text = "--- Chat History ---\n\n"
-    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
-    return text
-
-def create_certificate(student_name):
-    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
-    return txt.encode('utf-8')
-
-# Streaming Effect
-def stream_text_effect(text):
-    for word in text.split(" "):
-        yield word + " "
-        time.sleep(0.04)
-
-@st.cache_resource
-def get_drive_service():
-    if "gcp_service_account" in st.secrets:
-        try:
-            creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
-            return build('drive', 'v3', credentials=creds)
-        except: return None
-    return None
-
-def list_drive_files(service, folder_id):
-    try: return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
-    except: return []
-
-def download_pdf_text(service, file_id):
-    try:
-        request = service.files().get_media(fileId=file_id)
-        file_io = BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request)
-        done = False
-        while done is False: status, done = downloader.next_chunk()
-        file_io.seek(0)
-        reader = PyPDF2.PdfReader(file_io)
-        text = ""
-        for page in reader.pages: text += page.extract_text() + "\n"
-        return text
-    except: return ""
-
-def get_voice_config(lang):
-    if lang == "English": return "en-US-AndrewNeural", "en-US"
-    else: return "ar-EG-ShakirNeural", "ar-EG"
-
-def clean_text_for_audio(text):
-    text = re.sub(r'\\documentclass\{.*?\}', '', text) 
-    text = re.sub(r'\\usepackage\{.*?\}', '', text)
-    text = re.sub(r'\\begin\{.*?\}', '', text) 
-    text = re.sub(r'\\end\{.*?\}', '', text)   
-    text = re.sub(r'\\item', '', text)         
-    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
-    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
-    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
-    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
-    return text
-
-async def generate_audio_stream(text, voice_code):
-    clean_text = clean_text_for_audio(text)
-    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
-    mp3_fp = BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
-    return mp3_fp
-
-def speech_to_text(audio_bytes, lang_code):
-    r = sr.Recognizer()
-    try:
-        audio_file = sr.AudioFile(BytesIO(audio_bytes))
-        with audio_file as source:
-            r.adjust_for_ambient_noise(source, duration=0.5)
-            audio_data = r.record(source)
-            return r.recognize_google(audio_data, language=lang_code)
-    except: return None
-
-@st.cache_resource
-def load_ai_model():
-    try:
-        api_key = None
-        if "GOOGLE_API_KEYS" in st.secrets:
-            keys = st.secrets["GOOGLE_API_KEYS"]
-            if keys: api_key = random.choice(keys)
-        elif "GOOGLE_API_KEY" in st.secrets:
-            api_key = st.secrets["GOOGLE_API_KEY"]
-            
-        if api_key:
-            genai.configure(api_key=api_key)
-            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            active_model_name = next((m for m in all_models if 'flash' in m), None)
-            if not active_model_name:
-                active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
-            return genai.GenerativeModel(active_model_name)
-    except: pass
-    return None
-
-try:
-    model = load_ai_model()
-    if not model: st.stop()
-except: st.stop()
-
-def safe_generate_content(model, prompt):
-    if not model: raise Exception("AI Not Connected")
-    max_retries = 3
-    for attempt in range(max_retries):
-        try: return model.generate_content(prompt)
-        except Exception as e:
-            if "429" in str(e) or "Quota" in str(e):
-                time.sleep(1)
-                st.cache_resource.clear()
-                continue
-            else: raise e
-    raise Exception("Busy")
-
-# 🔥 دالة المعالجة المركزية (الحل الجذري لمنع التكرار) 🔥
-def process_ai_response(user_text, input_type="text"):
-    # 1. تسجيل النشاط
-    log_activity(st.session_state.user_name, input_type, user_text)
     
-    # 2. عرض رسالة التفكير
-    st.toast("🧠 Mr. Elsayed's AI is thinking...", icon="🤔")
-    
-    try:
-        role_lang = "Arabic" if st.session_state.language == "العربية" else "English"
-        ref = st.session_state.get("ref_text", "")
-        student_name = st.session_state.user_name
-        student_level = st.session_state.get("student_grade", "General")
-        curriculum = st.session_state.get("study_lang", "Arabic")
-        
-        map_instruction = ""
-        check_map = ["مخطط", "خريطة", "رسم", "map", "diagram", "chart", "graph"]
-        if any(x in str(user_text).lower() for x in check_map):
-            map_instruction = "URGENT: Output Graphviz DOT code inside ```dot ... ``` block."
-
-        sys_prompt = f"""
-        Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
-        Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
-        Instructions: Address by name. Adapt to level. Use LaTeX.
-        NEVER use itemize/textbf/underline. NEVER use documentclass.
-        BE CONCISE. {map_instruction}
-        Ref: {ref[:20000]}
-        """
-        
-        # استدعاء الموديل
-        if input_type == "image":
-             response = safe_generate_content(model, [sys_prompt, user_text[0], user_text[1]])
-        else:
-            response = safe_generate_content(model, f"{sys_prompt}\nInput: {user_text}")
-        
-        # حفظ المحادثة
-        st.session_state.chat_history.append((str(user_text)[:50], response.text))
-        
-        # معالجة الرد (فصل الأكواد)
-        final_text = response.text
-        dot_code = None
-        plot_code = None
-        
-        if "```dot" in response.text:
-            try:
-                parts = response.text.split("```dot")
-                final_text = parts[0]
-                dot_code = parts[1].split("```")[0].strip()
-            except: pass
-        
-        if "```python" in response.text:
-            try:
-                parts = response.text.split("```python")
-                final_text = parts[0]
-                plot_code = parts[1].split("```")[0].strip()
-            except: pass
-
-        # العرض
-        st.markdown("---")
-        st.write_stream(stream_text_effect(final_text))
-        
-        if dot_code:
-            try: st.graphviz_chart(dot_code)
-            except: pass
-            
-        if plot_code:
-            try:
-                exec_globals = {"plt": plt, "pd": pd}
-                exec(plot_code, exec_globals)
-                if 'fig' in exec_globals: st.pyplot(exec_globals['fig'])
-            except: pass
-
-        # الصوت
-        voice_code = get_voice_config(st.session_state.language)
-        audio = asyncio.run(generate_audio_stream(final_text, voice_code))
-        st.audio(audio, format='audio/mp3', autoplay=True)
-        
-    except Exception as 
