@@ -236,9 +236,11 @@ def get_voice_config(lang):
     else: return "ar-EG-ShakirNeural", "ar-EG"
 
 def clean_text_for_audio(text):
+    text = re.sub(r'\\documentclass\{.*?\}', '', text) # حذف كود المستندات
+    text = re.sub(r'\\usepackage\{.*?\}', '', text)
     text = re.sub(r'\\begin\{.*?\}', '', text) 
     text = re.sub(r'\\end\{.*?\}', '', text)   
-    text = re.sub(r'\\item', '', text)
+    text = re.sub(r'\\item', '', text)         
     text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
     text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
     text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
@@ -247,7 +249,6 @@ def clean_text_for_audio(text):
 
 async def generate_audio_stream(text, voice_code):
     clean_text = clean_text_for_audio(text)
-    if len(clean_text) > 400: clean_text = clean_text[:400] + "..."
     communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
     mp3_fp = BytesIO()
     async for chunk in communicate.stream():
@@ -392,11 +393,8 @@ if not st.session_state.auth_status:
                         st.session_state.start_time = time.time()
                         
                         log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
-                        
-                        try:
-                            st.session_state.current_xp = get_current_xp(st.session_state.user_name)
-                        except:
-                            st.session_state.current_xp = 0
+                        try: st.session_state.current_xp = get_current_xp(st.session_state.user_name)
+                        except: st.session_state.current_xp = 0
 
                         st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
                     else:
@@ -409,10 +407,8 @@ remaining_minutes = 0
 if st.session_state.user_type == "student":
     elapsed = time.time() - st.session_state.start_time
     allowed = SESSION_DURATION_MINUTES * 60
-    if elapsed > allowed:
-        time_up = True
-    else:
-        remaining_minutes = int((allowed - elapsed) // 60)
+    if elapsed > allowed: time_up = True
+    else: remaining_minutes = int((allowed - elapsed) // 60)
 
 if time_up and st.session_state.user_type == "student":
     st.error("Session Expired"); st.stop()
@@ -422,7 +418,6 @@ draw_header()
 
 col_lang, col_stat = st.columns([2,1])
 with col_lang:
-    # تم إصلاح الخطأ في هذا السطر: قائمة واحدة مغلقة بشكل صحيح
     language = st.radio("Speaking Language / لغة التحدث:", ["العربية", "English"], horizontal=True)
 
 lang_code = "ar-EG" if language == "العربية" else "en-US"
@@ -453,23 +448,16 @@ with st.sidebar:
             count, last_qs = get_stats_for_admin()
             st.metric("Logins", count)
             for q in last_qs:
-                if len(q) > 3:
-                    st.caption(f"- {q[3][:25]}...")
-        
+                if len(q) > 3: st.caption(f"- {q[3][:25]}...")
         with st.expander("🔑 Password"):
             new_p = st.text_input("New Code:")
             if st.button("Update"):
-                if update_daily_password(new_p):
-                    st.success("Updated!")
-                else:
-                    st.error("Failed")
-        
+                if update_daily_password(new_p): st.success("Updated!")
+                else: st.error("Failed")
         with st.expander("⚠️ Danger"):
             if st.button("🗑️ Clear Logs"):
-                if clear_old_data():
-                    st.success("Cleared!")
-                else:
-                    st.error("Failed")
+                if clear_old_data(): st.success("Cleared!")
+                else: st.error("Failed")
     else:
         st.metric("⏳ Time Left", f"{remaining_minutes} min")
         st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
@@ -562,10 +550,10 @@ with tab4:
                 with st.spinner("Writing Exam..."):
                     exam_prompt = f"""
                     Create a comprehensive 5-question exam for {grade} ({system}).
-                    Format: Plain Text (TXT) ready for printing.
+                    Format: Plain Text (TXT).
                     Include Model Answers at the very end.
                     Language: Arabic.
-                    IMPORTANT: DO NOT use LaTeX code or backslashes. Use simple text formatting.
+                    IMPORTANT: DO NOT use LaTeX code (documentclass/usepackage). Just plain text.
                     """
                     exam_res = safe_generate_content(model, exam_prompt)
                     st.download_button("⬇️ Download Exam (TXT)", exam_res.text, "Full_Exam.txt")
@@ -595,8 +583,7 @@ with tab4:
                         st.toast("🎉 +50 XP!")
                     st.session_state.quiz_active = False
                     st.session_state.current_quiz_question = ""
-            else:
-                st.warning("اكتب الإجابة!")
+            else: st.warning("اكتب الإجابة!")
 
 with tab5:
     st.write("احصل على تحليل لأدائك:")
@@ -645,7 +632,7 @@ if user_input and input_mode != "quiz":
         Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
         Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
         Instructions: Address by name. Adapt to level. Use LaTeX.
-        NEVER use itemize/textbf/underline.
+        NEVER use itemize/textbf/underline. NEVER use documentclass or usepackage.
         BE CONCISE. {map_instruction}
         Ref: {ref[:20000]}
         """
@@ -664,7 +651,6 @@ if user_input and input_mode != "quiz":
         dot_code = None
         plot_code = None
         
-        # 1. استخراج المخطط
         if "```dot" in response.text:
             try:
                 parts = response.text.split("```dot")
@@ -679,7 +665,6 @@ if user_input and input_mode != "quiz":
                 final_text = response.text.replace(dot_code, "")
              except: pass
         
-        # 2. استخراج الرسم البياني
         if "```python" in response.text:
             try:
                 parts = response.text.split("```python")
@@ -687,10 +672,8 @@ if user_input and input_mode != "quiz":
                 plot_code = parts[1].split("```")[0].strip()
             except: pass
 
-        # عرض النص بتأثير الآلة الكاتبة
         st.write_stream(stream_text_effect(final_text))
         
-        # عرض الرسومات
         if dot_code:
             try: st.graphviz_chart(dot_code)
             except: pass
