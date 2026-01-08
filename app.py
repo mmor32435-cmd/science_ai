@@ -1,4 +1,8 @@
 import streamlit as st
+
+# 1. إعدادات الصفحة (يجب أن تكون أول سطر)
+st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
+
 import time
 import google.generativeai as genai
 import asyncio
@@ -22,9 +26,8 @@ import graphviz
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. إعدادات الصفحة
+# 🎛️ إعدادات التحكم
 # ==========================================
-st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
@@ -40,7 +43,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 2. الخدمات والدوال المساعدة
+# 🛠️ الخدمات (شيت، درايف، صوت)
 # ==========================================
 
 @st.cache_resource
@@ -99,4 +102,120 @@ def log_activity(user_name, input_type, question_text):
 def update_xp(user_name, points_to_add):
     client = get_gspread_client()
     if not client: return 0
-    
+    try:
+        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except: return 0
+        cell = sheet.find(user_name)
+        current_xp = 0
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            current_xp = int(val) if val else 0
+            new_xp = current_xp + points_to_add
+            sheet.update_cell(cell.row, 2, new_xp)
+            return new_xp
+        else:
+            sheet.append_row([user_name, points_to_add])
+            return points_to_add
+    except: return 0
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            return int(val) if val else 0
+        return 0
+    except: return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        if not data: return []
+        df = pd.DataFrame(data)
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        top_5 = df.sort_values(by='XP', ascending=False).head(5)
+        return top_5.to_dict('records')
+    except: return []
+
+def clear_old_data():
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        for s in ["Logs", "Activity", "Gamification"]:
+            try: 
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                ws.resize(rows=1); ws.resize(rows=100)
+            except: pass
+        return True
+    except: return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if not client: return 0, []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
+    except: return 0, []
+
+def get_chat_text(history):
+    text = "--- Chat History ---\n\n"
+    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
+    return text
+
+def create_certificate(student_name):
+    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
+    return txt.encode('utf-8')
+
+# Streaming Effect
+def stream_text_effect(text):
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(0.04)
+
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
+            return build('drive', 'v3', credentials=creds)
+        except: return None
+    return None
+
+def list_drive_files(service, folder_id):
+    try: return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
+    except: return []
+
+def download_pdf_text(service, file_id):
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_io = BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        done = False
+        while done is False: status, done = downloader.next_chunk()
+        file_io.seek(0)
+        reader = PyPDF2.PdfReader(file_io)
+        text = ""
+        for page in reader.pages: text += page.extract_text() + "\n"
+        return text
+    except: return ""
+
+def get_voice_config(lang):
+    if lang == "English": return "en-US-AndrewNeural", "en-US"
+    else: return "ar-EG-ShakirNeural", "ar-EG"
+
+def clean_text_for_audio(text):
+    text = re.sub(r'\\documentclass\{.*?\}', '', text) 
+    text = re.sub(r'\\usepackage\{.*?\}', '', text)
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = 
