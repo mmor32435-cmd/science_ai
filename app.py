@@ -1,8 +1,4 @@
 import streamlit as st
-
-# 1. إعدادات الصفحة (أول سطر)
-st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
-
 import time
 import google.generativeai as genai
 import asyncio
@@ -26,8 +22,9 @@ import graphviz
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 🎛️ إعدادات التحكم
+# 1. إعدادات الصفحة (يجب أن تكون أول سطر)
 # ==========================================
+st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
@@ -43,7 +40,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ الخدمات والدوال المساعدة
+# 2. الخدمات والدوال المساعدة
 # ==========================================
 
 @st.cache_resource
@@ -213,25 +210,16 @@ def get_voice_config(lang):
     if lang == "English": return "en-US-AndrewNeural", "en-US"
     else: return "ar-EG-ShakirNeural", "ar-EG"
 
-# 🔥 الدالة التي تم إصلاحها بالكامل لتجنب الأخطاء 🔥
 def clean_text_for_audio(text):
-    # إزالة أوامر LaTeX في أسطر منفصلة
-    text = re.sub(r'\\documentclass\{.*?\}', '', text)
+    text = re.sub(r'\\documentclass\{.*?\}', '', text) 
     text = re.sub(r'\\usepackage\{.*?\}', '', text)
-    text = re.sub(r'\\begin\{.*?\}', '', text)
-    text = re.sub(r'\\end\{.*?\}', '', text)
-    text = re.sub(r'\\item', '', text)
-    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text)
-    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text)
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = re.sub(r'\\item', '', text)         
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
     text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
-    
-    # إزالة الرموز واحداً تلو الآخر
-    text = text.replace('*', '')
-    text = text.replace('#', '')
-    text = text.replace('-', '')
-    text = text.replace('_', ' ')
-    text = text.replace('`', '')
-    
+    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
     return text
 
 async def generate_audio_stream(text, voice_code):
@@ -254,6 +242,7 @@ def speech_to_text(audio_bytes, lang_code):
             return r.recognize_google(audio_data, language=lang_code)
     except: return None
 
+# 🔥 تم إصلاح دالة load_ai_model (تم إضافة except) 🔥
 @st.cache_resource
 def load_ai_model():
     try:
@@ -261,4 +250,200 @@ def load_ai_model():
         if "GOOGLE_API_KEYS" in st.secrets:
             keys = st.secrets["GOOGLE_API_KEYS"]
             if isinstance(keys, list) and len(keys) > 0:
-                api_key 
+                api_key = random.choice(keys)
+        elif "GOOGLE_API_KEY" in st.secrets:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            
+        if api_key:
+            genai.configure(api_key=api_key)
+            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            active_model_name = next((m for m in all_models if 'flash' in m), None)
+            if not active_model_name:
+                active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
+            return genai.GenerativeModel(active_model_name)
+    except: 
+        pass # تم إضافة الـ except المفقودة هنا
+    return None
+
+try:
+    model = load_ai_model()
+except: model = None
+
+def safe_generate_content(model, prompt):
+    if not model: raise Exception("AI Not Connected")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try: return model.generate_content(prompt)
+        except Exception as e:
+            if "429" in str(e) or "Quota" in str(e):
+                time.sleep(1)
+                st.cache_resource.clear()
+                continue
+            else: raise e
+    raise Exception("Busy")
+
+# 🔥 دالة المعالجة المركزية 🔥
+def process_ai_response(user_text, input_type="text"):
+    log_activity(st.session_state.user_name, input_type, user_text)
+    st.toast("🧠 Mr. Elsayed's AI is thinking...", icon="🤔")
+    
+    try:
+        model = load_ai_model()
+        if not model:
+            st.error("AI Service Unavailable")
+            return
+
+        role_lang = "Arabic" if st.session_state.language == "العربية" else "English"
+        ref = st.session_state.get("ref_text", "")
+        student_name = st.session_state.user_name
+        student_level = st.session_state.get("student_grade", "General")
+        curriculum = st.session_state.get("study_lang", "Arabic")
+        
+        map_instruction = ""
+        check_map = ["مخطط", "خريطة", "رسم", "map", "diagram", "chart", "graph"]
+        if any(x in str(user_text).lower() for x in check_map):
+            map_instruction = "URGENT: Output Graphviz DOT code inside ```dot ... ``` block."
+
+        sys_prompt = f"""
+        Role: Science Tutor (Mr. Elsayed). Target: {student_level}.
+        Curriculum: {curriculum}. Lang: {role_lang}. Name: {student_name}.
+        Instructions: Address by name. Adapt to level. Use LaTeX.
+        NEVER use itemize/textbf/underline. NEVER use documentclass.
+        BE CONCISE. {map_instruction}
+        Ref: {ref[:20000]}
+        """
+        
+        if input_type == "image":
+             response = safe_generate_content(model, [sys_prompt, user_text[0], user_text[1]])
+        else:
+            response = safe_generate_content(model, f"{sys_prompt}\nInput: {user_text}")
+        
+        st.session_state.chat_history.append((str(user_text)[:50], response.text))
+        
+        final_text = response.text
+        dot_code = None
+        plot_code = None
+        
+        if "```dot" in response.text:
+            try:
+                parts = response.text.split("```dot")
+                final_text = parts[0]
+                dot_code = parts[1].split("```")[0].strip()
+            except: pass
+        
+        if "```python" in response.text:
+            try:
+                parts = response.text.split("```python")
+                final_text = parts[0]
+                plot_code = parts[1].split("```")[0].strip()
+            except: pass
+
+        st.markdown("---")
+        st.write_stream(stream_text_effect(final_text))
+        
+        if dot_code:
+            try: st.graphviz_chart(dot_code)
+            except: pass
+            
+        if plot_code:
+            try:
+                exec_globals = {"plt": plt, "pd": pd}
+                exec(plot_code, exec_globals)
+                if 'fig' in exec_globals: st.pyplot(exec_globals['fig'])
+            except: pass
+
+        voice_config = get_voice_config(st.session_state.language)
+        voice_name_only = voice_config[0] 
+        audio = asyncio.run(generate_audio_stream(final_text, voice_name_only))
+        st.audio(audio, format='audio/mp3', autoplay=True)
+        
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
+# ==========================================
+# 🎨 الواجهة الرئيسية
+# ==========================================
+
+def draw_header():
+    st.markdown("""
+        <style>
+        .header-container {
+            padding: 1.5rem;
+            border-radius: 15px;
+            background: linear-gradient(120deg, #89f7fe 0%, #66a6ff 100%);
+            color: #1a2a6c;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 1rem;
+        }
+        .main-title {
+            font-size: 2.2rem;
+            font-weight: 900;
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        .sub-text {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-top: 5px;
+        }
+        </style>
+        <div class="header-container">
+            <div class="main-title">🧬 AI Science Tutor</div>
+            <div class="sub-text">Under Supervision of: Mr. Elsayed Elbadawy</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+if "auth_status" not in st.session_state:
+    st.session_state.auth_status = False
+    st.session_state.user_type = "none"
+    st.session_state.chat_history = []
+    st.session_state.student_grade = ""
+    st.session_state.study_lang = ""
+    st.session_state.quiz_active = False
+    st.session_state.current_quiz_question = ""
+    st.session_state.current_xp = 0
+    st.session_state.last_audio_bytes = None
+    st.session_state.language = "العربية" 
+
+# --- شاشة الدخول ---
+if not st.session_state.auth_status:
+    draw_header()
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.info(f"💡 {random.choice(DAILY_FACTS)}")
+        
+        with st.form("login_form"):
+            student_name = st.text_input("Name / اسمك الثلاثي:")
+            all_stages = ["الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي",
+                          "الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي",
+                          "الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
+            selected_grade = st.selectbox("Grade / الصف الدراسي:", all_stages)
+            study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
+            pwd = st.text_input("Access Code / كود الدخول:", type="password")
+            submit_login = st.form_submit_button("Login / دخول", use_container_width=True)
+        
+        if submit_login:
+            if (not student_name) and pwd != TEACHER_MASTER_KEY:
+                st.warning("⚠️ يرجى كتابة الاسم")
+            else:
+                with st.spinner("Connecting..."):
+                    daily_pass, _ = get_sheet_data()
+                    
+                    if pwd == TEACHER_MASTER_KEY:
+                        u_type = "teacher"; valid = True
+                    elif daily_pass and pwd == daily_pass:
+                        u_type = "student"; valid = True
+                    else:
+                        u_type = "none"; valid = False
+                    
+                    if valid:
+                        st.session_state.auth_status = True
+                        st.session_state.user_type = u_type
+                        st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
+                        st.session_state.student_grade = selected_grade
+                        st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
+                        st.session_state.start_time = time.time()
+                        log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
+                        try: st.session_state.current_xp = 
