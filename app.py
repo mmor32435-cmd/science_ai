@@ -22,9 +22,8 @@ import graphviz
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. إعدادات الصفحة
+# 🎛️ إعدادات التحكم
 # ==========================================
-st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
@@ -39,8 +38,10 @@ DAILY_FACTS = [
     "هل تعلم؟ سرعة الضوء 300,000 كم/ث! ⚡"
 ]
 
+st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
+
 # ==========================================
-# 2. الخدمات (شيت، درايف، صوت)
+# 🛠️ الخدمات (شيت، درايف، صوت)
 # ==========================================
 
 @st.cache_resource
@@ -210,35 +211,23 @@ def get_voice_config(lang):
     if lang == "English": return "en-US-AndrewNeural", "en-US"
     else: return "ar-EG-ShakirNeural", "ar-EG"
 
-# 🔥 الدالة المصححة بالكامل 🔥
 def clean_text_for_audio(text):
-    # إزالة أوامر LaTeX
-    text = re.sub(r'\\documentclass\{.*?\}', '', text)
+    text = re.sub(r'\\documentclass\{.*?\}', '', text) 
     text = re.sub(r'\\usepackage\{.*?\}', '', text)
-    text = re.sub(r'\\begin\{.*?\}', '', text)
-    text = re.sub(r'\\end\{.*?\}', '', text)
-    text = re.sub(r'\\item', '', text)
-    
-    # إزالة تنسيقات الخطوط (تم تبسيطها)
-    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text)
-    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text)
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = re.sub(r'\\item', '', text)         
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
     text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
-    
-    # إزالة الرموز
-    for char in ['*', '#', '-', '_', '`', '[', ']', '(', ')', '>', '<', '=']:
-        text = text.replace(char, ' ')
-        
+    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
     return text
 
 async def generate_audio_stream(text, voice_code):
     clean_text = clean_text_for_audio(text)
-    # التأكد أن voice_code هو نص وليس قائمة
     if isinstance(voice_code, tuple) or isinstance(voice_code, list):
-        v_code = voice_code[0]
-    else:
-        v_code = voice_code
-        
-    communicate = edge_tts.Communicate(clean_text, v_code, rate="-10%")
+        voice_code = voice_code[0]
+    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
     mp3_fp = BytesIO()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
@@ -293,13 +282,11 @@ def safe_generate_content(model, prompt):
             else: raise e
     raise Exception("Busy")
 
-# 🔥 دالة المعالجة المركزية 🔥
 def process_ai_response(user_text, input_type="text"):
     log_activity(st.session_state.user_name, input_type, user_text)
-    st.toast("🧠 Thinking...", icon="🤔")
+    st.toast("🧠 Mr. Elsayed's AI is thinking...", icon="🤔")
     
     try:
-        model = load_ai_model()
         role_lang = "Arabic" if st.session_state.language == "العربية" else "English"
         ref = st.session_state.get("ref_text", "")
         student_name = st.session_state.user_name
@@ -359,7 +346,6 @@ def process_ai_response(user_text, input_type="text"):
                 if 'fig' in exec_globals: st.pyplot(exec_globals['fig'])
             except: pass
 
-        # إصلاح استدعاء الصوت (تمرير الاسم فقط)
         voice_config = get_voice_config(st.session_state.language)
         voice_name_only = voice_config[0] 
         audio = asyncio.run(generate_audio_stream(final_text, voice_name_only))
@@ -505,159 +491,3 @@ with st.sidebar:
             st.metric("Logins", count)
             for q in last_qs:
                 if len(q) > 3: st.caption(f"- {q[3][:25]}...")
-        with st.expander("🔑 Password"):
-            new_p = st.text_input("New Code:")
-            if st.button("Update"):
-                if update_daily_password(new_p): st.success("Updated!")
-                else: st.error("Failed")
-        with st.expander("⚠️ Danger"):
-            if st.button("🗑️ Clear Logs"):
-                if clear_old_data(): st.success("Cleared!")
-                else: st.error("Failed")
-    else:
-        st.metric("⏳ Time Left", f"{remaining_minutes} min")
-        st.progress(max(0, (SESSION_DURATION_MINUTES * 60 - (time.time() - st.session_state.start_time)) / (SESSION_DURATION_MINUTES * 60)))
-        st.markdown("---")
-        if st.session_state.chat_history:
-            chat_txt = get_chat_text(st.session_state.chat_history)
-            st.download_button("📥 Save Chat", chat_txt, file_name="Science_Session.txt")
-
-    st.markdown("---")
-    if DRIVE_FOLDER_ID:
-        service = get_drive_service()
-        if service:
-            files = list_drive_files(service, DRIVE_FOLDER_ID)
-            if files:
-                st.subheader("📚 Library")
-                sel_file = st.selectbox("Book:", [f['name'] for f in files])
-                if st.button("Load Book", use_container_width=True):
-                    fid = next(f['id'] for f in files if f['name'] == sel_file)
-                    with st.spinner("Loading..."):
-                        st.session_state.ref_text = download_pdf_text(service, fid)
-                        st.toast("Book Loaded! ✅")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎙️ Voice", "✍️ Chat", "📁 File", "🧠 Quiz", "📊 Report"])
-
-# 🎤 التبويب الأول: الصوت
-with tab1:
-    st.caption("Click mic to speak")
-    audio_in = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Send", key='mic', format="wav")
-    if audio_in: 
-        if audio_in['bytes'] != st.session_state.last_audio_bytes:
-            st.session_state.last_audio_bytes = audio_in['bytes']
-            voice_code_tuple = get_voice_config(st.session_state.language)
-            voice_code = voice_code_tuple[1] # التأكد من أخذ الكود فقط
-            
-            user_input = speech_to_text(audio_in['bytes'], voice_code)
-            if user_input:
-                st.session_state.current_xp += 10
-                update_xp(st.session_state.user_name, 10)
-                process_ai_response(user_input, "voice")
-
-# ✍️ التبويب الثاني: الكتابة
-with tab2:
-    txt_in = st.text_area("Write here:")
-    if st.button("Send", use_container_width=True): 
-        if txt_in:
-            st.session_state.current_xp += 5
-            update_xp(st.session_state.user_name, 5)
-            process_ai_response(txt_in, "text")
-
-# 📁 التبويب الثالث: الملفات
-with tab3:
-    up_file = st.file_uploader("Image/PDF", type=['png','jpg','pdf'])
-    up_q = st.text_input("Details:")
-    if st.button("Analyze", use_container_width=True) and up_file:
-        user_input_content = None
-        input_type = "text"
-        if up_file.type == 'application/pdf':
-             pdf = PyPDF2.PdfReader(up_file)
-             ext = ""
-             for p in pdf.pages: ext += p.extract_text()
-             user_input_content = f"PDF:\n{ext}\nQ: {up_q}"
-        else:
-            img = Image.open(up_file)
-            st.image(img, width=300)
-            user_input_content = [up_q if up_q else "Explain", img]
-            input_type = "image"
-        st.session_state.current_xp += 15
-        update_xp(st.session_state.user_name, 15)
-        process_ai_response(user_input_content, input_type)
-
-# 🧠 التبويب الرابع: الاختبار
-with tab4:
-    st.info(f"Quiz for: **{st.session_state.student_grade}**")
-    
-    col_q1, col_q2 = st.columns(2)
-    with col_q1:
-        if st.button("🎲 Single Question", use_container_width=True):
-            grade = st.session_state.student_grade
-            system = st.session_state.study_lang
-            ref_context = st.session_state.get("ref_text", "")
-            source = f"Source: {ref_context[:30000]}" if ref_context else "Source: Egyptian Curriculum."
-            q_prompt = f"""
-            Generate ONE multiple-choice question.
-            Target: Student in {grade} ({system}).
-            {source}
-            Constraint: Strictly from source/curriculum. No LaTeX in text.
-            Output: Question and 4 options. NO Answer yet.
-            Language: Arabic.
-            """
-            try:
-                with st.spinner("Generating..."):
-                    response = safe_generate_content(model, q_prompt)
-                    st.session_state.current_quiz_question = response.text
-                    st.session_state.quiz_active = True
-                    st.rerun()
-            except: pass
-            
-    with col_q2:
-        if st.button("📝 Full Exam File", use_container_width=True):
-            grade = st.session_state.student_grade
-            system = st.session_state.study_lang
-            try:
-                with st.spinner("Writing Exam..."):
-                    exam_prompt = f"""
-                    Create a comprehensive 5-question exam for {grade} ({system}).
-                    Format: Plain Text (TXT). Include Model Answers at the end.
-                    Language: Arabic. No LaTeX code.
-                    """
-                    exam_res = safe_generate_content(model, exam_prompt)
-                    st.download_button("⬇️ Download Exam (TXT)", exam_res.text, "Full_Exam.txt")
-            except: st.error("Failed to generate exam.")
-
-    if st.session_state.quiz_active and st.session_state.current_quiz_question:
-        st.markdown("---")
-        st.markdown(f"### ❓ السؤال:\n{st.session_state.current_quiz_question}")
-        student_ans = st.text_input("✍️ إجابتك:")
-        if st.button("✅ Check Answer", use_container_width=True):
-            if student_ans:
-                check_prompt = f"""
-                Question: {st.session_state.current_quiz_question}
-                Student Answer: {student_ans}
-                Task: Correct based on Egyptian Curriculum.
-                Output: Correct/Wrong + Explanation. Score(10/10).
-                Lang: Arabic.
-                """
-                with st.spinner("Checking..."):
-                    result = safe_generate_content(model, check_prompt)
-                    st.success("📝 النتيجة:")
-                    st.write(result.text)
-                    if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
-                        st.balloons()
-                        st.session_state.current_xp += 50
-                        update_xp(st.session_state.user_name, 50)
-                        st.toast("🎉 +50 XP!")
-                    st.session_state.quiz_active = False
-                    st.session_state.current_quiz_question = ""
-            else: st.warning("اكتب الإجابة!")
-
-# 📊 التبويب الخامس: التحليل
-with tab5:
-    st.write("احصل على تحليل لأدائك:")
-    if st.button("📈 حلل مستواي", use_container_width=True):
-        if st.session_state.chat_history:
-            history_text = get_chat_text(st.session_state.chat_history)
-            user_input = f"Analyze performance for ({st.session_state.user_name}). Chat: {history_text[:5000]}"
-            process_ai_response(user_input, "analysis")
-        else: st.warning("ابدأ محادثة أولاً.")
