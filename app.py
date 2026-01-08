@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. إعدادات الصفحة (يجب أن تكون أول سطر)
+# 1. إعدادات الصفحة (أول سطر)
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
@@ -43,7 +43,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ الخدمات (شيت، درايف، صوت)
+# 🛠️ الخدمات والدوال المساعدة
 # ==========================================
 
 @st.cache_resource
@@ -213,9 +213,52 @@ def get_voice_config(lang):
     if lang == "English": return "en-US-AndrewNeural", "en-US"
     else: return "ar-EG-ShakirNeural", "ar-EG"
 
+# 🔥 الدالة التي تم إصلاحها بالكامل لتجنب الأخطاء 🔥
 def clean_text_for_audio(text):
-    text = re.sub(r'\\documentclass\{.*?\}', '', text) 
+    # إزالة أوامر LaTeX في أسطر منفصلة
+    text = re.sub(r'\\documentclass\{.*?\}', '', text)
     text = re.sub(r'\\usepackage\{.*?\}', '', text)
-    text = re.sub(r'\\begin\{.*?\}', '', text) 
-    text = re.sub(r'\\end\{.*?\}', '', text)   
-    text = 
+    text = re.sub(r'\\begin\{.*?\}', '', text)
+    text = re.sub(r'\\end\{.*?\}', '', text)
+    text = re.sub(r'\\item', '', text)
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text)
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text)
+    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
+    
+    # إزالة الرموز واحداً تلو الآخر
+    text = text.replace('*', '')
+    text = text.replace('#', '')
+    text = text.replace('-', '')
+    text = text.replace('_', ' ')
+    text = text.replace('`', '')
+    
+    return text
+
+async def generate_audio_stream(text, voice_code):
+    clean_text = clean_text_for_audio(text)
+    if isinstance(voice_code, tuple) or isinstance(voice_code, list):
+        voice_code = voice_code[0]
+    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
+    mp3_fp = BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
+    return mp3_fp
+
+def speech_to_text(audio_bytes, lang_code):
+    r = sr.Recognizer()
+    try:
+        audio_file = sr.AudioFile(BytesIO(audio_bytes))
+        with audio_file as source:
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = r.record(source)
+            return r.recognize_google(audio_data, language=lang_code)
+    except: return None
+
+@st.cache_resource
+def load_ai_model():
+    try:
+        api_key = None
+        if "GOOGLE_API_KEYS" in st.secrets:
+            keys = st.secrets["GOOGLE_API_KEYS"]
+            if isinstance(keys, list) and len(keys) > 0:
+                api_key 
