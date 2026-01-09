@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. إعدادات الصفحة (أول سطر)
+# 1. إعدادات الصفحة (أول سطر إلزامي)
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
@@ -44,7 +44,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ الخدمات (شيت، درايف، صوت)
+# 🛠️ الخدمات والدوال المساعدة
 # ==========================================
 
 @st.cache_resource
@@ -56,73 +56,132 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except: return None
+        except:
+            return None
     return None
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client: return None, None
+    if not client:
+        return None, None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         daily_pass = str(sheet.sheet1.acell('B1').value).strip()
         return daily_pass, sheet
-    except: return None, None
+    except:
+        return None, None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if not client: return False
+    if not client:
+        return False
     try:
         client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
-    except: return False
+    except:
+        return False
 
-def _log_bg(user_name, user_type, details, log_type="login"):
+# --- دوال التسجيل (تم إصلاح المسافات) ---
+
+def log_login_to_sheet(user_name, user_type, details=""):
     client = get_gspread_client()
-    if not client: return
+    if not client:
+        return
     try:
-        sheet_name = "Logs" if log_type == "login" else "Activity"
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet(sheet_name)
-        except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        sheet = None
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now, user_type, user_name, details])
+    except:
+        pass
+
+def log_activity(user_name, input_type, question_text):
+    client = get_gspread_client()
+    if not client:
+        return
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return 
         
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         
-        if log_type == "login":
-            sheet.append_row([now, user_type, user_name, details])
-        else:
-            sheet.append_row([now, user_name, details[0], str(details[1])[:500]])
-    except: pass
+        final_text = question_text
+        if isinstance(question_text, list):
+            final_text = f"[Image] {question_text[0]}"
+        
+        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+    except:
+        pass
 
-def log_login_to_sheet(user_name, user_type, details=""):
-    threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login")).start()
-
-def log_activity(user_name, input_type, question_text):
-    threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, question_text], "activity")).start()
-
-def _xp_bg(user_name, points):
-    client = get_gspread_client()
-    if not client: return
-    try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except: return
-        cell = sheet.find(user_name)
-        if cell:
-            curr = int(sheet.cell(cell.row, 2).value)
-            sheet.update_cell(cell.row, 2, curr + points)
-        else:
-            sheet.append_row([user_name, points])
-    except: pass
-
+# --- تم إصلاح الخطأ في هذه الدالة تحديداً ---
 def update_xp(user_name, points_to_add):
-    if 'current_xp' in st.session_state:
-        st.session_state.current_xp += points_to_add
-    threading.Thread(target=_xp_bg, args=(user_name, points_to_add)).start()
+    client = get_gspread_client()
+    if not client:
+        return 0
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except:
+            return 0
+        
+        cell = sheet.find(user_name)
+        current_xp = 0
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            current_xp = int(val) if val else 0
+            new_xp = current_xp + points_to_add
+            sheet.update_cell(cell.row, 2, new_xp)
+            return new_xp
+        else:
+            sheet.append_row([user_name, points_to_add])
+            return points_to_add
+    except:
+        return 0
 
 def get_current_xp(user_name):
     client = get_gspread_client()
-    if not client: return 0
+    if not client:
+        return 0
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
-        if cell: return int(sheet.cell(cell.row, 2).value)
-    except: 
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            return int(val) if val else 0
+        return 0
+    except:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client:
+        return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        if not data:
+            return []
+        df = pd.DataFrame(data)
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
+    except:
+        return []
+
+def clear_old_data():
+    client = get_gspread_client()
+    if not client:
+        return False
+    try:
+        for s in ["Logs", "Activity", "Gamification"]:
+            try: 
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                ws.resize(rows=1)
+                
