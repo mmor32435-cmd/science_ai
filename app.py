@@ -172,6 +172,7 @@ def create_certificate(student_name):
     txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
     return txt.encode('utf-8')
 
+# Streaming Effect
 def stream_text_effect(text):
     for word in text.split(" "):
         yield word + " "
@@ -241,39 +242,49 @@ def speech_to_text(audio_bytes, lang_code):
     except: return None
 
 # 🔥 دالة التبديل الذكي للمفاتيح (الأهم لحل مشكلة 429) 🔥
-def smart_generate_content(prompt_content):
-    # جلب جميع المفاتيح المتاحة
-    keys = st.secrets.get("GOOGLE_API_KEYS", [])
-    if not keys and "GOOGLE_API_KEY" in st.secrets:
+def get_working_genai_model():
+    keys = []
+    if "GOOGLE_API_KEYS" in st.secrets:
+        keys = st.secrets["GOOGLE_API_KEYS"]
+    elif "GOOGLE_API_KEY" in st.secrets:
         keys = [st.secrets["GOOGLE_API_KEY"]]
     
-    if not keys:
-        raise Exception("No API Keys found.")
+    if not keys: return None
 
-    # نخلط المفاتيح عشوائياً لتقليل الضغط
     random.shuffle(keys)
 
-    # نجرب المفاتيح واحداً تلو الآخر
     for key in keys:
         try:
             genai.configure(api_key=key)
-            # نحاول استخدام الموديل الأسرع
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            # إذا نجح، نرجع النتيجة فوراً
-            if isinstance(prompt_content, list):
-                return model.generate_content(prompt_content)
-            else:
-                return model.generate_content(str(prompt_content))
-        except Exception as e:
-            # إذا كان الخطأ بسبب الرصيد (429)، نتجاهله ونجرب المفتاح التالي في القائمة
-            if "429" in str(e) or "Quota" in str(e):
-                continue 
-            else:
-                # إذا كان خطأ آخر، ربما نجرب المفتاح التالي أيضاً احتياطياً
-                continue
+            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            
+            # نفضل flash
+            target_model = next((m for m in all_models if 'flash' in m), None)
+            # ثم pro
+            if not target_model: target_model = next((m for m in all_models if 'pro' in m), None)
+            
+            if target_model:
+                return genai.GenerativeModel(target_model)
+        except Exception:
+            continue
+            
+    return None
+
+def smart_generate_content(prompt_content):
+    model = get_working_genai_model()
+    if not model:
+        raise Exception("All API Keys are busy or invalid.")
     
-    # إذا فشلت كل المفاتيح
-    raise Exception("All servers are busy. Please wait 1 minute.")
+    try:
+        return model.generate_content(prompt_content)
+    except Exception as e:
+        time.sleep(1)
+        # محاولة مرة ثانية بمفتاح مختلف
+        model_retry = get_working_genai_model()
+        if model_retry:
+            return model_retry.generate_content(prompt_content)
+        else:
+            raise e
 
 # 🔥 دالة المعالجة المركزية 🔥
 def process_ai_response(user_text, input_type="text"):
@@ -301,7 +312,7 @@ def process_ai_response(user_text, input_type="text"):
         Ref: {ref[:20000]}
         """
         
-        # استخدام الدالة الذكية بدلاً من الموديل الثابت
+        # استخدام الدالة الذكية (smart_generate_content) بدلاً من الموديل الثابت
         if input_type == "image":
              response = smart_generate_content([sys_prompt, user_text[0], user_text[1]])
         else:
@@ -324,150 +335,4 @@ def process_ai_response(user_text, input_type="text"):
             try:
                 parts = response.text.split("```python")
                 final_text = parts[0]
-                plot_code = parts[1].split("```")[0].strip()
-            except: pass
-
-        st.markdown("---")
-        st.write_stream(stream_text_effect(final_text))
-        
-        if dot_code:
-            try: st.graphviz_chart(dot_code)
-            except: pass
-            
-        if plot_code:
-            try:
-                exec_globals = {"plt": plt, "pd": pd}
-                exec(plot_code, exec_globals)
-                if 'fig' in exec_globals: st.pyplot(exec_globals['fig'])
-            except: pass
-
-        voice_config = get_voice_config(st.session_state.language)
-        voice_name_only = voice_config[0] 
-        audio = asyncio.run(generate_audio_stream(final_text, voice_name_only))
-        st.audio(audio, format='audio/mp3', autoplay=True)
-        
-    except Exception as e:
-        if "429" in str(e):
-            st.error("🚦 ضغط شديد على السيرفر. جاري التبديل لمسار آخر.. حاول مرة ثانية فوراً.")
-        else:
-            st.error(f"Error: {e}")
-
-
-# ==========================================
-# 🎨 الواجهة الرئيسية
-# ==========================================
-
-def draw_header():
-    st.markdown("""
-        <style>
-        .header-container {
-            padding: 1.5rem;
-            border-radius: 15px;
-            background: linear-gradient(120deg, #89f7fe 0%, #66a6ff 100%);
-            color: #1a2a6c;
-            text-align: center;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            margin-bottom: 1rem;
-        }
-        .main-title {
-            font-size: 2.2rem;
-            font-weight: 900;
-            margin: 0;
-            font-family: 'Segoe UI', sans-serif;
-        }
-        .sub-text {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-top: 5px;
-        }
-        </style>
-        <div class="header-container">
-            <div class="main-title">🧬 AI Science Tutor</div>
-            <div class="sub-text">Under Supervision of: Mr. Elsayed Elbadawy</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-if "auth_status" not in st.session_state:
-    st.session_state.auth_status = False
-    st.session_state.user_type = "none"
-    st.session_state.chat_history = []
-    st.session_state.student_grade = ""
-    st.session_state.study_lang = ""
-    st.session_state.quiz_active = False
-    st.session_state.current_quiz_question = ""
-    st.session_state.current_xp = 0
-    st.session_state.last_audio_bytes = None
-    st.session_state.language = "العربية" 
-
-# --- شاشة الدخول ---
-if not st.session_state.auth_status:
-    draw_header()
-    col1, col2, col3 = st.columns([1,2,1])
-    with col2:
-        st.info(f"💡 {random.choice(DAILY_FACTS)}")
-        
-        with st.form("login_form"):
-            student_name = st.text_input("Name / اسمك الثلاثي:")
-            all_stages = ["الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي",
-                          "الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي",
-                          "الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
-            selected_grade = st.selectbox("Grade / الصف الدراسي:", all_stages)
-            study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
-            pwd = st.text_input("Access Code / كود الدخول:", type="password")
-            submit_login = st.form_submit_button("Login / دخول", use_container_width=True)
-        
-        if submit_login:
-            if (not student_name) and pwd != TEACHER_MASTER_KEY:
-                st.warning("⚠️ يرجى كتابة الاسم")
-            else:
-                with st.spinner("Connecting..."):
-                    daily_pass, _ = get_sheet_data()
-                    
-                    if pwd == TEACHER_MASTER_KEY:
-                        u_type = "teacher"; valid = True
-                    elif daily_pass and pwd == daily_pass:
-                        u_type = "student"; valid = True
-                    else:
-                        u_type = "none"; valid = False
-                    
-                    if valid:
-                        st.session_state.auth_status = True
-                        st.session_state.user_type = u_type
-                        st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
-                        st.session_state.student_grade = selected_grade
-                        st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
-                        st.session_state.start_time = time.time()
-                        log_login_to_sheet(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
-                        try: st.session_state.current_xp = get_current_xp(st.session_state.user_name)
-                        except: st.session_state.current_xp = 0
-                        st.success(f"Welcome {st.session_state.user_name}!"); time.sleep(0.5); st.rerun()
-                    else:
-                        st.error("Code Error")
-    st.stop()
-
-# --- الوقت ---
-time_up = False
-remaining_minutes = 0
-if st.session_state.user_type == "student":
-    elapsed = time.time() - st.session_state.start_time
-    allowed = SESSION_DURATION_MINUTES * 60
-    if elapsed > allowed: time_up = True
-    else: remaining_minutes = int((allowed - elapsed) // 60)
-
-if time_up and st.session_state.user_type == "student":
-    st.error("Session Expired"); st.stop()
-
-# --- التطبيق ---
-draw_header()
-
-col_lang, col_stat = st.columns([2,1])
-with col_lang:
-    st.session_state.language = st.radio("Speaking Language / لغة التحدث:", ["العربية", "English"], horizontal=True)
-
-with st.sidebar:
-    st.write(f"👤 **{st.session_state.user_name}**")
-    if st.session_state.user_type == "student":
-        st.metric("🌟 Your XP", st.session_state.current_xp)
-        if st.session_state.current_xp >= 100:
-            st.success("🎉 100 XP Reached!")
-            if 
+                plot_code = 
