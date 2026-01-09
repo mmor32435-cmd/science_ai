@@ -81,14 +81,12 @@ def update_daily_password(new_pass):
     except:
         return False
 
-# --- دوال التسجيل (تم إصلاح المسافات) ---
+# --- دوال التسجيل في الخلفية (Thread Functions) ---
 
-def log_login_to_sheet(user_name, user_type, details=""):
+def task_log_login(user_name, user_type, details):
     client = get_gspread_client()
-    if not client:
-        return
+    if not client: return
     try:
-        sheet = None
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
         except:
@@ -100,15 +98,14 @@ def log_login_to_sheet(user_name, user_type, details=""):
     except:
         pass
 
-def log_activity(user_name, input_type, question_text):
+def task_log_activity(user_name, input_type, question_text):
     client = get_gspread_client()
-    if not client:
-        return
+    if not client: return
     try:
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
         except:
-            return 
+            return
         
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -116,72 +113,46 @@ def log_activity(user_name, input_type, question_text):
         final_text = question_text
         if isinstance(question_text, list):
             final_text = f"[Image] {question_text[0]}"
-        
+            
         sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
     except:
         pass
 
-# --- تم إصلاح الخطأ في هذه الدالة تحديداً ---
-def update_xp(user_name, points_to_add):
+def task_update_xp(user_name, points):
     client = get_gspread_client()
-    if not client:
-        return 0
+    if not client: return
     try:
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         except:
-            return 0
+            return
         
         cell = sheet.find(user_name)
-        current_xp = 0
         if cell:
-            val = sheet.cell(cell.row, 2).value
-            current_xp = int(val) if val else 0
-            new_xp = current_xp + points_to_add
-            sheet.update_cell(cell.row, 2, new_xp)
-            return new_xp
+            curr = int(sheet.cell(cell.row, 2).value)
+            sheet.update_cell(cell.row, 2, curr + points)
         else:
-            sheet.append_row([user_name, points_to_add])
-            return points_to_add
+            sheet.append_row([user_name, points])
     except:
-        return 0
+        pass
+
+# --- دوال الواجهة للتسجيل ---
+
+def log_login_to_sheet(user_name, user_type, details=""):
+    threading.Thread(target=task_log_login, args=(user_name, user_type, details)).start()
+
+def log_activity(user_name, input_type, question_text):
+    threading.Thread(target=task_log_activity, args=(user_name, input_type, question_text)).start()
+
+def update_xp(user_name, points_to_add):
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points_to_add
+    threading.Thread(target=task_update_xp, args=(user_name, points_to_add)).start()
 
 def get_current_xp(user_name):
     client = get_gspread_client()
-    if not client:
-        return 0
+    if not client: return 0
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            return int(val) if val else 0
-        return 0
-    except:
-        return 0
-
-def get_leaderboard():
-    client = get_gspread_client()
-    if not client:
-        return []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        data = sheet.get_all_records()
-        if not data:
-            return []
-        df = pd.DataFrame(data)
-        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
-        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
-    except:
-        return []
-
-def clear_old_data():
-    client = get_gspread_client()
-    if not client:
-        return False
-    try:
-        for s in ["Logs", "Activity", "Gamification"]:
-            try: 
-                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
-                ws.resize(rows=1)
-                
+        
