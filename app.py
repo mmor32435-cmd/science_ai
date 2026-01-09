@@ -56,57 +56,72 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except: return None
+        except:
+            return None
     return None
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client: return None, None
+    if not client:
+        return None, None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         daily_pass = str(sheet.sheet1.acell('B1').value).strip()
         return daily_pass, sheet
-    except: return None, None
+    except:
+        return None, None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if not client: return False
+    if not client:
+        return False
     try:
         client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
-    except: return False
+    except:
+        return False
 
 # --- دوال التسجيل في الخلفية ---
 
 def _log_login_bg(user_name, user_type, details):
     client = get_gspread_client()
-    if client:
+    if not client: return
+    try:
+        sheet = None
         try:
-            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
-            
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_type, user_name, details])
-        except: pass
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now, user_type, user_name, details])
+    except:
+        pass
 
 def log_login_to_sheet(user_name, user_type, details=""):
     threading.Thread(target=_log_login_bg, args=(user_name, user_type, details)).start()
 
 def _log_activity_bg(user_name, input_type, question_text):
     client = get_gspread_client()
-    if client:
+    if not client: return
+    try:
+        sheet = None
         try:
-            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-            except: return
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        final_text = question_text
+        if isinstance(question_text, list):
+            final_text = f"[Image] {question_text[0]}"
             
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            
-            final_text = question_text
-            if isinstance(question_text, list): final_text = f"[Image] {question_text[0]}"
-            sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
-        except: pass
+        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
+    except:
+        pass
 
 def log_activity(user_name, input_type, question_text):
     threading.Thread(target=_log_activity_bg, args=(user_name, input_type, question_text)).start()
@@ -115,17 +130,111 @@ def _update_xp_bg(user_name, points):
     client = get_gspread_client()
     if not client: return
     try:
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except: return
+        sheet = None
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except:
+            return
+        
         cell = sheet.find(user_name)
         if cell:
             curr = int(sheet.cell(cell.row, 2).value)
             sheet.update_cell(cell.row, 2, curr + points)
         else:
             sheet.append_row([user_name, points])
-    except: pass
+    except:
+        pass
 
 def update_xp(user_name, points_to_add):
     if 'current_xp' in st.session_state:
         st.session_state.current_xp += points_to_add
-    
+    threading.Thread(target=_update_xp_bg, args=(user_name, points_to_add)).start()
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        if cell:
+            return int(sheet.cell(cell.row, 2).value)
+        return 0
+    except:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
+    except: return []
+
+def clear_old_data():
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        for s in ["Logs", "Activity", "Gamification"]:
+            try: 
+                ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
+                ws.resize(rows=1); ws.resize(rows=100)
+            except: pass
+        return True
+    except: return False
+
+def get_stats_for_admin():
+    client = get_gspread_client()
+    if not client: return 0, []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME)
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
+    except: return 0, []
+
+def get_chat_text(history):
+    text = "--- Chat History ---\n\n"
+    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
+    return text
+
+def create_certificate(student_name):
+    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
+    return txt.encode('utf-8')
+
+# Streaming Effect
+def stream_text_effect(text):
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(0.04)
+
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=['https://www.googleapis.com/auth/drive.readonly'])
+            return build('drive', 'v3', credentials=creds)
+        except: return None
+    return None
+
+def list_drive_files(service, folder_id):
+    try: return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
+    except: return []
+
+def download_pdf_text(service, file_id):
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_io = BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        done = False
+        while done is False: status, done = downloader.next_chunk()
+        file_io.seek(0)
+        reader = PyPDF2.PdfReader(file_io)
+        text = ""
+        for page in reader.pages: text += page.extract_text() + "\n"
+        return text
+    except: 
