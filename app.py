@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. إعدادات الصفحة (أول سطر)
+# 1. إعدادات الصفحة
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
@@ -76,12 +76,6 @@ def update_daily_password(new_pass):
         return True
     except: return False
 
-def log_login_to_sheet(user_name, user_type, details=""):
-    threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login")).start()
-
-def log_activity(user_name, input_type, question_text):
-    threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, question_text], "activity")).start()
-
 def _log_bg(user_name, user_type, details, log_type="login"):
     client = get_gspread_client()
     if not client: return
@@ -99,10 +93,11 @@ def _log_bg(user_name, user_type, details, log_type="login"):
             sheet.append_row([now, user_name, details[0], str(details[1])[:500]])
     except: pass
 
-def update_xp(user_name, points_to_add):
-    if 'current_xp' in st.session_state:
-        st.session_state.current_xp += points_to_add
-    threading.Thread(target=_xp_bg, args=(user_name, points_to_add)).start()
+def log_login_to_sheet(user_name, user_type, details=""):
+    threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login")).start()
+
+def log_activity(user_name, input_type, question_text):
+    threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, question_text], "activity")).start()
 
 def _xp_bg(user_name, points):
     client = get_gspread_client()
@@ -117,6 +112,11 @@ def _xp_bg(user_name, points):
         else:
             sheet.append_row([user_name, points])
     except: pass
+
+def update_xp(user_name, points_to_add):
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points_to_add
+    threading.Thread(target=_xp_bg, args=(user_name, points_to_add)).start()
 
 def get_current_xp(user_name):
     client = get_gspread_client()
@@ -240,9 +240,9 @@ def speech_to_text(audio_bytes, lang_code):
             return r.recognize_google(audio_data, language=lang_code)
     except: return None
 
-# 🔥 نظام الذكاء الاصطناعي الجديد (تبديل المفاتيح الحقيقي) 🔥
+# 🔥 دالة الذكاء الاصطناعي الذكية (تكتشف الموديلات وتدور المفاتيح) 🔥
 def get_working_genai_model():
-    # 1. جلب المفاتيح
+    # 1. قائمة المفاتيح
     keys = []
     if "GOOGLE_API_KEYS" in st.secrets:
         keys = st.secrets["GOOGLE_API_KEYS"]
@@ -251,23 +251,36 @@ def get_working_genai_model():
     
     if not keys: return None
 
-    # 2. خلط المفاتيح عشوائياً لتوزيع الحمل
+    # خلط المفاتيح
     random.shuffle(keys)
 
-    # 3. تجربة المفاتيح واحداً تلو الآخر
+    # 2. تجربة كل مفتاح
     for key in keys:
         try:
             genai.configure(api_key=key)
-            # تجربة موديل Flash
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            return model
-        except:
-            continue # جرب المفتاح التالي
+            
+            # 3. البحث عن موديل متاح في هذا المفتاح (الحل لخطأ 404)
+            available_models = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    available_models.append(m.name)
+            
+            # نفضل flash، ثم pro، ثم أي شيء
+            target_model = next((m for m in available_models if 'flash' in m), None)
+            if not target_model:
+                target_model = next((m for m in available_models if 'pro' in m), None)
+            if not target_model and available_models:
+                target_model = available_models[0]
+            
+            if target_model:
+                return genai.GenerativeModel(target_model)
+                
+        except Exception:
+            continue # المفتاح هذا لا يعمل، جرب التالي
             
     return None
 
 def smart_generate_content(prompt_content):
-    # محاولة الاتصال بالموديل باستخدام الدالة الذكية
     model = get_working_genai_model()
     if not model:
         raise Exception("All API Keys are busy or invalid.")
@@ -275,11 +288,11 @@ def smart_generate_content(prompt_content):
     try:
         return model.generate_content(prompt_content)
     except Exception as e:
-        # إذا فشل الموديل الحالي، نحاول مرة أخرى بإعادة الاتصال (سيختار مفتاحاً مختلفاً)
         time.sleep(1)
-        model = get_working_genai_model() # محاولة مفتاح آخر
-        if model:
-            return model.generate_content(prompt_content)
+        # محاولة مرة ثانية بمفتاح مختلف
+        model_retry = get_working_genai_model()
+        if model_retry:
+            return model_retry.generate_content(prompt_content)
         else:
             raise e
 
@@ -309,7 +322,6 @@ def process_ai_response(user_text, input_type="text"):
         Ref: {ref[:20000]}
         """
         
-        # استخدام الدالة الذكية بدلاً من الموديل الثابت
         if input_type == "image":
              response = smart_generate_content([sys_prompt, user_text[0], user_text[1]])
         else:
@@ -596,7 +608,7 @@ with tab4:
             """
             try:
                 with st.spinner("Generating..."):
-                    # استخدام الدالة الذكية هنا
+                    # استخدام الدالة الذكية بدلاً من المتغير الثابت
                     response = smart_generate_content(q_prompt)
                     st.session_state.current_quiz_question = response.text
                     st.session_state.quiz_active = True
