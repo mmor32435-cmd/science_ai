@@ -44,7 +44,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ الخدمات (Backend)
+# 🛠️ الخدمات (شيت، درايف، صوت)
 # ==========================================
 
 @st.cache_resource
@@ -56,97 +56,67 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except:
-            return None
+        except: return None
     return None
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client:
-        return None, None
+    if not client: return None, None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         daily_pass = str(sheet.sheet1.acell('B1').value).strip()
         return daily_pass, sheet
-    except:
-        return None, None
+    except: return None, None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if not client:
-        return False
+    if not client: return False
     try:
         client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
-    except:
-        return False
-
-# --- دوال التسجيل في الخلفية (Threaded) ---
-
-def _log_login_bg(user_name, user_type, details):
-    client = get_gspread_client()
-    if client:
-        try:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except:
-                sheet = client.open(CONTROL_SHEET_NAME).sheet1
-            
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, user_type, user_name, details])
-        except:
-            pass
+    except: return False
 
 def log_login_to_sheet(user_name, user_type, details=""):
-    threading.Thread(target=_log_login_bg, args=(user_name, user_type, details)).start()
-
-def _log_activity_bg(user_name, input_type, question_text):
-    client = get_gspread_client()
-    if client:
-        try:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-            except:
-                return 
-            
-            tz = pytz.timezone('Africa/Cairo')
-            now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            
-            final_text = question_text
-            if isinstance(question_text, list):
-                final_text = f"[Image] {question_text[0]}"
-            
-            sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
-        except:
-            pass
+    threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login")).start()
 
 def log_activity(user_name, input_type, question_text):
-    threading.Thread(target=_log_activity_bg, args=(user_name, input_type, question_text)).start()
+    threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, question_text], "activity")).start()
 
-def _update_xp_bg(user_name, points_to_add):
+def _log_bg(user_name, user_type, details, log_type="login"):
     client = get_gspread_client()
-    if client:
-        try:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-            except:
-                return
-            
-            cell = sheet.find(user_name)
-            if cell:
-                current_xp = int(sheet.cell(cell.row, 2).value)
-                sheet.update_cell(cell.row, 2, current_xp + points_to_add)
-            else:
-                sheet.append_row([user_name, points_to_add])
-        except:
-            pass
+    if not client: return
+    try:
+        sheet_name = "Logs" if log_type == "login" else "Activity"
+        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet(sheet_name)
+        except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        if log_type == "login":
+            sheet.append_row([now, user_type, user_name, details])
+        else:
+            sheet.append_row([now, user_name, details[0], str(details[1])[:500]])
+    except: pass
 
 def update_xp(user_name, points_to_add):
     if 'current_xp' in st.session_state:
         st.session_state.current_xp += points_to_add
-    threading.Thread(target=_update_xp_bg, args=(user_name, points_to_add)).start()
-    return st.session_state.current_xp
+    threading.Thread(target=_xp_bg, args=(user_name, points_to_add)).start()
+
+def _xp_bg(user_name, points):
+    client = get_gspread_client()
+    if not client: return
+    try:
+        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except: return
+        cell = sheet.find(user_name)
+        if cell:
+            curr = int(sheet.cell(cell.row, 2).value)
+            sheet.update_cell(cell.row, 2, curr + points)
+        else:
+            sheet.append_row([user_name, points])
+    except: pass
 
 def get_current_xp(user_name):
     client = get_gspread_client()
@@ -154,11 +124,9 @@ def get_current_xp(user_name):
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
-        if cell:
-            return int(sheet.cell(cell.row, 2).value)
-        return 0
-    except:
-        return 0
+        if cell: return int(sheet.cell(cell.row, 2).value)
+    except: return 0
+    return 0
 
 def get_leaderboard():
     client = get_gspread_client()
@@ -166,14 +134,10 @@ def get_leaderboard():
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         data = sheet.get_all_records()
-        if not data: return []
-        
         df = pd.DataFrame(data)
         df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
-        top_5 = df.sort_values(by='XP', ascending=False).head(5)
-        return top_5.to_dict('records')
-    except:
-        return []
+        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
+    except: return []
 
 def clear_old_data():
     client = get_gspread_client()
@@ -182,39 +146,26 @@ def clear_old_data():
         for s in ["Logs", "Activity", "Gamification"]:
             try: 
                 ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
-                ws.resize(rows=1)
-                ws.resize(rows=100)
+                ws.resize(rows=1); ws.resize(rows=100)
             except: pass
         return True
     except: return False
 
 def get_stats_for_admin():
     client = get_gspread_client()
-    if not client:
-        return 0, []
+    if not client: return 0, []
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
-        
-        try:
-            logs = sheet.worksheet("Logs").get_all_values()
-            count = len(logs) - 1
-        except:
-            count = 0
-            
-        try:
-            qs = sheet.worksheet("Activity").get_all_values()
-            last_qs = qs[-5:]
-        except:
-            last_qs = []
-            
-        return count, last_qs
-    except:
-        return 0, []
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
+    except: return 0, []
 
 def get_chat_text(history):
     text = "--- Chat History ---\n\n"
-    for q, a in history:
-        text += f"Student: {q}\nAI Tutor: {a}\n\n"
+    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
     return text
 
 def create_certificate(student_name):
@@ -289,39 +240,48 @@ def speech_to_text(audio_bytes, lang_code):
             return r.recognize_google(audio_data, language=lang_code)
     except: return None
 
-@st.cache_resource
-def load_ai_model():
-    try:
-        api_key = None
-        if "GOOGLE_API_KEYS" in st.secrets:
-            keys = st.secrets["GOOGLE_API_KEYS"]
-            if isinstance(keys, list) and len(keys) > 0:
-                api_key = random.choice(keys)
-        elif "GOOGLE_API_KEY" in st.secrets:
-            api_key = st.secrets["GOOGLE_API_KEY"]
+# 🔥 نظام الذكاء الاصطناعي الجديد (تبديل المفاتيح الحقيقي) 🔥
+def get_working_genai_model():
+    # 1. جلب المفاتيح
+    keys = []
+    if "GOOGLE_API_KEYS" in st.secrets:
+        keys = st.secrets["GOOGLE_API_KEYS"]
+    elif "GOOGLE_API_KEY" in st.secrets:
+        keys = [st.secrets["GOOGLE_API_KEY"]]
+    
+    if not keys: return None
+
+    # 2. خلط المفاتيح عشوائياً لتوزيع الحمل
+    random.shuffle(keys)
+
+    # 3. تجربة المفاتيح واحداً تلو الآخر
+    for key in keys:
+        try:
+            genai.configure(api_key=key)
+            # تجربة موديل Flash
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            return model
+        except:
+            continue # جرب المفتاح التالي
             
-        if api_key:
-            genai.configure(api_key=api_key)
-            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            active_model_name = next((m for m in all_models if 'flash' in m), None)
-            if not active_model_name:
-                active_model_name = next((m for m in all_models if 'pro' in m), all_models[0])
-            return genai.GenerativeModel(active_model_name)
-    except: pass
     return None
 
-def safe_generate_content(model, prompt):
-    if not model: raise Exception("AI Not Connected")
-    max_retries = 3
-    for attempt in range(max_retries):
-        try: return model.generate_content(prompt)
-        except Exception as e:
-            if "429" in str(e) or "Quota" in str(e):
-                time.sleep(1)
-                st.cache_resource.clear()
-                continue
-            else: raise e
-    raise Exception("Busy")
+def smart_generate_content(prompt_content):
+    # محاولة الاتصال بالموديل باستخدام الدالة الذكية
+    model = get_working_genai_model()
+    if not model:
+        raise Exception("All API Keys are busy or invalid.")
+    
+    try:
+        return model.generate_content(prompt_content)
+    except Exception as e:
+        # إذا فشل الموديل الحالي، نحاول مرة أخرى بإعادة الاتصال (سيختار مفتاحاً مختلفاً)
+        time.sleep(1)
+        model = get_working_genai_model() # محاولة مفتاح آخر
+        if model:
+            return model.generate_content(prompt_content)
+        else:
+            raise e
 
 # 🔥 دالة المعالجة المركزية 🔥
 def process_ai_response(user_text, input_type="text"):
@@ -329,11 +289,6 @@ def process_ai_response(user_text, input_type="text"):
     st.toast("🧠 Thinking...", icon="🤔")
     
     try:
-        model = load_ai_model()
-        if not model:
-            st.error("Service Unavailable")
-            return
-
         role_lang = "Arabic" if st.session_state.language == "العربية" else "English"
         ref = st.session_state.get("ref_text", "")
         student_name = st.session_state.user_name
@@ -354,10 +309,11 @@ def process_ai_response(user_text, input_type="text"):
         Ref: {ref[:20000]}
         """
         
+        # استخدام الدالة الذكية بدلاً من الموديل الثابت
         if input_type == "image":
-             response = safe_generate_content(model, [sys_prompt, user_text[0], user_text[1]])
+             response = smart_generate_content([sys_prompt, user_text[0], user_text[1]])
         else:
-            response = safe_generate_content(model, f"{sys_prompt}\nInput: {user_text}")
+            response = smart_generate_content(f"{sys_prompt}\nInput: {user_text}")
         
         st.session_state.chat_history.append((str(user_text)[:50], response.text))
         
@@ -621,7 +577,6 @@ with tab4:
     st.info(f"Quiz for: **{st.session_state.student_grade}**")
     
     col_q1, col_q2 = st.columns(2)
-    model = load_ai_model() 
     
     with col_q1:
         if st.button("🎲 Single Question", use_container_width=True):
@@ -641,7 +596,8 @@ with tab4:
             """
             try:
                 with st.spinner("Generating..."):
-                    response = safe_generate_content(model, q_prompt)
+                    # استخدام الدالة الذكية هنا
+                    response = smart_generate_content(q_prompt)
                     st.session_state.current_quiz_question = response.text
                     st.session_state.quiz_active = True
                     st.rerun()
@@ -663,7 +619,7 @@ with tab4:
                     Include Model Answers at the very end.
                     Language: Arabic. NO LaTeX code.
                     """
-                    exam_res = safe_generate_content(model, exam_prompt)
+                    exam_res = smart_generate_content(exam_prompt)
                     st.download_button("⬇️ Download Exam (TXT)", exam_res.text, "Full_Exam.txt")
             except: st.error("Failed to generate exam.")
 
@@ -685,7 +641,7 @@ with tab4:
                 Lang: Arabic.
                 """
                 with st.spinner("Checking..."):
-                    result = safe_generate_content(model, check_prompt)
+                    result = smart_generate_content(check_prompt)
                     st.success("📝 النتيجة:")
                     st.write(result.text)
                     if "صح" in result.text or "Correct" in result.text or "10/10" in result.text:
