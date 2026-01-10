@@ -3,7 +3,7 @@ import streamlit as st
 # ==========================================
 # 1. إعدادات الصفحة
 # ==========================================
-st.set_page_config(page_title="AI Diagnosis Mode", page_icon="🛠️", layout="wide")
+st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
 import asyncio
@@ -39,6 +39,8 @@ DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 DAILY_FACTS = [
     "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
+    "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
 ]
 
 # ==========================================
@@ -48,13 +50,15 @@ DAILY_FACTS = [
 # --- جداول جوجل ---
 @st.cache_resource
 def get_gspread_client():
-    if "gcp_service_account" not in st.secrets: return None
+    if "gcp_service_account" not in st.secrets:
+        return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         scope = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
         return gspread.authorize(creds)
-    except: return None
+    except Exception:
+        return None
 
 def get_sheet_data():
     client = get_gspread_client()
@@ -63,7 +67,80 @@ def get_sheet_data():
         sheet = client.open(CONTROL_SHEET_NAME)
         val = sheet.sheet1.acell('B1').value
         return str(val).strip()
-    except: return None
+    except Exception:
+        return None
+
+# --- التسجيل (Logs) ---
+def _bg_task(task_type, data):
+    if "gcp_service_account" not in st.secrets:
+        return
+
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        client = gspread.authorize(service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']))
+        wb = client.open(CONTROL_SHEET_NAME)
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+        if task_type == "login":
+            try: sheet = wb.worksheet("Logs")
+            except: sheet = wb.sheet1
+            sheet.append_row([now_str, data['type'], data['name'], data['details']])
+
+        elif task_type == "activity":
+            try: sheet = wb.worksheet("Activity")
+            except: return
+            clean_text = str(data['text'])[:1000]
+            sheet.append_row([now_str, data['name'], data['input_type'], clean_text])
+
+        elif task_type == "xp":
+            try: sheet = wb.worksheet("Gamification")
+            except: return
+            cell = sheet.find(data['name'])
+            if cell:
+                val = sheet.cell(cell.row, 2).value
+                current_xp = int(val) if val else 0
+                sheet.update_cell(cell.row, 2, current_xp + data['points'])
+            else:
+                sheet.append_row([data['name'], data['points']])
+    except Exception:
+        pass
+
+def log_login(user_name, user_type, details):
+    threading.Thread(target=_bg_task, args=("login", {'name': user_name, 'type': user_type, 'details': details})).start()
+
+def log_activity(user_name, input_type, text):
+    threading.Thread(target=_bg_task, args=("activity", {'name': user_name, 'input_type': input_type, 'text': text})).start()
+
+def update_xp(user_name, points):
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points
+    threading.Thread(target=_bg_task, args=("xp", {'name': user_name, 'points': points})).start()
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        val = sheet.cell(cell.row, 2).value
+        return int(val) if val else 0
+    except Exception:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty: return []
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
+    except Exception:
+        return []
 
 # --- Google Drive ---
 @st.cache_resource
@@ -73,14 +150,16 @@ def get_drive_service():
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
         return build('drive', 'v3', credentials=creds)
-    except: return None
+    except Exception:
+        return None
 
 def list_drive_files(service, folder_id):
     try:
         q = f"'{folder_id}' in parents and trashed = false"
         res = service.files().list(q=q, fields="files(id, name)").execute()
         return res.get('files', [])
-    except: return []
+    except Exception:
+        return []
 
 def download_pdf_text(service, file_id):
     try:
@@ -88,21 +167,28 @@ def download_pdf_text(service, file_id):
         fh = BytesIO()
         downloader = MediaIoBaseDownload(fh, req)
         done = False
-        while not done: _, done = downloader.next_chunk()
+        while not done:
+            _, done = downloader.next_chunk()
         fh.seek(0)
         reader = PyPDF2.PdfReader(fh)
-        return "".join([p.extract_text() for p in reader.pages])
-    except: return ""
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text()
+        return text
+    except Exception:
+        return ""
 
 # ==========================================
 # 🔊 الصوت
 # ==========================================
 async def generate_audio_stream(text, voice_code):
     clean = re.sub(r'[*#_`\[\]()><=]', ' ', text)
+    clean = re.sub(r'\\.*', '', clean)
     comm = edge_tts.Communicate(clean, voice_code, rate="-5%")
     mp3 = BytesIO()
     async for chunk in comm.stream():
-        if chunk["type"] == "audio": mp3.write(chunk["data"])
+        if chunk["type"] == "audio":
+            mp3.write(chunk["data"])
     return mp3
 
 def speech_to_text(audio_bytes, lang_code):
@@ -110,78 +196,92 @@ def speech_to_text(audio_bytes, lang_code):
     try:
         with sr.AudioFile(BytesIO(audio_bytes)) as source:
             r.adjust_for_ambient_noise(source, duration=0.5)
-            return r.recognize_google(r.record(source), language=lang_code)
-    except: return None
-
-# ==========================================
-# 🛑🛑🛑 الكود التشخيصي (Diagnostic) 🛑🛑🛑
-# ==========================================
-def get_working_model():
-    st.markdown("### 🛠 بدء فحص الاتصال...")
-    
-    # 1. فحص وجود المفاتيح
-    keys = st.secrets.get("GOOGLE_API_KEYS", [])
-    if not keys:
-        st.error("❌ لا توجد مفاتيح في secrets.toml!")
+            audio_data = r.record(source)
+            return r.recognize_google(audio_data, language=lang_code)
+    except Exception:
         return None
-    else:
-        st.success(f"✅ تم العثور على {len(keys)} مفاتيح API.")
 
-    models = ['gemini-1.5-flash', 'gemini-pro']
-
-    # 2. تجربة كل مفتاح وكل موديل
-    for i, key in enumerate(keys):
-        st.write(f"🔄 **تجربة المفتاح رقم {i+1}**...")
-        genai.configure(api_key=key)
-        
-        for model_name in models:
-            try:
-                # محاولة الاتصال
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content("Hi")
-                
-                # إذا وصلنا هنا، يعني الاتصال نجح
-                st.success(f"🚀 نجح الاتصال! (الموديل: {model_name})")
-                return model
-            
-            except Exception as e:
-                # طباعة الخطأ بالتفصيل الممل
-                st.error(f"❌ فشل {model_name} مع المفتاح {i+1}.")
-                st.code(f"نص الخطأ: {str(e)}")
-                
-    st.error("🛑 انتهت جميع المحاولات بالفشل. يرجى قراءة الأخطاء أعلاه وارسالها للمطور.")
-    return None
+# ==========================================
+# 🧠 الذكاء الاصطناعي (تم التعديل للنموذج القديم gemini-pro)
+# ==========================================
+def get_api_key():
+    keys = st.secrets.get("GOOGLE_API_KEYS", [])
+    if not keys: return None
+    return random.choice(keys)
 
 def process_ai_response(user_text, input_type="text"):
-    # دالة المعالجة تستدعي التشخيص
-    try:
-        model = get_working_model()
-        if not model:
-            return
+    log_activity(st.session_state.user_name, input_type, user_text)
+    
+    with st.spinner("🧠 جاري المعالجة..."):
+        try:
+            key = get_api_key()
+            if not key:
+                st.error("المفاتيح مفقودة")
+                return
+            
+            genai.configure(api_key=key)
 
-        st.info("جاري توليد الإجابة...")
-        base_prompt = "Answer in Arabic. Be concise."
-        
-        if input_type == "image":
-             resp = model.generate_content([base_prompt, user_text[0], user_text[1]])
-        else:
-            resp = model.generate_content(f"{base_prompt}\nUser: {user_text}")
-        
-        st.markdown("---")
-        st.write(resp.text)
+            lang = st.session_state.language
+            ref = st.session_state.get("ref_text", "")
+            grade = st.session_state.get("student_grade", "General")
+            lang_instr = "Arabic" if lang == "العربية" else "English"
+            
+            base_prompt = f"""
+            Role: Science Tutor. Grade: {grade}.
+            Context: {ref[:10000]}
+            Instructions: Answer in {lang_instr}. Be helpful.
+            """
+            
+            resp = None
+            
+            if input_type == "image":
+                 # استخدام gemini-pro-vision للصور (يدعم النسخ القديمة)
+                 model = genai.GenerativeModel('gemini-pro-vision')
+                 resp = model.generate_content([base_prompt, user_text[0], user_text[1]])
+            else:
+                # استخدام gemini-pro للنصوص (يدعم النسخ القديمة)
+                model = genai.GenerativeModel('gemini-pro')
+                resp = model.generate_content(f"{base_prompt}\nStudent: {user_text}")
+            
+            full_text = resp.text
+            st.session_state.chat_history.append((str(user_text)[:50], full_text))
+            
+            st.markdown("---")
+            
+            def stream():
+                for w in full_text.split(" "):
+                    yield w + " "
+                    time.sleep(0.02)
+            st.write_stream(stream())
+            
+            # الصوت
+            vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-AndrewNeural"
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                audio = loop.run_until_complete(generate_audio_stream(full_text[:400], vc))
+                st.audio(audio, format='audio/mp3', autoplay=True)
+            except Exception:
+                pass
 
-    except Exception as e:
-        st.error(f"خطأ أثناء التوليد: {e}")
+        except Exception as e:
+            st.error(f"حدث خطأ: {e}")
 
 # ==========================================
 # 🎨 الواجهة (UI)
 # ==========================================
 def draw_header():
-    st.title("🛠️ وضع التشخيص وكشف الأخطاء")
+    st.markdown("""
+        <div style='background:linear-gradient(135deg,#6a11cb,#2575fc);padding:1.5rem;border-radius:15px;text-align:center;color:white;margin-bottom:1rem;'>
+            <h1 style='margin:0;'>🧬 AI Science Tutor</h1>
+        </div>
+    """, unsafe_allow_html=True)
 
 if "auth_status" not in st.session_state:
     st.session_state.update({
-        "auth_status": False, "user_type": "none", "last_audio_bytes": None, "language": "العربية"
+        "auth_status": False, "user_type": "none", "chat_history": [],
+        "student_grade": "", "current_xp": 0, "last_audio_bytes": None,
+        "language": "العربية", "ref_text": ""
     })
 
 # --- تسجيل الدخول ---
@@ -189,25 +289,11 @@ if not st.session_state.auth_status:
     draw_header()
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
+        st.info(f"💡 {random.choice(DAILY_FACTS)}")
         with st.form("login"):
+            name = st.text_input("الاسم:")
+            grade = st.selectbox("الصف:", ["الرابع", "الخامس", "السادس", "الأول ع", "الثاني ع", "الثالث ع", "ثانوي"])
             code = st.text_input("الكود:", type="password")
             if st.form_submit_button("دخول"):
-                if code == TEACHER_MASTER_KEY or code == get_sheet_data():
-                    st.session_state.auth_status = True
-                    st.rerun()
-                else:
-                    st.error("الكود خطأ")
-    st.stop()
-
-# --- التطبيق ---
-draw_header()
-
-st.warning("⚠️ هذا الإصدار مخصص لكشف سبب فشل الاتصال.")
-st.write("جرب كتابة أي شيء في الأسفل لتبدأ عملية الفحص:")
-
-q = st.text_input("اكتب رسالة تجريبية:")
-if st.button("ابـدأ الفحـص"):
-    if q:
-        process_ai_response(q, "text")
-    else:
-        process_ai_response("Test", "text")
+                db_pass = get_sheet_data()
+                
