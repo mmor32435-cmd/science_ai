@@ -14,10 +14,8 @@ import hashlib
 import shutil
 from io import BytesIO
 from datetime import datetime
-from typing import Optional, List, Tuple
 import pytz
 
-# مكتبات خارجية
 import google.generativeai as genai
 import edge_tts
 import speech_recognition as sr
@@ -39,10 +37,10 @@ def inject_css():
     st.markdown(
         """
         <style>
-        .block-container { padding-top: 1.0rem; }
+        .block-container { padding-top: 1rem; }
         .app-header {
           background: linear-gradient(135deg, #6a11cb, #2575fc);
-          padding: 18px 18px;
+          padding: 18px;
           border-radius: 16px;
           color: white;
           margin-bottom: 14px;
@@ -50,6 +48,13 @@ def inject_css():
         }
         .app-header h1 { margin: 0; font-size: 28px; }
         .app-sub { opacity: .95; margin-top: 6px; font-size: 13px; }
+        .card {
+          border: 1px solid rgba(0,0,0,.08);
+          border-radius: 14px;
+          padding: 14px;
+          box-shadow: 0 6px 18px rgba(0,0,0,.06);
+          background: white;
+        }
         .stTabs [data-baseweb="tab-list"] button { font-weight: 700; }
         </style>
         """,
@@ -62,7 +67,7 @@ def draw_header():
         """
         <div class="app-header">
           <h1>🧬 AI Science Tutor Pro</h1>
-          <div class="app-sub">منصة علوم متكاملة: نص + ميكروفون + صورة + PDF + اختبارات + XP</div>
+          <div class="app-sub">منصة علوم: دخول + محادثة + ميكروفون + صورة + PDF + اختبارات + XP</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -86,7 +91,7 @@ DAILY_FACTS = [
     "هل تعلم؟ الدماغ يستهلك تقريبًا 20% من طاقة الجسم.",
     "هل تعلم؟ الصوت يحتاج وسطًا لينتقل (هواء/ماء/صلب).",
     "هل تعلم؟ النباتات تصنع غذاءها بالبناء الضوئي.",
-    "هل تعلم؟ بعض المعادن توصل الكهرباء وبعضها لا.",
+    "هل تعلم؟ المعادن تنقسم إلى موصلات وعوازل للكهرباء.",
 ]
 
 GEMINI_MODELS_TO_TRY = [
@@ -128,40 +133,15 @@ def get_control_password():
         return None
 
 
-def _bg_task(task_type, data):
+def _bg_task(task_type: str, data: dict):
+    """Background logging/XPs. Never crash the app."""
     if "gcp_service_account" not in st.secrets:
         return
+
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = service_account.Credentials.from_service_account_info(
             creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
         client = gspread.authorize(creds)
-        wb = client.open(CONTROL_SHEET_NAME)
-
-        tz = pytz.timezone("Africa/Cairo")
-        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
-        if task_type == "login":
-            try:
-                sheet = wb.worksheet("Logs")
-            except Exception:
-                sheet = wb.sheet1
-            sheet.append_row([now_str, data["type"], data["name"], data["details"]])
-
-        elif task_type == "activity":
-            try:
-                sheet = wb.worksheet("Activity")
-            except Exception:
-                return
-            clean_text = str(data["text"])[:1000]
-            sheet.append_row([now_str, data["name"], data["input_type"], clean_text])
-
-        elif task_type == "xp":
-            try:
-                sheet = wb.worksheet("Gamification")
-            except Exception:
-                return
-            cell = sheet.find(data["name"])
-            if cell:
-                val = sheet.cell(cell.row, 
+        wb 
