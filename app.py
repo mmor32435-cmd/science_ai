@@ -1,10 +1,13 @@
 import streamlit as st
 
+# ==========================================
 # 1. إعدادات الصفحة (أول سطر إلزامي)
+# ==========================================
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
-# استيراد المكتبات
+# استيراد المكتبات (بعد إعداد الصفحة)
 import time
+import google.generativeai as genai
 import asyncio
 import edge_tts
 import speech_recognition as sr
@@ -25,7 +28,6 @@ import random
 import graphviz
 import matplotlib.pyplot as plt
 import threading
-import google.generativeai as genai
 
 # ==========================================
 # 🎛️ الثوابت
@@ -44,24 +46,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ تهيئة الجلسة (Session State)
-# ==========================================
-if "auth_status" not in st.session_state:
-    st.session_state.auth_status = False
-    st.session_state.user_type = "none"
-    st.session_state.chat_history = []
-    st.session_state.student_grade = ""
-    st.session_state.study_lang = ""
-    st.session_state.quiz_active = False
-    st.session_state.current_quiz_question = ""
-    st.session_state.current_xp = 0
-    st.session_state.user_name = "Guest"
-    st.session_state.start_time = time.time()
-    st.session_state.language = "العربية"
-    st.session_state.last_audio_bytes = None
-
-# ==========================================
-# 🔌 دوال الاتصال (Backend)
+# 🛠️ الخدمات والدوال المساعدة
 # ==========================================
 
 @st.cache_resource
@@ -84,23 +69,14 @@ def get_sheet_data():
         return str(sheet.sheet1.acell('B1').value).strip()
     except: return None
 
-# دالة الدخول الرئيسية
-def attempt_login(name, grade, system, password):
-    if not name and password != TEACHER_MASTER_KEY:
-        return False, "⚠️ يرجى كتابة الاسم"
-    
-    # التحقق من المعلم
-    if password == TEACHER_MASTER_KEY:
-        return True, "teacher"
-    
-    # التحقق من الطالب
-    sheet_pass = get_sheet_data()
-    if sheet_pass and password == sheet_pass:
-        return True, "student"
-    
-    return False, "⛔ كود الدخول غير صحيح"
+def update_daily_password(new_pass):
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
+        return True
+    except: return False
 
-# --- دوال التسجيل في الخلفية (Threaded) ---
 def _log_bg(user_name, user_type, details, log_type):
     client = get_gspread_client()
     if not client: return
@@ -115,7 +91,6 @@ def _log_bg(user_name, user_type, details, log_type):
         if log_type == "login":
             sheet.append_row([now, user_type, user_name, details])
         else:
-            # details here is [input_type, question_text]
             sheet.append_row([now, user_name, details[0], str(details[1])[:500]])
     except: pass
 
@@ -140,7 +115,8 @@ def _xp_bg(user_name, points):
     except: pass
 
 def update_xp(user_name, points):
-    st.session_state.current_xp += points
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points
     threading.Thread(target=_xp_bg, args=(user_name, points)).start()
 
 def get_current_xp(user_name):
@@ -162,14 +138,6 @@ def get_leaderboard():
         df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
         return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
     except: return []
-
-def update_daily_password(new_pass):
-    client = get_gspread_client()
-    if not client: return False
-    try:
-        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
-        return True
-    except: return False
 
 def clear_old_data():
     client = get_gspread_client()
@@ -239,6 +207,36 @@ def speech_to_text(audio_bytes, lang_code):
             return r.recognize_google(audio_data, language=lang_code)
     except: return None
 
+def get_working_genai_model():
+    keys = st.secrets.get("GOOGLE_API_KEYS", [])
+    if not keys and "GOOGLE_API_KEY" in st.secrets:
+        keys = [st.secrets["GOOGLE_API_KEY"]]
+    
+    if not keys: return None
+    random.shuffle(keys)
+
+    for key in keys:
+        try:
+            genai.configure(api_key=key)
+            return genai.GenerativeModel('gemini-1.5-flash')
+        except: continue
+    return None
+
+def smart_generate_content(prompt_content):
+    model = get_working_genai_model()
+    if not model: raise Exception("API Keys Busy")
+    try: return model.generate_content(prompt_content)
+    except Exception as e:
+        time.sleep(1)
+        model = get_working_genai_model()
+        if model: return model.generate_content(prompt_content)
+        else: raise e
+
+def stream_text_effect(text):
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(0.04)
+
 @st.cache_resource
 def get_drive_service():
     if "gcp_service_account" in st.secrets:
@@ -266,27 +264,111 @@ def download_pdf_text(service, file_id):
         return text
     except: return ""
 
-def get_working_genai_model():
-    keys = []
-    if "GOOGLE_API_KEYS" in st.secrets:
-        keys = st.secrets["GOOGLE_API_KEYS"]
-    elif "GOOGLE_API_KEY" in st.secrets:
-        keys = [st.secrets["GOOGLE_API_KEY"]]
-    if not keys: return None
-    random.shuffle(keys)
-    for key in keys:
-        try:
-            genai.configure(api_key=key)
-            return genai.GenerativeModel('gemini-1.5-flash')
-        except: continue
-    return None
+# ==========================================
+# 🎨 واجهة التطبيق
+# ==========================================
 
-def smart_generate_content(prompt_content):
-    model = get_working_genai_model()
-    if not model: raise Exception("API Keys Busy")
-    try: return model.generate_content(prompt_content)
-    except Exception as e:
-        time.sleep(1)
-        model = get_working_genai_model()
-        if model: return model.generate_content(prompt_content)
-        else: raise e
+def draw_header():
+    st.markdown("""
+        <style>
+        .header-container {
+            padding: 1.5rem;
+            border-radius: 15px;
+            background: linear-gradient(120deg, #89f7fe 0%, #66a6ff 100%);
+            color: #1a2a6c;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 1rem;
+        }
+        .main-title {
+            font-size: 2.5rem;
+            font-weight: 900;
+            margin: 0;
+            font-family: sans-serif;
+        }
+        .sub-text {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 5px;
+        }
+        </style>
+        <div class="header-container">
+            <div class="main-title">🧬 AI Science Tutor</div>
+            <div class="sub-text">Under Supervision of: Mr. Elsayed Elbadawy</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+# تهيئة الجلسة
+if "auth_status" not in st.session_state:
+    st.session_state.auth_status = False
+    st.session_state.user_type = "none"
+    st.session_state.chat_history = []
+    st.session_state.student_grade = ""
+    st.session_state.study_lang = ""
+    st.session_state.quiz_active = False
+    st.session_state.current_quiz_question = ""
+    st.session_state.current_xp = 0
+    st.session_state.last_audio_bytes = None
+    st.session_state.language = "العربية" 
+
+# ==========================================
+# 🚀 المنطق الرئيسي (Conditional Rendering)
+# ==========================================
+
+if not st.session_state.auth_status:
+    # --- حالة 1: شاشة الدخول ---
+    draw_header()
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.info(f"💡 {random.choice(DAILY_FACTS)}")
+        
+        with st.form("login_form"):
+            st.markdown("### 🔐 تسجيل الدخول")
+            student_name = st.text_input("Name / اسمك الثلاثي:")
+            
+            all_stages = ["الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي",
+                          "الأول الإعدادي", "الثاني الإعدادي", "الثالث الإعدادي",
+                          "الأول الثانوي", "الثاني الثانوي", "الثالث الثانوي"]
+            selected_grade = st.selectbox("Grade / الصف الدراسي:", all_stages)
+            
+            study_type = st.radio("System / النظام:", ["عربي", "لغات (English)"], horizontal=True)
+            pwd = st.text_input("Access Code / كود الدخول:", type="password")
+            
+            submit_login = st.form_submit_button("Login / دخول", use_container_width=True)
+        
+        if submit_login:
+            if (not student_name) and pwd != TEACHER_MASTER_KEY:
+                st.warning("⚠️ يرجى كتابة الاسم")
+            else:
+                with st.spinner("Jary al-tahaqoq..."):
+                    # التحقق من الباسورد
+                    daily_pass = None
+                    if pwd != TEACHER_MASTER_KEY:
+                        daily_pass = get_sheet_data()
+                    
+                    if pwd == TEACHER_MASTER_KEY:
+                        u_type = "teacher"; valid = True
+                    elif daily_pass and pwd == daily_pass:
+                        u_type = "student"; valid = True
+                    else:
+                        u_type = "none"; valid = False
+                    
+                    if valid:
+                        st.session_state.auth_status = True
+                        st.session_state.user_type = u_type
+                        st.session_state.user_name = student_name if u_type == "student" else "Mr. Elsayed"
+                        st.session_state.student_grade = selected_grade
+                        st.session_state.study_lang = "English Science" if "لغات" in study_type else "Arabic Science"
+                        st.session_state.start_time = time.time()
+                        
+                        log_login(st.session_state.user_name, u_type, f"{selected_grade} | {study_type}")
+                        
+                        try: st.session_state.current_xp = get_current_xp(st.session_state.user_name)
+                        except: st.session_state.current_xp = 0
+                        
+                        st.rerun()
+                    else:
+                        st.error("كود خاطئ")
+
+else:
+    
