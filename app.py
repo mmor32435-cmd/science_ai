@@ -1,66 +1,57 @@
 import streamlit as st
 import nest_asyncio
 
-# تفعيل المعالجة المتزامنة للصوت
+# تفعيل المعالجة المتزامنة
 nest_asyncio.apply()
 
 # ==========================================
-# 1. إعدادات الصفحة (يجب أن يكون أول سطر)
+# 1. إعدادات الصفحة
 # ==========================================
 st.set_page_config(page_title="المعلم الذكي", page_icon="🎓", layout="wide")
 
-# ==========================================
-# 2. تهيئة المتغيرات (أهم خطوة لمنع الشاشة البيضاء)
-# ==========================================
-if "auth_status" not in st.session_state:
-    st.session_state.auth_status = False
-    st.session_state.user_type = "none"
-    st.session_state.user_name = ""
-    st.session_state.student_grade = ""
-    st.session_state.current_xp = 0
-    st.session_state.last_audio_bytes = None
-    st.session_state.language = "العربية"
-    st.session_state.ref_text = ""
-    st.session_state.chat_history = []
-
-# ==========================================
-# 3. التصميم (CSS) - بسيط ومضمون
-# ==========================================
+# CSS: إجبار النصوص على اللون الأسود وتوضيح العناصر
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@500;800&display=swap');
     
-    /* تطبيق الخط واللون الأسود على كل العناصر */
-    html, body, [class*="css"], .stMarkdown, h1, h2, h3, p, div {
-        font-family: 'Tajawal', sans-serif !important;
+    html, body, [class*="css"], p, h1, h2, h3, div, span, label {
+        font-family: 'Tajawal', sans-serif;
         color: #000000 !important;
     }
     
-    /* خلفية بيضاء نظيفة */
+    /* خلفية بيضاء */
     .stApp {
         background-color: #ffffff;
     }
 
-    /* تحسين شكل الأزرار */
-    .stButton>button {
-        background-color: #2196F3;
-        color: white !important;
-        border-radius: 10px;
-        width: 100%;
+    /* تحسين التبويبات */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        background-color: #f0f2f6;
+        border-radius: 8px;
+        color: #000000;
+        font-weight: bold;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #2196F3 !important;
+        color: #FFFFFF !important;
     }
 
-    /* رسائل الشات */
-    .user-msg {
+    /* رسائل المحادثة */
+    .chat-user {
         background-color: #E3F2FD;
-        padding: 10px;
+        padding: 12px;
         border-radius: 10px;
         margin: 5px 0;
         text-align: right;
-        border: 1px solid #90CAF9;
+        border: 1px solid #BBDEFB;
     }
-    .ai-msg {
+    .chat-ai {
         background-color: #F5F5F5;
-        padding: 10px;
+        padding: 12px;
         border-radius: 10px;
         margin: 5px 0;
         text-align: right;
@@ -100,7 +91,6 @@ DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 DAILY_FACTS = [
     "هل تعلم؟ قلب الجمبري يقع في رأسه!",
-    "هل تعلم؟ الزرافة لا تمتلك أحبالاً صوتية!",
     "هل تعلم؟ العسل هو الطعام الوحيد الذي لا يفسد!",
 ]
 
@@ -111,6 +101,7 @@ RANKS = {
 # ==========================================
 # 🛠️ الخدمات الخلفية
 # ==========================================
+
 @st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" not in st.secrets: return None
@@ -125,67 +116,12 @@ def get_sheet_data():
     client = get_gspread_client()
     if not client: return None
     try:
-        return str(client.open(CONTROL_SHEET_NAME).sheet1.acell('B1').value).strip()
+        val = client.open(CONTROL_SHEET_NAME).sheet1.acell('B1').value
+        return str(val).strip()
     except: return None
 
 def _bg_task(task_type, data):
     if "gcp_service_account" not in st.secrets: return
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        client = gspread.authorize(service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']))
-        wb = client.open(CONTROL_SHEET_NAME)
-        tz = pytz.timezone('Africa/Cairo')
-        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
-        if task_type == "login":
-            try: sheet = wb.worksheet("Logs")
-            except: sheet = wb.sheet1
-            sheet.append_row([now_str, data['type'], data['name'], data['details']])
-        elif task_type == "activity":
-            try: sheet = wb.worksheet("Activity")
-            except: return
-            sheet.append_row([now_str, data['name'], data['input_type'], str(data['text'])[:1000]])
-        elif task_type == "xp":
-            try: sheet = wb.worksheet("Gamification")
-            except: return
-            cell = sheet.find(data['name'])
-            if cell:
-                curr = int(sheet.cell(cell.row, 2).value or 0)
-                sheet.update_cell(cell.row, 2, curr + data['points'])
-            else:
-                sheet.append_row([data['name'], data['points']])
-    except: pass
-
-def log_login(user_name, user_type, details):
-    threading.Thread(target=_bg_task, args=("login", {'name': user_name, 'type': user_type, 'details': details})).start()
-
-def log_activity(user_name, input_type, text):
-    threading.Thread(target=_bg_task, args=("activity", {'name': user_name, 'input_type': input_type, 'text': text})).start()
-
-def update_xp(user_name, points):
-    if 'current_xp' in st.session_state:
-        st.session_state.current_xp += points
-    threading.Thread(target=_bg_task, args=("xp", {'name': user_name, 'points': points})).start()
-
-def get_current_xp(user_name):
-    client = get_gspread_client()
-    if not client: return 0
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        cell = sheet.find(user_name)
-        return int(sheet.cell(cell.row, 2).value or 0) if cell else 0
-    except: return 0
-
-# --- Google Drive ---
-@st.cache_resource
-def get_drive_service():
-    if "gcp_service_account" not in st.secrets: return None
-    try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
-        return build('drive', 'v3', credentials=creds)
-    except: return None
-
-def list_drive_files(service, folder_id):
-    try:
-        res = 
+        client = 
