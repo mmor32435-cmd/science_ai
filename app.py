@@ -27,8 +27,9 @@ import matplotlib.pyplot as plt
 import threading
 
 # ==========================================
-# 🎛️ الثوابت
+# 🎛️ إعدادات التحكم
 # ==========================================
+
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
 SESSION_DURATION_MINUTES = 60
@@ -55,38 +56,59 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except: return None
+        except:
+            return None
     return None
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client: return None
+    if not client:
+        return None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         return str(sheet.sheet1.acell('B1').value).strip()
-    except: return None
+    except:
+        return None
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if not client: return False
+    if not client:
+        return False
     try:
         client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
-    except: return False
+    except:
+        return False
 
 # --- دوال التسجيل في الخلفية ---
+
 def _log_bg(user_name, user_type, details, log_type):
     client = get_gspread_client()
     if not client: return
     try:
         sheet_name = "Logs" if log_type == "login" else "Activity"
-        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet(sheet_name)
-        except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet(sheet_name)
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
         
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         
         if log_type == "login":
-            sheet.append_row([now, user_type, user_name, details])
+            row_data = [now, user_type, user_name, details]
+            sheet.append_row(row_data)
         else:
-            sheet.append_row([now, user_name, details[0], 
+            # تم إصلاح الخطأ هنا بتقسيم المتغيرات
+            q_type = details[0]
+            q_text = str(details[1])[:500]
+            row_data = [now, user_name, q_type, q_text]
+            sheet.append_row(row_data)
+    except:
+        pass
+
+def log_login(user_name, user_type, details):
+    threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login")).start()
+
+def log_activity(user_name, input_type, text):
+    threading.Thread(target=_log_bg, 
