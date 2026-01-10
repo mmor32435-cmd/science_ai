@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 import threading
 
 # ==========================================
-# 🎛️ الثوابت والإعدادات
+# 🎛️ إعدادات التحكم
 # ==========================================
 
 TEACHER_MASTER_KEY = "ADMIN_2024"
@@ -44,7 +44,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ دوال الاتصال (Backend)
+# 🛠️ الخدمات والدوال المساعدة
 # ==========================================
 
 @st.cache_resource
@@ -62,8 +62,7 @@ def get_gspread_client():
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client:
-        return None, None
+    if not client: return None, None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         daily_pass = str(sheet.sheet1.acell('B1').value).strip()
@@ -73,20 +72,20 @@ def get_sheet_data():
 
 def update_daily_password(new_pass):
     client = get_gspread_client()
-    if not client:
-        return False
+    if not client: return False
     try:
         client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
     except:
         return False
 
-# --- دوال التسجيل الخلفية (Threaded) ---
+# --- دوال التسجيل في الخلفية ---
 
-def _bg_log_login(user_name, user_type, details):
+def _log_login_bg(user_name, user_type, details):
     client = get_gspread_client()
     if not client: return
     try:
+        sheet = None
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
         except:
@@ -99,12 +98,13 @@ def _bg_log_login(user_name, user_type, details):
         pass
 
 def log_login_to_sheet(user_name, user_type, details=""):
-    threading.Thread(target=_bg_log_login, args=(user_name, user_type, details)).start()
+    threading.Thread(target=_log_login_bg, args=(user_name, user_type, details)).start()
 
-def _bg_log_activity(user_name, input_type, question_text):
+def _log_activity_bg(user_name, input_type, question_text):
     client = get_gspread_client()
     if not client: return
     try:
+        sheet = None
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
         except:
@@ -122,12 +122,13 @@ def _bg_log_activity(user_name, input_type, question_text):
         pass
 
 def log_activity(user_name, input_type, question_text):
-    threading.Thread(target=_bg_log_activity, args=(user_name, input_type, question_text)).start()
+    threading.Thread(target=_log_activity_bg, args=(user_name, input_type, question_text)).start()
 
-def _bg_update_xp(user_name, points):
+def _update_xp_bg(user_name, points):
     client = get_gspread_client()
     if not client: return
     try:
+        sheet = None
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         except:
@@ -145,7 +146,7 @@ def _bg_update_xp(user_name, points):
 def update_xp(user_name, points_to_add):
     if 'current_xp' in st.session_state:
         st.session_state.current_xp += points_to_add
-    threading.Thread(target=_bg_update_xp, args=(user_name, points_to_add)).start()
+    threading.Thread(target=_update_xp_bg, args=(user_name, points_to_add)).start()
 
 def get_current_xp(user_name):
     client = get_gspread_client()
@@ -168,51 +169,39 @@ def get_leaderboard():
         df = pd.DataFrame(data)
         df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
         return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
-    except:
-        return []
+    except: return []
 
 def clear_old_data():
     client = get_gspread_client()
     if not client: return False
     try:
         for s in ["Logs", "Activity", "Gamification"]:
-            try:
+            try: 
                 ws = client.open(CONTROL_SHEET_NAME).worksheet(s)
-                ws.resize(rows=1)
-                ws.resize(rows=100)
-            except:
-                pass
+                ws.resize(rows=1); ws.resize(rows=100)
+            except: pass
         return True
-    except:
-        return False
+    except: return False
 
 def get_stats_for_admin():
     client = get_gspread_client()
     if not client: return 0, []
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
-        try:
-            logs = sheet.worksheet("Logs").get_all_values()
-            c = len(logs) - 1
-        except:
-            c = 0
-        try:
-            qs = sheet.worksheet("Activity").get_all_values()
-            l = qs[-5:]
-        except:
-            l = []
-        return c, l
-    except:
-        return 0, []
+        try: logs = sheet.worksheet("Logs").get_all_values()
+        except: logs = []
+        try: qs = sheet.worksheet("Activity").get_all_values()
+        except: qs = []
+        return len(logs)-1 if logs else 0, qs[-5:] if qs else []
+    except: return 0, []
 
 def get_chat_text(history):
     text = "--- Chat History ---\n\n"
-    for q, a in history:
-        text += f"Student: {q}\nAI Tutor: {a}\n\n"
+    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
     return text
 
 def create_certificate(student_name):
-    txt = f"CERTIFICATE OF EXCELLENCE\nAwarded to: {student_name}\nSigned: Mr. Elsayed Elbadawy"
+    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
     return txt.encode('utf-8')
 
 # Streaming Effect
@@ -231,10 +220,8 @@ def get_drive_service():
     return None
 
 def list_drive_files(service, folder_id):
-    try:
-        return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
-    except:
-        return []
+    try: return service.files().list(q=f"'{folder_id}' in parents", fields="files(id, name)").execute().get('files', [])
+    except: return []
 
 def download_pdf_text(service, file_id):
     try:
@@ -242,90 +229,21 @@ def download_pdf_text(service, file_id):
         file_io = BytesIO()
         downloader = MediaIoBaseDownload(file_io, request)
         done = False
-        while done is False:
-            status, done = downloader.next_chunk()
+        while done is False: status, done = downloader.next_chunk()
         file_io.seek(0)
         reader = PyPDF2.PdfReader(file_io)
         text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
+        for page in reader.pages: text += page.extract_text() + "\n"
         return text
-    except:
-        return ""
+    except: return ""
 
 def get_voice_config(lang):
-    if lang == "English":
-        return "en-US-AndrewNeural", "en-US"
-    else:
-        return "ar-EG-ShakirNeural", "ar-EG"
+    if lang == "English": return "en-US-AndrewNeural", "en-US"
+    else: return "ar-EG-ShakirNeural", "ar-EG"
 
 def clean_text_for_audio(text):
     text = re.sub(r'\\documentclass\{.*?\}', '', text) 
     text = re.sub(r'\\usepackage\{.*?\}', '', text)
     text = re.sub(r'\\begin\{.*?\}', '', text) 
     text = re.sub(r'\\end\{.*?\}', '', text)   
-    text = re.sub(r'\\item', '', text)         
-    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
-    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
-    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
-    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
-    return text
-
-async def generate_audio_stream(text, voice_code):
-    clean_text = clean_text_for_audio(text)
-    if isinstance(voice_code, tuple) or isinstance(voice_code, list):
-        voice_code = voice_code[0]
-    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
-    mp3_fp = BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            mp3_fp.write(chunk["data"])
-    return mp3_fp
-
-def speech_to_text(audio_bytes, lang_code):
-    r = sr.Recognizer()
-    try:
-        audio_file = sr.AudioFile(BytesIO(audio_bytes))
-        with audio_file as source:
-            r.adjust_for_ambient_noise(source, duration=0.5)
-            audio_data = r.record(source)
-            return r.recognize_google(audio_data, language=lang_code)
-    except:
-        return None
-
-# 🔥 دالة التبديل الذكي للمفاتيح 🔥
-def get_working_genai_model():
-    keys = []
-    if "GOOGLE_API_KEYS" in st.secrets:
-        keys = st.secrets["GOOGLE_API_KEYS"]
-    elif "GOOGLE_API_KEY" in st.secrets:
-        keys = [st.secrets["GOOGLE_API_KEY"]]
-    
-    if not keys: return None
-
-    random.shuffle(keys)
-
-    for key in keys:
-        try:
-            genai.configure(api_key=key)
-            return genai.GenerativeModel('gemini-1.5-flash')
-        except:
-            continue
-    return None
-
-def smart_generate_content(prompt_content):
-    model = get_working_genai_model()
-    if not model:
-        raise Exception("All API Keys are busy or invalid.")
-    
-    try:
-        return model.generate_content(prompt_content)
-    except Exception as e:
-        time.sleep(1)
-        model_retry = get_working_genai_model()
-        if model_retry:
-            return model_retry.generate_content(prompt_content)
-        else:
-            raise e
-
-# 🔥 
+    text 
