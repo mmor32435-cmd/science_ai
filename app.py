@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. إعدادات الصفحة
+# 1. إعدادات الصفحة (أول سطر إلزامي)
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
@@ -35,24 +35,26 @@ SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح!",
-    "هل تعلم؟ العظام أقوى من الخرسانة!",
-    "هل تعلم؟ الأخطبوط لديه 3 قلوب!",
-    "هل تعلم؟ العسل لا يفسد أبداً!",
-    "هل تعلم؟ سرعة الضوء 300,000 كم/ث!"
+    "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
+    "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
+    "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
+    "هل تعلم؟ سرعة الضوء 300,000 كم/ث! ⚡"
 ]
 
 # ==========================================
-# 🛠️ خدمات جوجل شيت (مبسطة)
+# 🛠️ خدمات جوجل شيت (منفصلة ومؤمنة)
 # ==========================================
+
 @st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" not in st.secrets:
         return None
     try:
-        creds_dict = st.secrets["gcp_service_account"]
-        scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        creds = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+        )
         return gspread.authorize(creds)
     except:
         return None
@@ -73,57 +75,61 @@ def update_daily_password(new_pass):
     if not client:
         return False
     try:
-        sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        sheet.update_acell('B1', new_pass)
+        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
         return True
     except:
         return False
 
-# ==========================================
-# 📝 دوال التسجيل (مفكوكة)
-# ==========================================
-def _log_bg(user_name, user_type, details, log_type):
-    client = get_gspread_client()
-    if not client:
-        return
-    try:
-        sheet = None
-        if log_type == "login":
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except:
-                sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        else:
-            try:
-                sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-            except:
-                return
+# --- دوال التسجيل في الخلفية (منفصلة تماماً لتجنب الأخطاء) ---
 
-        tz = pytz.timezone('Africa/Cairo')
-        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+def _bg_log_login(user_name, user_type, details):
+    client = get_gspread_client()
+    if not client: return
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
+        except:
+            sheet = client.open(CONTROL_SHEET_NAME).sheet1
         
-        if log_type == "login":
-            row = [now_str, user_type, user_name, details]
-            sheet.append_row(row)
-        else:
-            q_text = str(details[1])[:500]
-            row = [now_str, user_name, details[0], q_text]
-            sheet.append_row(row)
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        row = [now, user_type, user_name, details]
+        sheet.append_row(row)
     except:
         pass
 
-def log_login_to_sheet(user_name, user_type, details=""):
-    t = threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login"))
+def log_login(user_name, user_type, details):
+    t = threading.Thread(target=_bg_log_login, args=(user_name, user_type, details))
     t.start()
 
-def log_activity(user_name, input_type, text):
-    t = threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, text], "activity"))
-    t.start()
-
-def _xp_bg(user_name, points):
+def _bg_log_activity(user_name, input_type, question_text):
     client = get_gspread_client()
-    if not client:
-        return
+    if not client: return
+    try:
+        try:
+            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
+        except:
+            return
+        
+        tz = pytz.timezone('Africa/Cairo')
+        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        q_text = str(question_text)
+        if isinstance(question_text, list):
+            q_text = f"[Image] {question_text[0]}"
+            
+        row = [now, user_name, input_type, q_text[:500]]
+        sheet.append_row(row)
+    except:
+        pass
+
+def log_activity(user_name, input_type, question_text):
+    t = threading.Thread(target=_bg_log_activity, args=(user_name, input_type, question_text))
+    t.start()
+
+def _bg_update_xp(user_name, points):
+    client = get_gspread_client()
+    if not client: return
     try:
         try:
             sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
@@ -135,9 +141,7 @@ def _xp_bg(user_name, points):
             curr = int(sheet.cell(cell.row, 2).value)
             sheet.update_cell(cell.row, 2, curr + points)
         else:
-            sheet.append_row([user_name, points])
+            row = [user_name, points]
+            sheet.append_row(row)
     except:
-        pass
-
-def update_xp(user_name, points):
-    if 
+        
