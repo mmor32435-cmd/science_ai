@@ -1,6 +1,6 @@
 import streamlit as st
 
-# 1. إعدادات الصفحة (أول سطر إلزامي)
+# 1. إعدادات الصفحة (يجب أن تكون أول سطر إلزامي)
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
@@ -27,8 +27,9 @@ import matplotlib.pyplot as plt
 import threading
 
 # ==========================================
-# 🎛️ الثوابت
+# 🎛️ إعدادات التحكم
 # ==========================================
+
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
 SESSION_DURATION_MINUTES = 60
@@ -48,64 +49,13 @@ DAILY_FACTS = [
 
 @st.cache_resource
 def get_gspread_client():
-    if "gcp_service_account" not in st.secrets:
-        return None
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-        scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        return gspread.authorize(creds)
-    except:
-        return None
-
-def get_sheet_data():
-    client = get_gspread_client()
-    if not client: return None
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME)
-        val = sheet.sheet1.acell('B1').value
-        return str(val).strip()
-    except: return None
-
-def update_daily_password(new_pass):
-    client = get_gspread_client()
-    if not client: return False
-    try:
-        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
-        return True
-    except: return False
-
-# --- دوال التسجيل في الخلفية ---
-def _log_bg(user_name, user_type, details, log_type):
-    client = get_gspread_client()
-    if not client: return
-    try:
-        sheet = None
-        if log_type == "login":
-            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-            except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        else:
-            try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-            except: return
-
-        tz = pytz.timezone('Africa/Cairo')
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        
-        if log_type == "login":
-            row = [now, user_type, user_name, details]
-            sheet.append_row(row)
-        else:
-            q_text = str(details[1])[:500]
-            row = [now, user_name, details[0], q_text]
-            sheet.append_row(row)
-    except: pass
-
-def log_login(user_name, user_type, details):
-    t = threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login"))
-    t.start()
-
-def log_activity(user_name, input_type, text):
-    t = threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, text], "activity"))
-    t.start()
-
-def 
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+            )
+            return gspread.authorize(creds)
+        except:
+            return None
+    return 
