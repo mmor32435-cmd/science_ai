@@ -5,58 +5,66 @@ import nest_asyncio
 nest_asyncio.apply()
 
 # ==========================================
-# 1. إعدادات الصفحة (تصميم عالي التباين)
+# 1. إعدادات الصفحة (يجب أن يكون أول سطر)
 # ==========================================
 st.set_page_config(page_title="المعلم الذكي", page_icon="🎓", layout="wide")
 
-# CSS لإجبار ظهور النصوص باللون الأسود وتوضيح التبويبات
+# ==========================================
+# 2. تهيئة المتغيرات (أهم خطوة لمنع الشاشة البيضاء)
+# ==========================================
+if "auth_status" not in st.session_state:
+    st.session_state.auth_status = False
+    st.session_state.user_type = "none"
+    st.session_state.user_name = ""
+    st.session_state.student_grade = ""
+    st.session_state.current_xp = 0
+    st.session_state.last_audio_bytes = None
+    st.session_state.language = "العربية"
+    st.session_state.ref_text = ""
+    st.session_state.chat_history = []
+
+# ==========================================
+# 3. التصميم (CSS) - بسيط ومضمون
+# ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@500;800&display=swap');
     
-    html, body, [class*="css"], p, h1, h2, h3, div, span {
-        font-family: 'Tajawal', sans-serif;
-        color: #000000 !important; /* لون أسود إجباري للنصوص */
+    /* تطبيق الخط واللون الأسود على كل العناصر */
+    html, body, [class*="css"], .stMarkdown, h1, h2, h3, p, div {
+        font-family: 'Tajawal', sans-serif !important;
+        color: #000000 !important;
     }
     
-    /* خلفية التطبيق بيضاء نظيفة */
+    /* خلفية بيضاء نظيفة */
     .stApp {
         background-color: #ffffff;
     }
 
-    /* تحسين شكل التبويبات */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #f0f2f6;
+    /* تحسين شكل الأزرار */
+    .stButton>button {
+        background-color: #2196F3;
+        color: white !important;
         border-radius: 10px;
-        color: #000000;
-        font-weight: bold;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #2196F3 !important;
-        color: #FFFFFF !important;
+        width: 100%;
     }
 
-    /* إطار للرسائل في السجل */
-    .chat-user {
+    /* رسائل الشات */
+    .user-msg {
         background-color: #E3F2FD;
-        padding: 15px;
+        padding: 10px;
         border-radius: 10px;
-        margin-bottom: 10px;
-        border: 1px solid #BBDEFB;
+        margin: 5px 0;
         text-align: right;
+        border: 1px solid #90CAF9;
     }
-    .chat-ai {
+    .ai-msg {
         background-color: #F5F5F5;
-        padding: 15px;
+        padding: 10px;
         border-radius: 10px;
-        margin-bottom: 10px;
-        border: 1px solid #E0E0E0;
+        margin: 5px 0;
         text-align: right;
+        border: 1px solid #E0E0E0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -103,7 +111,6 @@ RANKS = {
 # ==========================================
 # 🛠️ الخدمات الخلفية
 # ==========================================
-
 @st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" not in st.secrets: return None
@@ -116,4 +123,69 @@ def get_gspread_client():
 
 def get_sheet_data():
     client = get_gspread_client()
-    
+    if not client: return None
+    try:
+        return str(client.open(CONTROL_SHEET_NAME).sheet1.acell('B1').value).strip()
+    except: return None
+
+def _bg_task(task_type, data):
+    if "gcp_service_account" not in st.secrets: return
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        client = gspread.authorize(service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']))
+        wb = client.open(CONTROL_SHEET_NAME)
+        tz = pytz.timezone('Africa/Cairo')
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+        if task_type == "login":
+            try: sheet = wb.worksheet("Logs")
+            except: sheet = wb.sheet1
+            sheet.append_row([now_str, data['type'], data['name'], data['details']])
+        elif task_type == "activity":
+            try: sheet = wb.worksheet("Activity")
+            except: return
+            sheet.append_row([now_str, data['name'], data['input_type'], str(data['text'])[:1000]])
+        elif task_type == "xp":
+            try: sheet = wb.worksheet("Gamification")
+            except: return
+            cell = sheet.find(data['name'])
+            if cell:
+                curr = int(sheet.cell(cell.row, 2).value or 0)
+                sheet.update_cell(cell.row, 2, curr + data['points'])
+            else:
+                sheet.append_row([data['name'], data['points']])
+    except: pass
+
+def log_login(user_name, user_type, details):
+    threading.Thread(target=_bg_task, args=("login", {'name': user_name, 'type': user_type, 'details': details})).start()
+
+def log_activity(user_name, input_type, text):
+    threading.Thread(target=_bg_task, args=("activity", {'name': user_name, 'input_type': input_type, 'text': text})).start()
+
+def update_xp(user_name, points):
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points
+    threading.Thread(target=_bg_task, args=("xp", {'name': user_name, 'points': points})).start()
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        return int(sheet.cell(cell.row, 2).value or 0) if cell else 0
+    except: return 0
+
+# --- Google Drive ---
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" not in st.secrets: return None
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
+        return build('drive', 'v3', credentials=creds)
+    except: return None
+
+def list_drive_files(service, folder_id):
+    try:
+        res = 
