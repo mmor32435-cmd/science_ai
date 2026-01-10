@@ -5,12 +5,11 @@ SpeechRecognition
 streamlit-mic-recorder
 Pillow
 PyPDF2
+gspread
+pandas
+graphviz
+nest_asyncio
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
-gspread
-pandas
-graphviz
-pytz
-nest_asyncio
