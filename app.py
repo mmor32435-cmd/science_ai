@@ -1,8 +1,12 @@
 import streamlit as st
 
-# ==========================================
-# 0) إعدادات الصفحة
-# ==========================================
+# ==========================================================
+# AI Science Tutor Pro — نسخة مستقرة (Login + Chat + Voice + Image + PDF + Quiz + XP)
+# ملاحظة مهمة للصوت (STT):
+# - mic_recorder غالبًا يُخرج webm/ogg، ويلزم ffmpeg للتحويل إلى wav عبر pydub.
+# - على Streamlit Cloud: أضف ملف packages.txt وفيه: ffmpeg
+# ==========================================================
+
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
 import time
@@ -14,25 +18,27 @@ import hashlib
 import shutil
 from io import BytesIO
 from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
+
 import pytz
+import pandas as pd
+from PIL import Image
+import PyPDF2
 
 import google.generativeai as genai
 import edge_tts
 import speech_recognition as sr
 from streamlit_mic_recorder import mic_recorder
-from PIL import Image
-import PyPDF2
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import gspread
-import pandas as pd
 
 
-# ==========================================
-# 1) CSS + Header
-# ==========================================
+# =========================
+# UI
+# =========================
 def inject_css():
     st.markdown(
         """
@@ -55,6 +61,7 @@ def inject_css():
           box-shadow: 0 6px 18px rgba(0,0,0,.06);
           background: white;
         }
+        .muted { color: rgba(0,0,0,.6); font-size: 12px; }
         .stTabs [data-baseweb="tab-list"] button { font-weight: 700; }
         </style>
         """,
@@ -67,16 +74,16 @@ def draw_header():
         """
         <div class="app-header">
           <h1>🧬 AI Science Tutor Pro</h1>
-          <div class="app-sub">منصة علوم: دخول + محادثة + ميكروفون + صورة + PDF + اختبارات + XP</div>
+          <div class="app-sub">دخول + محادثة + ميكروفون + صورة + مكتبة PDF + اختبارات + XP</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-# ==========================================
-# 2) Secrets & Constants
-# ==========================================
+# =========================
+# Secrets / Constants
+# =========================
 def secret(key: str, default=None):
     return st.secrets.get(key, default)
 
@@ -91,7 +98,7 @@ DAILY_FACTS = [
     "هل تعلم؟ الدماغ يستهلك تقريبًا 20% من طاقة الجسم.",
     "هل تعلم؟ الصوت يحتاج وسطًا لينتقل (هواء/ماء/صلب).",
     "هل تعلم؟ النباتات تصنع غذاءها بالبناء الضوئي.",
-    "هل تعلم؟ المعادن تنقسم إلى موصلات وعوازل للكهرباء.",
+    "هل تعلم؟ بعض المعادن موصل جيد للكهرباء.",
 ]
 
 GEMINI_MODELS_TO_TRY = [
@@ -102,9 +109,9 @@ GEMINI_MODELS_TO_TRY = [
 ]
 
 
-# ==========================================
-# 3) Google Sheets / Logs / XP
-# ==========================================
+# =========================
+# Google: Sheets
+# =========================
 @st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" not in st.secrets:
@@ -121,7 +128,7 @@ def get_gspread_client():
         return None
 
 
-def get_control_password():
+def get_control_password() -> Optional[str]:
     client = get_gspread_client()
     if not client:
         return None
@@ -133,8 +140,8 @@ def get_control_password():
         return None
 
 
-def _bg_task(task_type: str, data: dict):
-    """Background logging/XPs. Never crash the app."""
+def _bg_task(task_type: str, data: Dict[str, Any]):
+    """Background logging/XP — لا تُسقط التطبيق أبدًا."""
     if "gcp_service_account" not in st.secrets:
         return
 
@@ -144,4 +151,26 @@ def _bg_task(task_type: str, data: dict):
             creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
         client = gspread.authorize(creds)
-        wb 
+        wb = client.open(CONTROL_SHEET_NAME)
+
+        tz = pytz.timezone("Africa/Cairo")
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+        if task_type == "login":
+            try:
+                sheet = wb.worksheet("Logs")
+            except Exception:
+                sheet = wb.sheet1
+            sheet.append_row([now_str, data.get("type", ""), data.get("name", ""), data.get("details", "")])
+
+        elif task_type == "activity":
+            try:
+                sheet = wb.worksheet("Activity")
+            except Exception:
+                return
+            clean_text = str(data.get("text", ""))[:1000]
+            sheet.append_row([now_str, data.get("name", ""), data.get("input_type", ""), clean_text])
+
+        elif task_type == "xp":
+            try:
+                sheet = 
