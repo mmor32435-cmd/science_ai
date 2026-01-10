@@ -1,64 +1,27 @@
 import streamlit as st
 import nest_asyncio
 
-# تفعيل المعالجة المتزامنة للصوت
+# تفعيل المعالجة المتزامنة
 nest_asyncio.apply()
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم عالي التباين
+# 1. إعدادات الصفحة (تصميم نظيف جداً)
 # ==========================================
 st.set_page_config(page_title="المعلم الذكي", page_icon="🎓", layout="wide")
 
+# CSS بسيط فقط لضبط الخط العربي (بدون خلفيات)
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@500;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Tajawal', sans-serif;
     }
-
-    /* خلفية التطبيق */
-    .stApp {
-        background-color: #f4f6f9;
-    }
-
-    /* بطاقة المعلم الذكي (الذكاء الاصطناعي) */
-    .ai-card {
-        background-color: #ffffff;
-        color: #000000;  /* لون أسود غامق للقراءة */
-        padding: 20px;
-        border-radius: 15px;
-        border-right: 5px solid #FF5722; /* شريط برتقالي */
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        margin-bottom: 15px;
-        direction: rtl;
-        text-align: right;
-        font-size: 18px;
-        line-height: 1.8;
-    }
-
-    /* بطاقة الطالب (المستخدم) */
-    .user-card {
-        background-color: #2196F3;
-        color: #ffffff !important; /* لون أبيض ناصع */
-        padding: 15px;
-        border-radius: 15px;
-        border-left: 5px solid #0D47A1;
-        margin-bottom: 15px;
-        direction: rtl;
-        text-align: right;
-        font-size: 18px;
-    }
-
-    /* العناوين */
-    h1, h2, h3 {
-        color: #1a237e;
-        text-align: center;
-    }
     
-    /* تنظيف النص داخل البطاقات */
-    .ai-card p, .user-card p {
-        margin: 0;
+    /* تكبير حجم الخط للقراءة المريحة */
+    p, .stMarkdown {
+        font-size: 1.2rem !important;
+        line-height: 1.8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -93,9 +56,8 @@ CONTROL_SHEET_NAME = "App_Control"
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "🧠 هل تعلم؟ المخ لا يشعر بالألم أبداً!",
-    "🦈 هل تعلم؟ أسنان القرش تنمو باستمرار طوال حياته!",
-    "🌌 هل تعلم؟ عدد النجوم في الفضاء أكثر من حبات الرمل على الأرض!",
+    "هل تعلم؟ الضوء يستغرق 8 دقائق ليصل من الشمس للأرض!",
+    "هل تعلم؟ قلبك ينبض 100 ألف مرة في اليوم!",
 ]
 
 RANKS = {
@@ -123,7 +85,6 @@ def get_sheet_data():
         return str(client.open(CONTROL_SHEET_NAME).sheet1.acell('B1').value).strip()
     except: return None
 
-# --- التسجيل الخلفي ---
 def _bg_task(task_type, data):
     if "gcp_service_account" not in st.secrets: return
     try:
@@ -212,35 +173,17 @@ def download_pdf_text(service, file_id):
     except: return ""
 
 # ==========================================
-# 🔊 الصوت المطور (Smart Audio Cleaning)
+# 🔊 الصوت (التنظيف + الإصلاح)
 # ==========================================
 def clean_text_for_audio(text):
-    """
-    وظيفة هذه الدالة هي تنظيف النص من الإيموجي والرموز والنجوم
-    لكي يقرأ المتحدث الكلمات فقط بشكل سليم.
-    """
-    # 1. إزالة نجوم التنسيق Markdown (**text**)
-    text = text.replace('*', ' ')
-    text = text.replace('#', ' ')
-    text = text.replace('-', ' ')
-    
-    # 2. إزالة الإيموجي (طريقة بسيطة: السماح فقط بالحروف والأرقام وعلامات الترقيم)
-    # نسمح بالحروف العربية، الإنجليزية، الأرقام، والمسافات والنقاط
-    allowed_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,?!،؟:;\n"
-    # إضافة النطاق العربي يدوياً
-    clean_str = ""
+    # إزالة الرموز الخاصة فقط والإبقاء على الحروف
+    clean = ""
     for char in text:
-        # فحص هل الحرف عربي أو من المسموحات
-        if ('\u0600' <= char <= '\u06FF') or (char in allowed_chars):
-            clean_str += char
-        else:
-            # استبدال الإيموجي بمسافة صامتة
-            clean_str += " "
-            
-    return clean_str
+        if char.isalnum() or char.isspace() or char in ".,?!،؟":
+            clean += char
+    return clean
 
 async def edge_tts_generate(text, voice):
-    # تنظيف النص قبل إرساله للصوت
     clean_text = clean_text_for_audio(text)
     communicate = edge_tts.Communicate(clean_text, voice, rate="-2%")
     mp3 = BytesIO()
@@ -252,22 +195,24 @@ async def edge_tts_generate(text, voice):
 def get_audio_bytes(text, lang="Arabic"):
     voice = "ar-EG-ShakirNeural" if lang == "Arabic" else "en-US-AndrewNeural"
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         return loop.run_until_complete(edge_tts_generate(text, voice))
-    except:
-        new_loop = asyncio.new_event_loop()
-        return new_loop.run_until_complete(edge_tts_generate(text, voice))
+    except: return None
 
 def speech_to_text(audio_bytes, lang_code):
     r = sr.Recognizer()
     try:
-        with sr.AudioFile(BytesIO(audio_bytes)) as source:
+        # استخدام BytesIO مباشرة
+        audio_file = BytesIO(audio_bytes)
+        with sr.AudioFile(audio_file) as source:
+            # تقليل مدة ضبط الضوضاء لتسريع الاستجابة
             r.adjust_for_ambient_noise(source, duration=0.5)
-            return r.recognize_google(r.record(source), language=lang_code)
-    except: return None
+            audio = r.record(source)
+            return r.recognize_google(audio, language=lang_code)
+    except Exception as e:
+        print(f"STT Error: {e}")
+        return None
 
 # ==========================================
 # 🧠 الذكاء الاصطناعي
@@ -276,7 +221,8 @@ def get_working_model():
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys: return None
     random.shuffle(keys)
-    models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-pro']
+    # النماذج الأقوى المتاحة لك
+    models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-pro']
     
     for key in keys:
         genai.configure(api_key=key)
@@ -294,79 +240,64 @@ def get_rank_title(xp):
         if xp >= threshold: title = name
     return title
 
-# دالة عرض المحادثة (تم تحسين الألوان هنا)
-def display_chat(role, text):
-    if role == "user":
-        st.markdown(f"""
-        <div class="user-card">
-            <b>👤 الطالب:</b><br>{text}
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="ai-card">
-            <b>🤖 المعلم:</b><br>{text}
-        </div>
-        """, unsafe_allow_html=True)
-
 def process_ai_response(user_text, input_type="text"):
-    log_activity(st.session_state.user_name, input_type, user_text)
-    
-    # عرض سؤال المستخدم إذا لم يكن صوتياً (الصوتي يعرض في التبويب)
+    # 1. عرض رسالة المستخدم في الشات فوراً (Native UI)
     if input_type != "voice":
-        display_chat("user", user_text if isinstance(user_text, str) else user_text[0])
+        with st.chat_message("user"):
+            st.write(user_text if isinstance(user_text, str) else user_text[0])
     
-    with st.spinner("🧠 المعلم يفكر في الإجابة..."):
-        try:
-            model = get_working_model()
-            if not model:
-                st.error("⚠️ فشل الاتصال.")
-                return
+    # 2. المعالجة
+    with st.chat_message("assistant"):
+        with st.spinner("🧠 جاري التفكير..."):
+            try:
+                log_activity(st.session_state.user_name, input_type, user_text)
+                model = get_working_model()
+                if not model:
+                    st.error("خطأ في الاتصال.")
+                    return
 
-            grade = st.session_state.get("student_grade", "General")
-            lang = "Arabic" if st.session_state.language == "العربية" else "English"
-            ref = st.session_state.get("ref_text", "")
-            
-            base_prompt = f"""
-            Role: Friendly Science Teacher "Dr. Zewail".
-            Student: {st.session_state.user_name} ({grade}).
-            Context: {ref[:8000]}
-            Instructions: Answer in {lang}. Use simple markdown.
-            Format:
-            1. **Introduction**: 1 sentence.
-            2. **Details**: Bullet points.
-            3. **Fun Fact**: 1 sentence.
-            No complex symbols.
-            """
-            
-            if input_type == "image":
-                 resp = model.generate_content([base_prompt, user_text[0], user_text[1]])
-            else:
-                resp = model.generate_content(f"{base_prompt}\nStudent: {user_text}")
-            
-            full_text = resp.text
-            
-            # العرض
-            disp_text = full_text.split("```dot")[0]
-            display_chat("ai", disp_text)
-            
-            # الرسم البياني
-            if "```dot" in full_text:
-                try: 
-                    dot = full_text.split("```dot")[1].split("```")[0]
-                    st.graphviz_chart(dot)
-                except: pass
+                grade = st.session_state.get("student_grade", "General")
+                lang = "Arabic" if st.session_state.language == "العربية" else "English"
+                ref = st.session_state.get("ref_text", "")
+                
+                base_prompt = f"""
+                Role: Friendly Teacher. Student Grade: {grade}.
+                Context: {ref[:8000]}
+                Instructions: Answer in {lang}. Be clear.
+                Structure: Introduction, Points, Conclusion.
+                No markdown symbols like * or # in the output, just clean text.
+                """
+                
+                if input_type == "image":
+                     resp = model.generate_content([base_prompt, user_text[0], user_text[1]])
+                else:
+                    resp = model.generate_content(f"{base_prompt}\nStudent: {user_text}")
+                
+                full_text = resp.text
+                
+                # فصل الكود إن وجد
+                disp_text = full_text.split("```dot")[0]
+                
+                # عرض النص
+                st.write(disp_text)
+                
+                # الرسم البياني
+                if "```dot" in full_text:
+                    try:
+                        dot = full_text.split("```dot")[1].split("```")[0]
+                        st.graphviz_chart(dot)
+                    except: pass
 
-            # الصوت (نظيف الآن)
-            audio_bytes = get_audio_bytes(disp_text, lang)
-            if audio_bytes:
-                st.audio(audio_bytes, format='audio/mp3', autoplay=True)
+                # الصوت
+                audio_bytes = get_audio_bytes(disp_text, lang)
+                if audio_bytes:
+                    st.audio(audio_bytes, format='audio/mp3', autoplay=True)
 
-        except Exception as e:
-            st.error(f"خطأ: {e}")
+            except Exception as e:
+                st.error(f"خطأ: {e}")
 
 # ==========================================
-# 🎨 واجهة المستخدم
+# 🎨 الواجهة
 # ==========================================
 
 if "auth_status" not in st.session_state:
@@ -375,11 +306,11 @@ if "auth_status" not in st.session_state:
         "current_xp": 0, "last_audio_bytes": None, "language": "العربية", "ref_text": ""
     })
 
-# الدخول
+# --- الدخول ---
 if not st.session_state.auth_status:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("<h1 style='text-align:center; color:#1a237e;'>🎓 بوابة العلوم</h1>", unsafe_allow_html=True)
+        st.title("🎓 المعلم الذكي")
         st.info(random.choice(DAILY_FACTS))
         with st.form("login"):
             name = st.text_input("الاسم:")
@@ -399,12 +330,12 @@ if not st.session_state.auth_status:
                 else: st.error("الكود خطأ")
     st.stop()
 
-# التطبيق
+# --- التطبيق ---
 with st.sidebar:
-    st.title(f"👤 {st.session_state.user_name}")
-    st.info(f"الرتبة: {get_rank_title(st.session_state.current_xp)}")
+    st.header(f"👤 {st.session_state.user_name}")
+    st.success(f"الرتبة: {get_rank_title(st.session_state.current_xp)}")
     st.progress(min(1.0, st.session_state.current_xp/100))
-    st.write(f"نقاط: {st.session_state.current_xp}")
+    st.write(f"نقاط XP: {st.session_state.current_xp}")
     st.divider()
     st.session_state.language = st.radio("اللغة:", ["العربية", "English"])
     
@@ -421,62 +352,6 @@ with st.sidebar:
                         txt = download_pdf_text(svc, fid)
                         if txt: st.session_state.ref_text = txt; st.toast("تم!")
 
-st.markdown("<h1 style='text-align:center; color:#1a237e;'>🧬 المعلم الذكي</h1>", unsafe_allow_html=True)
+st.title("🧬 مختبر العلوم")
 
-t1, t2, t3, t4 = st.tabs(["🎙️ تحدث", "✍️ اكتب", "📸 صور", "🧠 تحدي"])
-
-with t1:
-    c1, c2 = st.columns([1,4])
-    with c1:
-        # تسجيل الصوت
-        aud = mic_recorder(start_prompt="🎤 اضغط للتحدث", stop_prompt="⏹️ إرسال", key='mic_input')
-    with c2:
-        if aud and aud['bytes'] != st.session_state.last_audio_bytes:
-            st.session_state.last_audio_bytes = aud['bytes']
-            st.info("جاري سماع الصوت وتحويله لنص...")
-            lang_code = "ar-EG" if st.session_state.language == "العربية" else "en-US"
-            txt = speech_to_text(aud['bytes'], lang_code)
-            if txt:
-                st.success(f"سمعت: {txt}")
-                display_chat("user", txt)
-                update_xp(st.session_state.user_name, 10)
-                process_ai_response(txt, "voice")
-            else:
-                st.warning("لم أسمع جيداً، حاول مرة أخرى.")
-
-with t2:
-    q = st.chat_input("اكتب سؤالك...")
-    if q:
-        update_xp(st.session_state.user_name, 5)
-        process_ai_response(q, "text")
-
-with t3:
-    up = st.file_uploader("صورة", type=['jpg','png'])
-    if up and st.button("تحليل"):
-        img = Image.open(up)
-        st.image(img, width=200)
-        update_xp(st.session_state.user_name, 15)
-        process_ai_response(["اشرح الصورة", img], "image")
-
-with t4:
-    if st.button("سؤال (20 XP)"):
-        m = get_working_model()
-        if m:
-            try:
-                p = f"Generate 1 MCQ science question for {st.session_state.student_grade}. {st.session_state.language}. No answer."
-                st.session_state.q_curr = m.generate_content(p).text
-                st.session_state.q_active = True
-                st.rerun()
-            except: st.error("خطأ")
-    
-    if st.session_state.get("q_active"):
-        st.info(st.session_state.q_curr)
-        ans = st.text_input("إجابتك:")
-        if st.button("تأكيد"):
-            m = get_working_model()
-            if m:
-                res = m.generate_content(f"Q: {st.session_state.q_curr}\nAns: {ans}\nCheck correctness.").text
-                st.write(res)
-                if "correct" in res.lower() or "صحيح" in res:
-                    st.balloons(); update_xp(st.session_state.user_name, 20)
-                st.session_state.q_active = False
+# استخدام واجهة الشات 
