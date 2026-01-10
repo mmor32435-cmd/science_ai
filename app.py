@@ -1,11 +1,7 @@
 import streamlit as st
 import nest_asyncio
 import threading
-import time
-from io import BytesIO
-from datetime import datetime
-
-# مكتبات Google والوسائط
+import os
 import google.generativeai as genai
 import edge_tts
 import speech_recognition as sr
@@ -15,60 +11,48 @@ from google.oauth2 import service_account
 import gspread
 import asyncio
 
-# 1. تفعيل التزامن وإعداد الصفحة
+# تفعيل التزامن
 nest_asyncio.apply()
+
+# 1. إعداد الصفحة
 st.set_page_config(page_title="المعلم الذكي", layout="wide")
 
-# 2. حل مشكلة الألوان نهائياً (إجبار الوضع الفاتح)
+# تصميم يجبر النصوص على اللون الأسود والخلفية بيضاء
 st.markdown("""
 <style>
-    /* إجبار الخلفية البيضاء والنص الأسود */
-    [data-testid="stAppViewContainer"] {
-        background-color: #ffffff;
-    }
-    [data-testid="stHeader"] {
-        background-color: #ffffff;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #f0f2f6;
-    }
-    /* جعل جميع النصوص سوداء */
-    h1, h2, h3, p, span, div, label {
-        color: #000000 !important;
-    }
-    /* تنسيق رسائل الشات */
-    .stChatMessage {
-        background-color: #f9f9f9;
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
-        border: 1px solid #ddd;
-    }
+    /* إجبار الوضع الفاتح */
+    [data-testid="stAppViewContainer"] { background-color: #ffffff; }
+    [data-testid="stSidebar"] { background-color: #f0f2f6; }
+    [data-testid="stHeader"] { background-color: #ffffff; }
+    
+    /* النصوص سوداء */
+    h1, h2, h3, p, div, span, label { color: #000000 !important; }
+    
+    /* رسائل الشات */
+    .stChatMessage { background-color: #f8f9fa; border: 1px solid #ddd; }
+    
+    /* الأزرار */
+    .stButton>button { width: 100%; border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# 3. إعدادات الجلسة
+# 2. تهيئة المتغيرات
 if "auth" not in st.session_state:
     st.session_state.auth = False
     st.session_state.user = ""
+    st.session_state.grade = ""
     st.session_state.msgs = []
 
-# 4. دوال الاتصال (تم تبسيطها)
-def get_db():
+# 3. دوال النظام
+def get_db_pass():
     if "gcp_service_account" not in st.secrets: return None
     try:
         cred = service_account.Credentials.from_service_account_info(
             dict(st.secrets["gcp_service_account"]),
             scopes=['https://www.googleapis.com/auth/spreadsheets']
         )
-        return gspread.authorize(cred)
-    except: return None
-
-def get_student_pass():
-    client = get_db()
-    if not client: return None
-    try:
-        # قراءة الخلية B1 من شيت App_Control
+        client = gspread.authorize(cred)
+        # جلب القيمة وتنظيف المسافات
         val = client.open("App_Control").sheet1.acell('B1').value
         return str(val).strip() if val else None
     except: return None
@@ -78,7 +62,6 @@ def get_ai():
     if not keys: return None
     import random
     genai.configure(api_key=random.choice(keys))
-    # نستخدم الموديل القديم لأنه الأضمن
     return genai.GenerativeModel('gemini-pro')
 
 def get_vision_ai():
@@ -88,128 +71,133 @@ def get_vision_ai():
     genai.configure(api_key=random.choice(keys))
     return genai.GenerativeModel('gemini-pro-vision')
 
-# دوال الصوت
-async def tts_gen(text):
-    # إزالة الرموز قبل القراءة
-    text = text.replace("*", "").replace("#", "")
-    cm = edge_tts.Communicate(text, "ar-EG-ShakirNeural")
-    out = BytesIO()
-    async for ch in cm.stream():
-        if ch["type"] == "audio": out.write(ch["data"])
-    return out
-
-def play_audio(txt):
+# 4. إصلاح الميكروفون (الحفظ في ملف مؤقت)
+def transribe_audio(audio_bytes):
+    r = sr.Recognizer()
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        aud = loop.run_until_complete(tts_gen(txt[:200]))
-        st.audio(aud, format='audio/mp3', autoplay=True)
-    except: pass
+        # حفظ الملف مؤقتاً لحل مشكلة القراءة
+        with open("temp_audio.wav", "wb") as f:
+            f.write(audio_bytes)
+        
+        with sr.AudioFile("temp_audio.wav") as source:
+            r.adjust_for_ambient_noise(source)
+            audio = r.record(source)
+            # التعرف على الكلام
+            text = r.recognize_google(audio, language="ar-EG")
+            return text
+    except Exception as e:
+        return None
 
 # ============================
-# الشاشة 1: تسجيل الدخول
+# شاشة الدخول
 # ============================
 if not st.session_state.auth:
-    c1, c2, c3 = st.columns([1,2,1])
-    with c2:
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
         st.title("🔐 تسجيل الدخول")
         with st.form("login_form"):
             name = st.text_input("الاسم:")
+            # إعادة قائمة الصفوف
+            grade = st.selectbox("الصف:", ["الرابع", "الخامس", "السادس", "الإعدادي", "الثانوي"])
             code = st.text_input("الكود:", type="password")
-            btn = st.form_submit_button("دخول")
             
-            if btn:
-                real_pass = get_student_pass()
-                # كود المعلم الثابت
-                is_admin = (code == "ADMIN_2024")
-                # كود الطالب من الشيت
-                is_student = (real_pass and code == real_pass)
+            if st.form_submit_button("دخول"):
+                real_pass = get_db_pass()
+                # التحقق مع إزالة المسافات الزائدة
+                user_code = code.strip()
+                
+                is_admin = (user_code == "ADMIN_2024")
+                is_student = (real_pass and user_code == real_pass)
                 
                 if is_admin or is_student:
                     st.session_state.auth = True
                     st.session_state.user = name
-                    st.success("تم الدخول بنجاح")
+                    st.session_state.grade = grade
                     st.rerun()
                 else:
-                    st.error("الكود غير صحيح أو لا يوجد اتصال")
+                    st.error("الكود غير صحيح (تأكد من الشيت)")
     st.stop()
 
 # ============================
-# الشاشة 2: التطبيق الرئيسي
+# التطبيق الرئيسي
 # ============================
-st.sidebar.title(f"مرحباً {st.session_state.user}")
-if st.sidebar.button("خروج"):
-    st.session_state.auth = False
-    st.rerun()
+with st.sidebar:
+    st.header(f"الطالب: {st.session_state.user}")
+    st.info(f"الصف: {st.session_state.grade}")
+    if st.button("خروج"):
+        st.session_state.auth = False
+        st.rerun()
 
 st.title("🧬 المعلم الذكي")
 
-# التبويبات (أدوات)
-t1, t2, t3 = st.tabs(["🎙️ صوت", "📝 كتابة", "📷 صورة"])
+# التبويبات
+tab1, tab2, tab3 = st.tabs(["🎙️ تحدث", "✍️ اكتب", "📸 صور"])
 
-with t1:
-    st.write("تحدث الآن:")
-    audio = mic_recorder(start_prompt="🎤 ابدأ", stop_prompt="⏹️ إرسال")
+# 1. تبويب الصوت (المصلح)
+with tab1:
+    st.write("اضغط وسجل سؤالك:")
+    audio = mic_recorder(start_prompt="🎤 ابدأ التسجيل", stop_prompt="⏹️ إنهاء", key='mic')
     
     if audio:
-        try:
-            r = sr.Recognizer()
-            audio_data = BytesIO(audio['bytes'])
-            with sr.AudioFile(audio_data) as source:
-                r.adjust_for_ambient_noise(source)
-                voice = r.record(source)
-                txt = r.recognize_google(voice, language="ar-EG")
-                
-            st.success(f"سمعت: {txt}")
-            
-            # إرسال للذكاء الاصطناعي
+        with st.spinner("جاري معالجة الصوت..."):
+            text = transribe_audio(audio['bytes'])
+            if text:
+                st.success(f"سمعتك تقول: {text}")
+                # الرد
+                m = get_ai()
+                if m:
+                    res = m.generate_content(f"أجب باختصار: {text}").text
+                    st.session_state.msgs.append({"role": "user", "content": text})
+                    st.session_state.msgs.append({"role": "ai", "content": res})
+                    st.rerun() # تحديث فوري
+            else:
+                st.error("لم أسمع جيداً، حاول مرة أخرى.")
+
+# 2. تبويب الكتابة
+with tab2:
+    q = st.text_area("سؤالك:", height=70)
+    if st.button("إرسال السؤال"):
+        if q:
             m = get_ai()
             if m:
-                reply = m.generate_content(f"رد باختصار: {txt}").text
-                st.session_state.msgs.append({"role": "user", "txt": txt})
-                st.session_state.msgs.append({"role": "ai", "txt": reply})
+                prompt = f"اشرح لطالب في {st.session_state.grade}: {q}"
+                res = m.generate_content(prompt).text
+                st.session_state.msgs.append({"role": "user", "content": q})
+                st.session_state.msgs.append({"role": "ai", "content": res})
                 st.rerun()
-        except:
-            st.error("لم أتمكن من فهم الصوت، حاول مرة أخرى")
 
-with t2:
-    q = st.text_input("اكتب سؤالك:")
-    if st.button("إرسال") and q:
-        m = get_ai()
-        if m:
-            reply = m.generate_content(f"اشرح: {q}").text
-            st.session_state.msgs.append({"role": "user", "txt": q})
-            st.session_state.msgs.append({"role": "ai", "txt": reply})
-            st.rerun()
-
-with t3:
-    up = st.file_uploader("صورة", type=['png','jpg'])
-    if up and st.button("تحليل"):
+# 3. تبويب الصور
+with tab3:
+    up = st.file_uploader("صورة", type=['jpg','png'])
+    if up and st.button("تحليل الصورة"):
         img = Image.open(up)
         st.image(img, width=200)
         m = get_vision_ai()
         if m:
-            reply = m.generate_content(["اشرح الصورة", img]).text
-            st.session_state.msgs.append({"role": "user", "txt": "قام برفع صورة"})
-            st.session_state.msgs.append({"role": "ai", "txt": reply})
+            res = m.generate_content(["اشرح الصورة علمياً", img]).text
+            st.session_state.msgs.append({"role": "user", "content": "أرسل صورة"})
+            st.session_state.msgs.append({"role": "ai", "content": res})
             st.rerun()
 
-# عرض السجل (باستخدام مكونات Streamlit الأصلية)
+# عرض المحادثة (الأسفل)
 st.divider()
-st.subheader("المحادثة")
-
-# نعكس الترتيب لنرى الأحدث أولاً
 for msg in reversed(st.session_state.msgs):
     role = msg["role"]
-    txt = msg["txt"]
+    content = msg["content"]
     
     if role == "user":
         with st.chat_message("user"):
-            st.write(txt)
+            st.write(content)
     else:
         with st.chat_message("assistant"):
-            st.write(txt)
-            # زر صوت فريد
-            key = f"btn_{hash(txt)}"
-            if st.button("🔊 استمع", key=key):
-                play_audio(txt)
+            st.write(content)
+            
+            # زر قراءة الصوت (اختياري لتجنب التعقيد)
+            if st.button("🔊 قراءة", key=str(hash(content))):
+                async def play():
+                    cm = edge_tts.Communicate(content[:200], "ar-EG-ShakirNeural")
+                    out = b""
+                    async for chunk in cm.stream():
+                        if chunk["type"] == "audio": out += chunk["data"]
+                    st.audio(out, format='audio/mp3')
+                asyncio.run(play())
