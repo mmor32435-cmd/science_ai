@@ -3,8 +3,8 @@ import streamlit as st
 # 1. إعدادات الصفحة (أول سطر إلزامي)
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
+# استيراد المكتبات
 import time
-import google.generativeai as genai
 import asyncio
 import edge_tts
 import speech_recognition as sr
@@ -25,11 +25,11 @@ import random
 import graphviz
 import matplotlib.pyplot as plt
 import threading
+import google.generativeai as genai
 
 # ==========================================
-# 🎛️ إعدادات التحكم
+# 🎛️ الثوابت
 # ==========================================
-
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
 SESSION_DURATION_MINUTES = 60
@@ -44,7 +44,24 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ الخدمات والدوال المساعدة
+# 🛠️ تهيئة الجلسة (Session State)
+# ==========================================
+if "auth_status" not in st.session_state:
+    st.session_state.auth_status = False
+    st.session_state.user_type = "none"
+    st.session_state.chat_history = []
+    st.session_state.student_grade = ""
+    st.session_state.study_lang = ""
+    st.session_state.quiz_active = False
+    st.session_state.current_quiz_question = ""
+    st.session_state.current_xp = 0
+    st.session_state.user_name = "Guest"
+    st.session_state.start_time = time.time()
+    st.session_state.language = "العربية"
+    st.session_state.last_audio_bytes = None
+
+# ==========================================
+# 🔌 دوال الاتصال (Backend)
 # ==========================================
 
 @st.cache_resource
@@ -56,97 +73,75 @@ def get_gspread_client():
                 scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
             )
             return gspread.authorize(creds)
-        except:
-            return None
+        except: return None
     return None
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client: return None, None
+    if not client: return None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
-        daily_pass = str(sheet.sheet1.acell('B1').value).strip()
-        return daily_pass, sheet
-    except:
-        return None, None
+        return str(sheet.sheet1.acell('B1').value).strip()
+    except: return None
 
-def update_daily_password(new_pass):
-    client = get_gspread_client()
-    if not client: return False
-    try:
-        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
-        return True
-    except:
-        return False
+# دالة الدخول الرئيسية
+def attempt_login(name, grade, system, password):
+    if not name and password != TEACHER_MASTER_KEY:
+        return False, "⚠️ يرجى كتابة الاسم"
+    
+    # التحقق من المعلم
+    if password == TEACHER_MASTER_KEY:
+        return True, "teacher"
+    
+    # التحقق من الطالب
+    sheet_pass = get_sheet_data()
+    if sheet_pass and password == sheet_pass:
+        return True, "student"
+    
+    return False, "⛔ كود الدخول غير صحيح"
 
-# --- دوال التسجيل في الخلفية ---
-
-def _log_login_bg(user_name, user_type, details):
-    client = get_gspread_client()
-    if not client: return
-    try:
-        sheet = None
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Logs")
-        except:
-            sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        
-        tz = pytz.timezone('Africa/Cairo')
-        now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now, user_type, user_name, details])
-    except:
-        pass
-
-def log_login_to_sheet(user_name, user_type, details=""):
-    threading.Thread(target=_log_login_bg, args=(user_name, user_type, details)).start()
-
-def _log_activity_bg(user_name, input_type, question_text):
+# --- دوال التسجيل في الخلفية (Threaded) ---
+def _log_bg(user_name, user_type, details, log_type):
     client = get_gspread_client()
     if not client: return
     try:
-        sheet = None
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Activity")
-        except:
-            return
+        sheet_name = "Logs" if log_type == "login" else "Activity"
+        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet(sheet_name)
+        except: sheet = client.open(CONTROL_SHEET_NAME).sheet1
         
         tz = pytz.timezone('Africa/Cairo')
         now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         
-        final_text = question_text
-        if isinstance(question_text, list):
-            final_text = f"[Image] {question_text[0]}"
-            
-        sheet.append_row([now, user_name, input_type, str(final_text)[:500]])
-    except:
-        pass
+        if log_type == "login":
+            sheet.append_row([now, user_type, user_name, details])
+        else:
+            # details here is [input_type, question_text]
+            sheet.append_row([now, user_name, details[0], str(details[1])[:500]])
+    except: pass
 
-def log_activity(user_name, input_type, question_text):
-    threading.Thread(target=_log_activity_bg, args=(user_name, input_type, question_text)).start()
+def log_login(user_name, user_type, details):
+    threading.Thread(target=_log_bg, args=(user_name, user_type, details, "login")).start()
 
-def _update_xp_bg(user_name, points):
+def log_activity(user_name, input_type, text):
+    threading.Thread(target=_log_bg, args=(user_name, input_type, [input_type, text], "activity")).start()
+
+def _xp_bg(user_name, points):
     client = get_gspread_client()
     if not client: return
     try:
-        sheet = None
-        try:
-            sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        except:
-            return
-        
+        try: sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        except: return
         cell = sheet.find(user_name)
         if cell:
             curr = int(sheet.cell(cell.row, 2).value)
             sheet.update_cell(cell.row, 2, curr + points)
         else:
             sheet.append_row([user_name, points])
-    except:
-        pass
+    except: pass
 
-def update_xp(user_name, points_to_add):
-    if 'current_xp' in st.session_state:
-        st.session_state.current_xp += points_to_add
-    threading.Thread(target=_update_xp_bg, args=(user_name, points_to_add)).start()
+def update_xp(user_name, points):
+    st.session_state.current_xp += points
+    threading.Thread(target=_xp_bg, args=(user_name, points)).start()
 
 def get_current_xp(user_name):
     client = get_gspread_client()
@@ -154,11 +149,8 @@ def get_current_xp(user_name):
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
-        if cell:
-            return int(sheet.cell(cell.row, 2).value)
-        return 0
-    except:
-        return 0
+        return int(sheet.cell(cell.row, 2).value) if cell else 0
+    except: return 0
 
 def get_leaderboard():
     client = get_gspread_client()
@@ -170,6 +162,14 @@ def get_leaderboard():
         df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
         return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
     except: return []
+
+def update_daily_password(new_pass):
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        client.open(CONTROL_SHEET_NAME).sheet1.update_acell('B1', new_pass)
+        return True
+    except: return False
 
 def clear_old_data():
     client = get_gspread_client()
@@ -195,20 +195,49 @@ def get_stats_for_admin():
         return len(logs)-1 if logs else 0, qs[-5:] if qs else []
     except: return 0, []
 
-def get_chat_text(history):
-    text = "--- Chat History ---\n\n"
-    for q, a in history: text += f"Student: {q}\nAI Tutor: {a}\n\n"
-    return text
-
 def create_certificate(student_name):
-    txt = f"CERTIFICATE OF EXCELLENCE\n\nAwarded to: {student_name}\n\nFor achieving 100 XP in AI Science Tutor.\n\nSigned: Mr. Elsayed Elbadawy"
+    txt = f"CERTIFICATE OF EXCELLENCE\nAwarded to: {student_name}\nSigned: Mr. Elsayed Elbadawy"
     return txt.encode('utf-8')
 
-# Streaming Effect
-def stream_text_effect(text):
-    for word in text.split(" "):
-        yield word + " "
-        time.sleep(0.04)
+def get_chat_text(history):
+    text = "--- Chat History ---\n"
+    for q, a in history: text += f"Student: {q}\nTutor: {a}\n\n"
+    return text
+
+# --- دوال الذكاء الاصطناعي والصوت ---
+def get_voice_config(lang):
+    if lang == "English": return "en-US-AndrewNeural", "en-US"
+    else: return "ar-EG-ShakirNeural", "ar-EG"
+
+def clean_text_for_audio(text):
+    text = re.sub(r'\\begin\{.*?\}', '', text) 
+    text = re.sub(r'\\end\{.*?\}', '', text)   
+    text = re.sub(r'\\item', '', text)         
+    text = re.sub(r'\\textbf\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\textit\{(.*?)\}', r'\1', text) 
+    text = re.sub(r'\\underline\{(.*?)\}', r'\1', text)
+    text = text.replace('*', '').replace('#', '').replace('-', '').replace('_', ' ').replace('`', '')
+    return text
+
+async def generate_audio_stream(text, voice_code):
+    clean_text = clean_text_for_audio(text)
+    if isinstance(voice_code, tuple) or isinstance(voice_code, list):
+        voice_code = voice_code[0]
+    communicate = edge_tts.Communicate(clean_text, voice_code, rate="-5%")
+    mp3_fp = BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio": mp3_fp.write(chunk["data"])
+    return mp3_fp
+
+def speech_to_text(audio_bytes, lang_code):
+    r = sr.Recognizer()
+    try:
+        audio_file = sr.AudioFile(BytesIO(audio_bytes))
+        with audio_file as source:
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = r.record(source)
+            return r.recognize_google(audio_data, language=lang_code)
+    except: return None
 
 @st.cache_resource
 def get_drive_service():
@@ -237,13 +266,27 @@ def download_pdf_text(service, file_id):
         return text
     except: return ""
 
-def get_voice_config(lang):
-    if lang == "English": return "en-US-AndrewNeural", "en-US"
-    else: return "ar-EG-ShakirNeural", "ar-EG"
+def get_working_genai_model():
+    keys = []
+    if "GOOGLE_API_KEYS" in st.secrets:
+        keys = st.secrets["GOOGLE_API_KEYS"]
+    elif "GOOGLE_API_KEY" in st.secrets:
+        keys = [st.secrets["GOOGLE_API_KEY"]]
+    if not keys: return None
+    random.shuffle(keys)
+    for key in keys:
+        try:
+            genai.configure(api_key=key)
+            return genai.GenerativeModel('gemini-1.5-flash')
+        except: continue
+    return None
 
-def clean_text_for_audio(text):
-    text = re.sub(r'\\documentclass\{.*?\}', '', text) 
-    text = re.sub(r'\\usepackage\{.*?\}', '', text)
-    text = re.sub(r'\\begin\{.*?\}', '', text) 
-    text = re.sub(r'\\end\{.*?\}', '', text)   
-    text 
+def smart_generate_content(prompt_content):
+    model = get_working_genai_model()
+    if not model: raise Exception("API Keys Busy")
+    try: return model.generate_content(prompt_content)
+    except Exception as e:
+        time.sleep(1)
+        model = get_working_genai_model()
+        if model: return model.generate_content(prompt_content)
+        else: raise e
