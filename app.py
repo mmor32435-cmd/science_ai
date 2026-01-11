@@ -1,9 +1,8 @@
 """
-AI Science Tutor Pro - Corrected Full App
-- إصلاح استدعاء st.experimental_rerun داخل الفورم (نقله للخارج)
-- التأكد من تعريف الأعمدة قبل أي استخدام لـ with colX:
-- تحسينات دفاعية وثباتية عامة
-- يحتفظ بالميزات المتقدمة: نماذج متعددة، TTS، تحويل كلام لنص، Drive/Sheets دعم اختياري، سجل محلي
+AI Science Tutor Pro - Corrected Full App with safe_rerun
+- Replaces direct calls to st.experimental_rerun() with safe_rerun()
+- Ensures columns are defined before use and rerun is triggered outside form context
+- Defensive improvements retained (model fallbacks, TTS wrapper, local logging)
 """
 
 import streamlit as st
@@ -100,6 +99,29 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+
+# ==========================================
+# safe_rerun: cross-version safe rerun wrapper
+# ==========================================
+def safe_rerun():
+    """
+    Try to rerun the Streamlit script in a safe, cross-version way.
+    Falls back to st.rerun() or st.stop() if rerun isn't available or fails.
+    """
+    try:
+        if hasattr(st, "experimental_rerun") and callable(st.experimental_rerun):
+            st.experimental_rerun()
+            return
+        if hasattr(st, "rerun") and callable(st.rerun):
+            st.rerun()
+            return
+    except Exception:
+        logger.exception("safe_rerun: rerun attempt failed")
+    # Final fallback: stop current run (session_state persists)
+    try:
+        st.stop()
+    except Exception:
+        logger.exception("safe_rerun: st.stop also failed")
 
 # ==========================================
 # Utilities
@@ -475,13 +497,6 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
 # ==========================================
 # UI Layout & Interaction
 # ==========================================
-draw_header = lambda: st.markdown("""
-    <div style='background:linear-gradient(135deg,#6a11cb,#2575fc);padding:1.2rem;border-radius:12px;text-align:center;color:white;margin-bottom:1rem;'>
-        <h1 style='margin:0;'>🧬 AI Science Tutor Pro</h1>
-        <div style='font-size:0.95rem;opacity:0.95;'>مُنظّم للتعلم، مدعوم بعدة مزوّدين ونظام تعزيز تكاملي</div>
-    </div>
-""", unsafe_allow_html=True)
-
 draw_header()
 
 if not st.session_state.auth_status:
@@ -515,7 +530,7 @@ if not st.session_state.auth_status:
     # After the form block, perform rerun from main context if needed
     if st.session_state.pop("_needs_rerun", False):
         time.sleep(0.4)
-        st.experimental_rerun()
+        safe_rerun()
 
     st.stop()
 
@@ -523,7 +538,7 @@ if not st.session_state.auth_status:
 if session_expired():
     st.warning("انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.")
     st.session_state.auth_status = False
-    st.experimental_rerun()
+    safe_rerun()
 
 # Sidebar
 with st.sidebar:
