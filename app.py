@@ -23,7 +23,7 @@ import pandas as pd
 import graphviz
 
 # ==========================================
-# 1. إعدادات الصفحة
+# 1. إعدادات الصفحة (يجب أن تكون أول سطر)
 # ==========================================
 st.set_page_config(
     page_title="AI Science Tutor Pro",
@@ -33,7 +33,25 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. الثوابت
+# 2. تهيئة المتغيرات (مهم جداً أن تكون هنا)
+# ==========================================
+if "auth_status" not in st.session_state:
+    st.session_state.update({
+        "auth_status": False, 
+        "user_type": "none", 
+        "chat_history": [],
+        "student_grade": "", 
+        "current_xp": 0, 
+        "last_audio_bytes": None,
+        "language": "العربية", 
+        "ref_text": "", 
+        "user_name": "Guest",
+        "q_active": False, 
+        "q_curr": ""
+    })
+
+# ==========================================
+# 3. الثوابت
 # ==========================================
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
@@ -44,11 +62,10 @@ DAILY_FACTS = [
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
     "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
     "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
-    "هل تعلم؟ سرعة الضوء هي 300,000 كم/ثانية! ⚡",
 ]
 
 # ==========================================
-# 3. دوال الخدمات (Backend)
+# 4. الدوال والخدمات
 # ==========================================
 
 # --- جداول جوجل ---
@@ -75,7 +92,7 @@ def get_sheet_data():
     except Exception:
         return None
 
-# --- المعالجة الخلفية (تم تبسيطها لمنع الأخطاء) ---
+# --- الخلفية (تسجيل النشاط) ---
 def _bg_task(task_type, data):
     if "gcp_service_account" not in st.secrets:
         return
@@ -88,25 +105,19 @@ def _bg_task(task_type, data):
         now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
         if task_type == "login":
-            try:
-                sheet = wb.worksheet("Logs")
-            except:
-                sheet = wb.add_worksheet("Logs", 1000, 5)
+            try: sheet = wb.worksheet("Logs")
+            except: sheet = wb.add_worksheet("Logs", 1000, 5)
             sheet.append_row([now_str, data['type'], data['name'], data['details']])
 
         elif task_type == "activity":
-            try:
-                sheet = wb.worksheet("Activity")
-            except:
-                sheet = wb.add_worksheet("Activity", 1000, 5)
+            try: sheet = wb.worksheet("Activity")
+            except: sheet = wb.add_worksheet("Activity", 1000, 5)
             clean_text = str(data['text'])[:1000]
             sheet.append_row([now_str, data['name'], data['input_type'], clean_text])
 
         elif task_type == "xp":
-            try:
-                sheet = wb.worksheet("Gamification")
-            except:
-                sheet = wb.add_worksheet("Gamification", 1000, 3)
+            try: sheet = wb.worksheet("Gamification")
+            except: sheet = wb.add_worksheet("Gamification", 1000, 3)
             try:
                 cell = sheet.find(data['name'])
                 if cell:
@@ -133,8 +144,7 @@ def update_xp(user_name, points):
 
 def get_current_xp(user_name):
     client = get_gspread_client()
-    if not client:
-        return 0
+    if not client: return 0
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
@@ -147,20 +157,16 @@ def get_current_xp(user_name):
 
 def get_leaderboard():
     client = get_gspread_client()
-    if not client:
-        return []
+    if not client: return []
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        if df.empty:
-            return []
-        # التأكد من الأعمدة
+        if df.empty: return []
         if 'XP' not in df.columns:
             if len(df.columns) >= 2:
                 df.columns = ['Student_Name', 'XP'] + list(df.columns[2:])
-            else:
-                return []
+            else: return []
         df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
         return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
     except Exception:
@@ -169,8 +175,7 @@ def get_leaderboard():
 # --- جوجل درايف ---
 @st.cache_resource
 def get_drive_service():
-    if "gcp_service_account" not in st.secrets:
-        return None
+    if "gcp_service_account" not in st.secrets: return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
@@ -203,14 +208,13 @@ def download_pdf_text(service, file_id):
     except Exception:
         return ""
 
-# --- الصوت ---
+# --- الصوت والذكاء الاصطناعي ---
 async def generate_audio_stream(text, voice_code):
     clean = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
     clean = re.sub(r'[*#_`\[\]()><=~-]', ' ', clean)
     clean = re.sub(r'http\S+', ' ', clean)
     clean = " ".join(clean.split())
-    if not clean:
-        return None
+    if not clean: return None
     comm = edge_tts.Communicate(clean, voice_code, rate="-2%")
     mp3 = BytesIO()
     async for chunk in comm.stream():
@@ -228,11 +232,9 @@ def speech_to_text(audio_bytes, lang_code):
     except Exception:
         return None
 
-# --- الذكاء الاصطناعي ---
 def get_working_model():
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
-    if not keys:
-        return None
+    if not keys: return None
     keys_copy = list(keys)
     random.shuffle(keys_copy)
     models = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.5-pro']
@@ -242,6 +244,13 @@ def get_working_model():
             try:
                 model = genai.GenerativeModel(m)
                 return model
-            except:
-                continue
+            except: continue
     return None
+
+def process_ai_response(user_input, input_type="text"):
+    user_text_log = user_input if input_type != "image" else "Image Analysis Request"
+    log_activity(st.session_state.user_name, input_type, user_text_log)
+    
+    with st.spinner("🧠 جاري التفكير..."):
+        try:
+            
