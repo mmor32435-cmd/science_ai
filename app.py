@@ -214,7 +214,8 @@ def get_sheet_data(max_retries=3):
     for attempt in range(max_retries):
         try:
             client = get_gspread_client()
-            if not client: return None
+            if not client: 
+                return None
             sheet = client.open(CONTROL_SHEET_NAME)
             val = sheet.sheet1.acell('B1').value
             return str(val).strip() if val else None
@@ -330,3 +331,6 @@ def update_xp(user_name, points):
 def get_user_data(user_name, max_retries=3):
     for attempt in range(max_retries):
         try:
+            client = get_gspread_client()
+            if not client: 
+                return {"xp
