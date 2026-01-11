@@ -1,4 +1,10 @@
 import streamlit as st
+
+# ==========================================
+# 1. إعدادات الصفحة
+# ==========================================
+st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
+
 import time
 import asyncio
 import re
@@ -23,265 +29,406 @@ import pandas as pd
 import graphviz
 
 # ==========================================
-# 1. إعدادات الصفحة والستايل
+# 🎛️ الثوابت
 # ==========================================
-st.set_page_config(page_title="AI Science Tutor Pro 2026", page_icon="🧬", layout="wide")
-
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background: linear-gradient(135deg,#6a11cb,#2575fc); color:white; border:none; }
-    .stMetric { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
-
-# ==========================================
-# 🎛️ الثوابت والإعدادات
-# ==========================================
-TEACHER_MASTER_KEY = "ADMIN_2026"
+TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
+SESSION_DURATION_MINUTES = 60
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "") 
 
 DAILY_FACTS = [
-    "هل تعلم؟ قلب الحوت الأزرق كبير جداً لدرجة أن الإنسان يمكنه السباحة في شرايينه! 🐳",
-    "هل تعلم؟ الألماس والجرافيت (رصاص القلم) مكونان من نفس العنصر: الكربون! 💎",
-    "هل تعلم؟ الضوء يستغرق 8 دقائق و20 ثانية ليصل من الشمس إلى الأرض! ☀️",
-    "هل تعلم؟ البكتيريا في جسمك تزن حوالي 2 كيلوجرام! 🦠",
+    "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
+    "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
+    "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
 ]
 
 # ==========================================
-# 🛠️ الخدمات الخلفية (بيانات وجوجل)
+# 🛠️ الخدمات الخلفية
 # ==========================================
 
-@st.cache_resource
-def get_gcp_creds():
-    if "gcp_service_account" not in st.secrets:
-        return None
-    return service_account.Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]),
-        scopes=[
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/spreadsheets'
-        ]
-    )
-
+# --- جداول جوجل ---
 @st.cache_resource
 def get_gspread_client():
-    creds = get_gcp_creds()
-    return gspread.authorize(creds) if creds else None
+    if "gcp_service_account" not in st.secrets:
+        return None
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        scope = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
 
 def get_sheet_data():
     client = get_gspread_client()
     if not client: return None
     try:
-        sheet = client.open(CONTROL_SHEET_NAME).sheet1
-        return str(sheet.acell('B1').value).strip()
-    except: return None
+        sheet = client.open(CONTROL_SHEET_NAME)
+        val = sheet.sheet1.acell('B1').value
+        return str(val).strip()
+    except Exception:
+        return None
 
-# نظام التسجيل المحسن (Background Logging)
+# --- التسجيل (Logs) ---
 def _bg_task(task_type, data):
-    client = get_gspread_client()
-    if not client: return
+    if "gcp_service_account" not in st.secrets:
+        return
+
     try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        client = gspread.authorize(service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']))
         wb = client.open(CONTROL_SHEET_NAME)
+        
         tz = pytz.timezone('Africa/Cairo')
         now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
         if task_type == "login":
-            wb.worksheet("Logs").append_row([now_str, data['type'], data['name'], data['details']])
+            try: sheet = wb.worksheet("Logs")
+            except: sheet = wb.sheet1
+            sheet.append_row([now_str, data['type'], data['name'], data['details']])
+
         elif task_type == "activity":
-            wb.worksheet("Activity").append_row([now_str, data['name'], data['input_type'], str(data['text'])[:500]])
+            try: sheet = wb.worksheet("Activity")
+            except: return
+            clean_text = str(data['text'])[:1000]
+            sheet.append_row([now_str, data['name'], data['input_type'], clean_text])
+
         elif task_type == "xp":
-            sh = wb.worksheet("Gamification")
-            cell = sh.find(data['name'])
+            try: sheet = wb.worksheet("Gamification")
+            except: return
+            cell = sheet.find(data['name'])
             if cell:
-                curr = int(sh.cell(cell.row, 2).value or 0)
-                sh.update_cell(cell.row, 2, curr + data['points'])
+                val = sheet.cell(cell.row, 2).value
+                current_xp = int(val) if val else 0
+                sheet.update_cell(cell.row, 2, current_xp + data['points'])
             else:
-                sh.append_row([data['name'], data['points']])
-    except: pass
+                sheet.append_row([data['name'], data['points']])
+    except Exception:
+        pass
 
-def log_activity(input_type, text):
-    threading.Thread(target=_bg_task, args=("activity", {
-        'name': st.session_state.user_name, 'input_type': input_type, 'text': text
-    })).start()
+def log_login(user_name, user_type, details):
+    threading.Thread(target=_bg_task, args=("login", {'name': user_name, 'type': user_type, 'details': details})).start()
 
-def update_xp(points):
-    st.session_state.current_xp += points
-    threading.Thread(target=_bg_task, args=("xp", {
-        'name': st.session_state.user_name, 'points': points
-    })).start()
+def log_activity(user_name, input_type, text):
+    threading.Thread(target=_bg_task, args=("activity", {'name': user_name, 'input_type': input_type, 'text': text})).start()
+
+def update_xp(user_name, points):
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points
+    threading.Thread(target=_bg_task, args=("xp", {'name': user_name, 'points': points})).start()
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client: return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        val = sheet.cell(cell.row, 2).value
+        return int(val) if val else 0
+    except Exception:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty: return []
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
+    except Exception:
+        return []
+
+# --- Google Drive ---
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" not in st.secrets: return None
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
+        return build('drive', 'v3', credentials=creds)
+    except Exception:
+        return None
+
+def list_drive_files(service, folder_id):
+    try:
+        q = f"'{folder_id}' in parents and trashed = false"
+        res = service.files().list(q=q, fields="files(id, name)").execute()
+        return res.get('files', [])
+    except Exception:
+        return []
+
+def download_pdf_text(service, file_id):
+    try:
+        req = service.files().get_media(fileId=file_id)
+        fh = BytesIO()
+        downloader = MediaIoBaseDownload(fh, req)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        reader = PyPDF2.PdfReader(fh)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text()
+        return text
+    except Exception:
+        return ""
 
 # ==========================================
-# 🧠 محرك الذكاء الاصطناعي (Gemini 2026)
+# 🔊 الصوت
 # ==========================================
+async def generate_audio_stream(text, voice_code):
+    clean = re.sub(r'[*#_`\[\]()><=]', ' ', text)
+    clean = re.sub(r'\\.*', '', clean)
+    comm = edge_tts.Communicate(clean, voice_code, rate="-5%")
+    mp3 = BytesIO()
+    async for chunk in comm.stream():
+        if chunk["type"] == "audio":
+            mp3.write(chunk["data"])
+    return mp3
 
+def speech_to_text(audio_bytes, lang_code):
+    r = sr.Recognizer()
+    try:
+        with sr.AudioFile(BytesIO(audio_bytes)) as source:
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = r.record(source)
+            return r.recognize_google(audio_data, language=lang_code)
+    except Exception:
+        return None
+
+# ==========================================
+# 🧠 الذكاء الاصطناعي (تم التحديث للنماذج الجديدة المتاحة لك)
+# ==========================================
 def get_working_model():
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys: return None
-    
+
     random.shuffle(keys)
-    # نماذج 2026 المحدثة
-    models_to_try = ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']
+    
+    # القائمة التي ظهرت في فحصك (الأحدث والأقوى)
+    models_to_try = [
+        'gemini-2.5-flash',       # الخيار الأول: الأسرع والأحدث
+        'gemini-flash-latest',    # الخيار الثاني: مستقر
+        'gemini-pro-latest',      # الخيار الثالث: احتياطي قوي
+        'gemini-2.0-flash'        # الخيار الرابع
+    ]
 
     for key in keys:
-        try:
-            genai.configure(api_key=key)
-            for m_name in models_to_try:
-                try:
-                    model = genai.GenerativeModel(m_name)
-                    # فحص سريع للنموذج
-                    model.generate_content("Hi", generation_config={"max_output_tokens": 10})
-                    return model
-                except: continue
-        except: continue
+        genai.configure(api_key=key)
+        for model_name in models_to_try:
+            try:
+                model = genai.GenerativeModel(model_name)
+                # اختبار سريع
+                model.generate_content("ping")
+                return model
+            except Exception:
+                continue
     return None
 
-async def text_to_speech(text, lang):
-    voice = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-AndrewNeural"
-    clean_text = re.sub(r'[#*`_]', '', text)[:500] # تنظيف النص للصوت
-    communicate = edge_tts.Communicate(clean_text, voice)
-    audio_data = BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data.write(chunk["data"])
-    audio_data.seek(0)
-    return audio_data
-
-def process_ai_interaction(user_input, input_type="text"):
-    log_activity(input_type, str(user_input))
-    model = get_working_model()
-    if not model:
-        st.error("🔌 عذراً، نواجه ضغطاً في السيرفرات حالياً.")
-        return
-
-    with st.chat_message("assistant"):
-        response_placeholder = st.empty()
-        full_response = ""
-        
-        # تحضير التعليمات البرمجية (Prompt Engineering)
-        prompt = f"""
-        You are an expert Science Teacher for {st.session_state.student_grade} grade.
-        Current Language: {st.session_state.language}.
-        Reference Material: {st.session_state.get('ref_text', '')[:5000]}
-        Rules:
-        1. Be encouraging and fun.
-        2. If a process is complex, provide a Graphviz 'dot' code block to visualize it.
-        3. Use simple analogies.
-        """
-
+def process_ai_response(user_text, input_type="text"):
+    log_activity(st.session_state.user_name, input_type, user_text)
+    
+    with st.spinner("🧠 جاري المعالجة..."):
         try:
+            model = get_working_model()
+            if not model:
+                st.error("⚠️ فشل الاتصال. يرجى إعادة تحميل الصفحة.")
+                return
+
+            lang = st.session_state.language
+            ref = st.session_state.get("ref_text", "")
+            grade = st.session_state.get("student_grade", "General")
+            
+            lang_instr = "Arabic" if lang == "العربية" else "English"
+            
+            base_prompt = f"""
+            Role: Science Tutor. Grade: {grade}.
+            Context: {ref[:10000]}
+            Instructions: Answer in {lang_instr}. Be helpful.
+            If diagram needed, use Graphviz DOT code inside ```dot ... ``` block.
+            """
+            
             if input_type == "image":
-                resp = model.generate_content([prompt, user_input[0], user_input[1]], stream=True)
+                 resp = model.generate_content([base_prompt, user_text[0], user_text[1]])
             else:
-                resp = model.generate_content(f"{prompt}\nStudent says: {user_input}", stream=True)
+                resp = model.generate_content(f"{base_prompt}\nStudent: {user_text}")
+            
+            full_text = resp.text
+            st.session_state.chat_history.append((str(user_text)[:50], full_text))
+            
+            # العرض
+            disp_text = full_text.split("```dot")[0]
+            dot_code = None
+            if "```dot" in full_text:
+                try:
+                    dot_code = full_text.split("```dot")[1].split("```")[0]
+                except Exception:
+                    pass
 
-            for chunk in resp:
-                full_response += chunk.text
-                response_placeholder.markdown(full_response + "▌")
+            st.markdown("---")
             
-            response_placeholder.markdown(full_response)
+            def stream():
+                for w in disp_text.split(" "):
+                    yield w + " "
+                    time.sleep(0.02)
+            st.write_stream(stream())
             
-            # استخراج الرسم البياني إذا وجد
-            if "```dot" in full_response:
-                dot_code = full_response.split("```dot")[1].split("```")[0]
-                st.graphviz_chart(dot_code)
+            if dot_code:
+                try:
+                    st.graphviz_chart(dot_code)
+                except Exception:
+                    pass
 
-            # تحويل النص إلى صوت تلقائياً
-            audio_io = asyncio.run(text_to_speech(full_response, st.session_state.language))
-            st.audio(audio_io, format='audio/mp3', autoplay=True)
-            
-            st.session_state.chat_history.append({"role": "assistant", "content": full_response})
+            # الصوت
+            vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-AndrewNeural"
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                audio = loop.run_until_complete(generate_audio_stream(disp_text[:400], vc))
+                st.audio(audio, format='audio/mp3', autoplay=True)
+            except Exception:
+                pass
 
         except Exception as e:
-            st.error(f"حدث خطأ أثناء المعالجة: {e}")
+            st.error(f"حدث خطأ: {e}")
 
 # ==========================================
-# 🎨 واجهة المستخدم (UI)
+# 🎨 الواجهة (UI)
 # ==========================================
+def draw_header():
+    st.markdown("""
+        <div style='background:linear-gradient(135deg,#6a11cb,#2575fc);padding:1.5rem;border-radius:15px;text-align:center;color:white;margin-bottom:1rem;'>
+            <h1 style='margin:0;'>🧬 AI Science Tutor</h1>
+        </div>
+    """, unsafe_allow_html=True)
 
 if "auth_status" not in st.session_state:
     st.session_state.update({
-        "auth_status": False, "user_name": "", "user_type": "", 
-        "chat_history": [], "student_grade": "", "current_xp": 0,
-        "language": "العربية", "ref_text": "", "q_active": False
+        "auth_status": False, "user_type": "none", "chat_history": [],
+        "student_grade": "", "current_xp": 0, "last_audio_bytes": None,
+        "language": "العربية", "ref_text": ""
     })
 
-def login_screen():
-    st.markdown("<h1 style='text-align: center;'>🧬 AI Science Tutor Pro</h1>", unsafe_allow_html=True)
+# --- تسجيل الدخول ---
+if not st.session_state.auth_status:
+    draw_header()
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.info(f"✨ حقيقة اليوم: {random.choice(DAILY_FACTS)}")
-        with st.form("login_form"):
-            name = st.text_input("الاسم الثلاثي")
-            grade = st.selectbox("المرحلة الدراسية", ["الرابع الابتدائي", "الخامس الابتدائي", "السادس الابتدائي", "الأول الاعدادي", "الثاني الاعدادي", "الثالث الاعدادي", "ثانوي"])
-            key = st.text_input("كود الدخول", type="password")
-            if st.form_submit_button("دخول إلى المختبر"):
-                db_key = get_sheet_data()
-                if key == TEACHER_MASTER_KEY or (db_key and key == db_key):
+        st.info(f"💡 {random.choice(DAILY_FACTS)}")
+        with st.form("login"):
+            name = st.text_input("الاسم:")
+            grade = st.selectbox("الصف:", ["الرابع", "الخامس", "السادس", "الأول ع", "الثاني ع", "الثالث ع", "ثانوي"])
+            code = st.text_input("الكود:", type="password")
+            if st.form_submit_button("دخول"):
+                db_pass = get_sheet_data()
+                is_teacher = (code == TEACHER_MASTER_KEY)
+                is_student = (db_pass and code == db_pass)
+                
+                if is_teacher or is_student:
                     st.session_state.auth_status = True
-                    st.session_state.user_name = name if key != TEACHER_MASTER_KEY else "Mr. Elsayed"
-                    st.session_state.user_type = "teacher" if key == TEACHER_MASTER_KEY else "student"
+                    st.session_state.user_type = "teacher" if is_teacher else "student"
+                    st.session_state.user_name = name if is_student else "Mr. Elsayed"
                     st.session_state.student_grade = grade
+                    st.session_state.start_time = time.time()
+                    if is_student:
+                        st.session_state.current_xp = get_current_xp(name)
+                        log_login(name, "student", grade)
+                    st.success("تم الدخول!")
+                    time.sleep(0.5)
                     st.rerun()
                 else:
-                    st.error("❌ الكود غير صحيح، يرجى مراجعة المعلم.")
-
-if not st.session_state.auth_status:
-    login_screen()
+                    st.error("الكود غير صحيح")
     st.stop()
 
-# --- واجهة التطبيق الرئيسية ---
+# --- التطبيق ---
+draw_header()
+
 with st.sidebar:
-    st.title(f"مرحباً {st.session_state.user_name} 👋")
-    st.session_state.language = st.radio("لغة الحوار", ["العربية", "English"])
-    st.metric("رصيدك من XP 🏆", st.session_state.current_xp)
+    st.write(f"أهلاً **{st.session_state.user_name}**")
+    st.session_state.language = st.radio("اللغة:", ["العربية", "English"])
     
-    if st.button("تسجيل الخروج"):
-        st.session_state.clear()
-        st.rerun()
+    if st.session_state.user_type == "student":
+        st.metric("XP", st.session_state.current_xp)
+        if st.session_state.current_xp >= 100: st.success("🎉 أحسنت!")
+        st.markdown("---")
+        st.caption("🏆 المتصدرون")
+        for i, r in enumerate(get_leaderboard()):
+            st.text(f"{i+1}. {r['Student_Name']} ({r['XP']})")
 
-st.markdown(f"### 🚀 مختبر العلوم الذكي - {st.session_state.student_grade}")
+    if DRIVE_FOLDER_ID:
+        svc = get_drive_service()
+        if svc:
+            files = list_drive_files(svc, DRIVE_FOLDER_ID)
+            if files:
+                st.markdown("---")
+                bn = st.selectbox("📚 المكتبة:", [f['name'] for f in files])
+                if st.button("تفعيل"):
+                    fid = next(f['id'] for f in files if f['name'] == bn)
+                    with st.spinner("تحميل..."):
+                        txt = download_pdf_text(svc, fid)
+                        if txt:
+                            st.session_state.ref_text = txt
+                            st.toast("تم تفعيل الكتاب")
 
-tab1, tab2, tab3 = st.tabs(["💬 حوار ذكي", "📷 تحليل صور", "📝 اختبار سريع"])
+t1, t2, t3, t4 = st.tabs(["🎙️", "📝", "📷", "🧠"])
 
-with tab1:
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-            
-    if prompt := st.chat_input("اسأل عن أي شيء في العلوم..."):
-        st.chat_message("user").write(prompt)
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        update_xp(5)
-        process_ai_interaction(prompt)
+with t1:
+    st.write("اضغط للتحدث:")
+    aud = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key='m')
+    if aud and aud['bytes'] != st.session_state.last_audio_bytes:
+        st.session_state.last_audio_bytes = aud['bytes']
+        lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
+        txt = speech_to_text(aud['bytes'], lang)
+        if txt:
+            st.chat_message("user").write(txt)
+            update_xp(st.session_state.user_name, 10)
+            process_ai_response(txt, "voice")
 
-with tab2:
-    st.subheader("تحليل الصور والرسومات العلمية")
-    img_file = st.file_uploader("ارفع صورة لدرس أو تجربة", type=['jpg', 'png', 'jpeg'])
-    if img_file:
-        img = Image.open(img_file)
-        st.image(img, caption="الصورة المرفوعة", width=300)
-        if st.button("حلل الصورة الآن"):
-            update_xp(15)
-            process_ai_interaction(["اشرح هذه الصورة العلمية بالتفصيل وببساطة", img], "image")
+with t2:
+    q = st.chat_input("اكتب سؤالك...")
+    if q:
+        st.chat_message("user").write(q)
+        update_xp(st.session_state.user_name, 5)
+        process_ai_response(q, "text")
 
-with tab3:
-    if st.button("توليد سؤال تحدي جديد 🎯"):
-        model = get_working_model()
-        if model:
-            q_prompt = f"Generate one challenging MCQ question about science for {st.session_state.student_grade} in {st.session_state.language}. Mention options A, B, C, D."
-            st.session_state.current_q = model.generate_content(q_prompt).text
-            st.session_state.q_active = True
-    
+with t3:
+    up = st.file_uploader("صورة", type=['png','jpg'])
+    if st.button("تحليل") and up:
+        img = Image.open(up)
+        st.image(img, width=150)
+        update_xp(st.session_state.user_name, 15)
+        process_ai_response(["اشرح الصورة", img], "image")
+
+with t4:
+    if st.button("سؤال جديد"):
+        m = get_working_model()
+        if m:
+            try:
+                p = f"1 MCQ science question for {st.session_state.student_grade}. {st.session_state.language}. No answer."
+                st.session_state.q_curr = m.generate_content(p).text
+                st.session_state.q_active = True
+                st.rerun()
+            except Exception:
+                st.error("حاول مرة أخرى")
+
     if st.session_state.get("q_active"):
-        st.info(st.session_state.current_q)
-        answer = st.text_input("اكتب حرف الإجابة الصحيحة أو الإجابة كاملة:")
-        if st.button("إرسال الإجابة"):
-            model = get_working_model()
-            check = model.generate_content(f"Question: {st.session_state.current_q}\nStudent Answer: {answer}\nIs it correct? Explain briefly in {st.session_state.language}").text
-            st.write(check)
-            if "correct" in check.lower() or "صحيح" in check:
-                st.balloons()
-                update_xp(50)
-            st.session_state.q_active = False
+        st.markdown("---")
+        st.write(st.session_state.q_curr)
+        ans = st.text_input("إجابتك:")
+        if st.button("تحقق"):
+            m = get_working_model()
+            if m:
+                try:
+                    res = m.generate_content(f"Q: {st.session_state.q_curr}\nAns: {ans}\nCheck correctness.").text
+                    st.write(res)
+                    if "correct" in res.lower() or "صحيح" in res:
+                        st.balloons()
+                        update_xp(st.session_state.user_name, 50)
+                    st.session_state.q_active = False
+                except Exception:
+                    st.error("خطأ في التحقق")
