@@ -1,8 +1,9 @@
 """
-AI Science Tutor Pro - Corrected Full App with safe_rerun
-- Replaces direct calls to st.experimental_rerun() with safe_rerun()
-- Ensures columns are defined before use and rerun is triggered outside form context
-- Defensive improvements retained (model fallbacks, TTS wrapper, local logging)
+AI Science Tutor Pro - Enhanced with diagnostics and robust provider handling
+- Adds diagnostics panel for AI providers
+- Improves call_model error reporting and accumulates provider errors
+- Adds safe_call_model wrapper to provide graceful fallback messages
+- Keeps safe_rerun and other defensive measures
 """
 
 import streamlit as st
@@ -224,8 +225,10 @@ def safe_update_xp_sheet(user_name: str, points: int):
     safe_write_local_log({"type": "xp", "time": now_str(), "user": user_name, "points": points})
 
 # ==========================================
-# Model abstraction and fallback
+# Model abstraction and fallback with detailed error capture
 # ==========================================
+_last_provider_errors: List[str] = []
+
 def init_google_genai_if_available():
     if genai and GOOGLE_API_KEYS:
         for k in GOOGLE_API_KEYS:
@@ -240,10 +243,19 @@ def init_google_genai_if_available():
 _GOOGLE_INITIALIZED = init_google_genai_if_available()
 
 def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None, max_output_chars: int = 4000) -> str:
+    """
+    Unified model call. Attempts providers and collects provider-specific errors in _last_provider_errors.
+    Raises RuntimeError with aggregated diagnostics when all attempts fail.
+    """
+    global _last_provider_errors
+    _last_provider_errors = []
     if not prompt:
         return ""
+
+    # Try Google Generative AI
     if genai and _GOOGLE_INITIALIZED:
         try:
+            # try common interfaces
             if hasattr(genai, "TextGenerationModel"):
                 for candidate in (model_preferences or ["gemini-2.5-flash", "gemini-flash-latest", "gemini-pro-latest", "gemini-2.0-flash"]):
                     try:
@@ -256,39 +268,65 @@ def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None, ma
                             text = resp.outputs[0].content
                         if text:
                             return text
-                    except Exception:
+                    except Exception as e:
+                        _last_provider_errors.append(f"Google(TextGenerationModel:{candidate}) error: {e}")
                         continue
             if hasattr(genai, "generate_text"):
-                resp = genai.generate_text(model="gemini-2.5-flash", prompt=prompt)
-                if isinstance(resp, dict) and "candidates" in resp:
-                    return resp["candidates"][0].get("content", "")
-                return str(resp)
+                try:
+                    resp = genai.generate_text(model="gemini-2.5-flash", prompt=prompt)
+                    if isinstance(resp, dict) and "candidates" in resp:
+                        return resp["candidates"][0].get("content", "")
+                    return str(resp)
+                except Exception as e:
+                    _last_provider_errors.append(f"Google(generate_text) error: {e}")
             if hasattr(genai, "GenerativeModel"):
                 for candidate in (model_preferences or ["gemini-2.5-flash", "gemini-flash-latest"]):
                     try:
                         m = genai.GenerativeModel(candidate)
                         out = m.generate_content(prompt)
                         return out.text
-                    except Exception:
+                    except Exception as e:
+                        _last_provider_errors.append(f"Google(GenerativeModel:{candidate}) error: {e}")
                         continue
-        except Exception:
-            logger.exception("Google generativeai call failed, will try other providers.")
+        except Exception as e:
+            _last_provider_errors.append(f"Google(general) error: {e}")
+
+    # Try OpenAI
     if openai and OPENAI_API_KEY:
         try:
             openai.api_key = OPENAI_API_KEY
             if hasattr(openai, "ChatCompletion"):
-                resp = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=512,
-                )
-                return resp.choices[0].message.content
+                try:
+                    resp = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=512,
+                    )
+                    return resp.choices[0].message.content
+                except Exception as e:
+                    _last_provider_errors.append(f"OpenAI(ChatCompletion) error: {e}")
             else:
-                resp = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=512)
-                return resp.choices[0].text
-        except Exception:
-            logger.exception("OpenAI call failed.")
-    raise RuntimeError("No AI provider is configured or all providers failed.")
+                try:
+                    resp = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=512)
+                    return resp.choices[0].text
+                except Exception as e:
+                    _last_provider_errors.append(f"OpenAI(Completion) error: {e}")
+        except Exception as e:
+            _last_provider_errors.append(f"OpenAI(general) error: {e}")
+
+    # No provider succeeded
+    if not _last_provider_errors:
+        _last_provider_errors.append("No providers configured (no genai and no openai key).")
+    raise RuntimeError("No AI provider available. Attempts:\n" + "\n".join(_last_provider_errors))
+
+# A safe wrapper that returns success flag, text, and error message (if any)
+def safe_call_model(prompt: str) -> (bool, str, Optional[str]):
+    try:
+        text = call_model(prompt)
+        return True, text, None
+    except Exception as e:
+        logger.exception("call_model failed")
+        return False, "", str(e)
 
 # ==========================================
 # TTS helpers (edge-tts)
@@ -393,7 +431,7 @@ def draw_header():
     """, unsafe_allow_html=True)
 
 # ==========================================
-# Core: process_ai_response (improved)
+# Core: process_ai_response (improved) using safe_call_model
 # ==========================================
 def process_ai_response(user_text: Any, input_type: str = "text"):
     last = st.session_state.get("last_request_time")
@@ -433,7 +471,16 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
             else:
                 prompt = base_prompt + f"\nTask: {caption}\n"
             placeholder.markdown("🔎 يتم تحليل الصورة... الرجاء الانتظار.")
-            full_text = call_model(prompt)
+            ok, full_text, err = safe_call_model(prompt)
+            if not ok:
+                # fallback message when AI is unavailable
+                fallback = "عذراً، خدمة الذكاء الاصطناعي غير متاحة الآن لتحليل الصورة. يمكنك المحاولة لاحقاً."
+                placeholder.error(fallback)
+                # show diagnostics summary
+                placeholder.write("تفاصيل الخطأ (موجز):")
+                placeholder.write(err)
+                append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<image>", "response": fallback})
+                return
             placeholder.empty()
             stream_text_to_placeholder(full_text, placeholder)
             vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-ChristopherNeural"
@@ -445,7 +492,10 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
 
         elif input_type == "mcq_generate":
             prompt = base_prompt + f"\nGenerate 1 MCQ science question for grade {grade} in {lang_instr}. Provide 4 choices A-D and DO NOT provide the correct answer."
-            raw = call_model(prompt)
+            ok, raw, err = safe_call_model(prompt)
+            if not ok:
+                st.error("تعذّر إنشاء السؤال: " + (err or "مشكلة غير معروفة"))
+                return
             st.success("تم إنشاء سؤال جديد")
             st.markdown(raw)
             st.session_state.q_curr = raw
@@ -457,7 +507,10 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
             q = user_text.get("question", "")
             a = user_text.get("answer", "")
             prompt = base_prompt + f"\nCheck the student's answer.\nQuestion:\n{q}\nStudent Answer: {a}\nRespond whether it's correct, provide brief explanation and the correct choice letter if wrong."
-            raw = call_model(prompt)
+            ok, raw, err = safe_call_model(prompt)
+            if not ok:
+                st.error("تعذّر التحقق من الإجابة: " + (err or "مشكلة غير معروفة"))
+                return
             stream_text_to_placeholder(raw, placeholder)
             append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": f"{q[:200]}|{a}", "response": raw})
             if ("correct" in raw.lower()) or ("صحيح" in raw):
@@ -466,7 +519,14 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
 
         else:
             prompt = base_prompt + f"\nStudent: {user_text}\nAnswer:"
-            raw = call_model(prompt)
+            ok, raw, err = safe_call_model(prompt)
+            if not ok:
+                fallback = "عذراً، خدمة الذكاء الاصطناعي غير متاحة الآن. حاول إعادة المحاولة أو تحقق من إعدادات المفاتيح."
+                placeholder.error(fallback)
+                placeholder.write("تفاصيل الخطأ (موجز):")
+                placeholder.write(err)
+                append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": fallback})
+                return
             dot_code = None
             if "```dot" in raw:
                 try:
@@ -499,50 +559,37 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
 # ==========================================
 draw_header()
 
-if not st.session_state.auth_status:
-    # Ensure columns are defined before any with col2 usage
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.info(random.choice(DAILY_FACTS))
-        with st.form("login_form"):
-            name = st.text_input("الاسم:")
-            grade = st.selectbox("الصف:", ["الرابع", "الخامس", "السادس", "الأول ع", "الثاني ع", "الثالث ع", "ثانوي", "Other"])
-            code = st.text_input("الكود:", type="password")
-            remember = st.checkbox("تذكرني على هذا الجهاز")
-            if st.form_submit_button("دخول"):
-                db_code = safe_get_control_sheet_value()
-                is_teacher = (code == TEACHER_MASTER_KEY)
-                is_student = (db_code and code == db_code) or (not db_code and code == TEACHER_MASTER_KEY)
-                if is_teacher or is_student:
-                    st.session_state.auth_status = True
-                    st.session_state.user_type = "teacher" if is_teacher else "student"
-                    st.session_state.user_name = name if is_student else "Mr. Elsayed"
-                    st.session_state.student_grade = grade
-                    st.session_state.start_time = time.time()
-                    st.session_state.current_xp = 0 if not is_student else st.session_state.get("current_xp", 0)
-                    log_login(st.session_state.user_name, "teacher" if is_teacher else "student", grade)
-                    st.success("تم الدخول!")
-                    # Set a rerun flag, then exit the form block
-                    st.session_state["_needs_rerun"] = True
-                else:
-                    st.error("الكود غير صحيح")
-
-    # After the form block, perform rerun from main context if needed
-    if st.session_state.pop("_needs_rerun", False):
-        time.sleep(0.4)
-        safe_rerun()
-
-    st.stop()
-
-# If session expired, force logout
-if session_expired():
-    st.warning("انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.")
-    st.session_state.auth_status = False
-    safe_rerun()
-
-# Sidebar
+# Sidebar with Diagnostics expander
 with st.sidebar:
-    st.write(f"أهلاً، **{st.session_state.user_name}**")
+    st.write(f"أهلاً، **{st.session_state.get('user_name','ضيف')}**")    
+    diag = st.expander("⚙️ Diagnostics (AI providers)")
+    with diag:
+        st.write("Installed modules:")
+        st.write(f"- google.generativeai: {'✅' if genai else '❌'}")
+        st.write(f"- openai: {'✅' if openai else '❌'}")
+        st.write(f"- edge-tts: {'✅' if edge_tts else '❌'}")
+        st.write(f"- speech_recognition: {'✅' if sr else '❌'}")
+        st.write("---")
+        st.write("Configured keys:")
+        st.write(f"- GOOGLE_API_KEYS: {len(GOOGLE_API_KEYS) if GOOGLE_API_KEYS else 0}")
+        st.write(f"- OPENAI_API_KEY: {'✅' if OPENAI_API_KEY else '❌'}")
+        if st.button("Run quick AI ping test"):
+            # Quick ping using safe_call_model (non-blocking minimal)
+            try:
+                ok, resp, err = safe_call_model("Say 'ping' in a short sentence.")
+                if ok:
+                    st.success("AI ping OK")
+                    st.write(resp[:500])
+                else:
+                    st.error("Ping failed. Summary:")
+                    st.write(err)
+                    st.write("---")
+                    st.write("Collected provider attempt errors:")
+                    st.write("\n".join(_last_provider_errors))
+            except Exception as e:
+                st.error("Ping routine failed: " + repr(e))
+
+    st.markdown("---")
     st.session_state.language = st.radio("اللغة:", ["العربية", "English"])
     st.markdown("---")
     if st.session_state.user_type == "student":
@@ -610,6 +657,44 @@ with st.sidebar:
                 logger.exception("Drive listing failed")
     st.caption("نسخة محسّنة - تحكّم كامل")
 
+# If not authenticated show login form
+if not st.session_state.auth_status:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.info(random.choice(DAILY_FACTS))
+        with st.form("login_form"):
+            name = st.text_input("الاسم:")
+            grade = st.selectbox("الصف:", ["الرابع", "الخامس", "السادس", "الأول ع", "الثاني ع", "الثالث ع", "ثانوي", "Other"])
+            code = st.text_input("الكود:", type="password")
+            remember = st.checkbox("تذكرني على هذا الجهاز")
+            if st.form_submit_button("دخول"):
+                db_code = safe_get_control_sheet_value()
+                is_teacher = (code == TEACHER_MASTER_KEY)
+                is_student = (db_code and code == db_code) or (not db_code and code == TEACHER_MASTER_KEY)
+                if is_teacher or is_student:
+                    st.session_state.auth_status = True
+                    st.session_state.user_type = "teacher" if is_teacher else "student"
+                    st.session_state.user_name = name if is_student else "Mr. Elsayed"
+                    st.session_state.student_grade = grade
+                    st.session_state.start_time = time.time()
+                    st.session_state.current_xp = 0 if not is_student else st.session_state.get("current_xp", 0)
+                    log_login(st.session_state.user_name, "teacher" if is_teacher else "student", grade)
+                    st.success("تم الدخول!")
+                    st.session_state["_needs_rerun"] = True
+                else:
+                    st.error("الكود غير صحيح")
+
+    if st.session_state.pop("_needs_rerun", False):
+        time.sleep(0.4)
+        safe_rerun()
+    st.stop()
+
+# If session expired, force logout
+if session_expired():
+    st.warning("انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.")
+    st.session_state.auth_status = False
+    safe_rerun()
+
 # Main tabs
 t1, t2, t3, t4 = st.tabs(["🎙️ صوت", "📝 نص", "📷 صورة", "🧠 تدريب/اختبار"])
 
@@ -627,7 +712,7 @@ with t1:
                 update_xp(st.session_state.user_name, 10)
                 process_ai_response(txt, "voice")
             else:
-                st.error("تعذر تحويل الصوت إلى نص.")
+                st.error("تعذر تحوي�� الصوت إلى نص.")
     else:
         st.info("مُسجل الميكروفون غير متوفر في بيئة التشغيل هذه.")
 
