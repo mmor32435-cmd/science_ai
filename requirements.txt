@@ -5,10 +5,8 @@ SpeechRecognition
 streamlit-mic-recorder
 Pillow
 PyPDF2
-google-api-python-client
 google-auth
+google-api-python-client
 gspread
 pandas
 graphviz
-pydub
-pytz
