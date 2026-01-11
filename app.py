@@ -353,4 +353,82 @@ with st.sidebar:
     st.session_state.language = st.radio("اللغة:", ["العربية", "English"])
     
     if st.session_state.user_type == "student":
-        st.metric("XP", st.
+        st.metric("XP", st.session_state.current_xp)
+        if st.session_state.current_xp >= 100: st.success("🎉 أحسنت!")
+        st.markdown("---")
+        st.caption("🏆 المتصدرون")
+        for i, r in enumerate(get_leaderboard()):
+            st.text(f"{i+1}. {r['Student_Name']} ({r['XP']})")
+
+    if DRIVE_FOLDER_ID:
+        svc = get_drive_service()
+        if svc:
+            files = list_drive_files(svc, DRIVE_FOLDER_ID)
+            if files:
+                st.markdown("---")
+                bn = st.selectbox("📚 المكتبة:", [f['name'] for f in files])
+                if st.button("تفعيل"):
+                    fid = next(f['id'] for f in files if f['name'] == bn)
+                    with st.spinner("تحميل..."):
+                        txt = download_pdf_text(svc, fid)
+                        if txt:
+                            st.session_state.ref_text = txt
+                            st.toast("تم تفعيل الكتاب")
+
+t1, t2, t3, t4 = st.tabs(["🎙️", "📝", "📷", "🧠"])
+
+with t1:
+    st.write("اضغط للتحدث:")
+    aud = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key='m')
+    if aud and aud['bytes'] != st.session_state.last_audio_bytes:
+        st.session_state.last_audio_bytes = aud['bytes']
+        lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
+        txt = speech_to_text(aud['bytes'], lang)
+        if txt:
+            st.chat_message("user").write(txt)
+            update_xp(st.session_state.user_name, 10)
+            process_ai_response(txt, "voice")
+
+with t2:
+    q = st.chat_input("اكتب سؤالك...")
+    if q:
+        st.chat_message("user").write(q)
+        update_xp(st.session_state.user_name, 5)
+        process_ai_response(q, "text")
+
+with t3:
+    up = st.file_uploader("صورة", type=['png','jpg'])
+    if st.button("تحليل") and up:
+        img = Image.open(up)
+        st.image(img, width=150)
+        update_xp(st.session_state.user_name, 15)
+        process_ai_response(["اشرح الصورة", img], "image")
+
+with t4:
+    if st.button("سؤال جديد"):
+        m = get_working_model()
+        if m:
+            try:
+                p = f"1 MCQ science question for {st.session_state.student_grade}. {st.session_state.language}. No answer."
+                st.session_state.q_curr = m.generate_content(p).text
+                st.session_state.q_active = True
+                st.rerun()
+            except Exception:
+                st.error("حاول مرة أخرى")
+
+    if st.session_state.get("q_active"):
+        st.markdown("---")
+        st.write(st.session_state.q_curr)
+        ans = st.text_input("إجابتك:")
+        if st.button("تحقق"):
+            m = get_working_model()
+            if m:
+                try:
+                    res = m.generate_content(f"Q: {st.session_state.q_curr}\nAns: {ans}\nCheck correctness.").text
+                    st.write(res)
+                    if "correct" in res.lower() or "صحيح" in res:
+                        st.balloons()
+                        update_xp(st.session_state.user_name, 50)
+                    st.session_state.q_active = False
+                except Exception:
+                    st.error("خطأ في التحقق")
