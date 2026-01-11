@@ -33,7 +33,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 🎛️ الثوابت والإعدادات
+# 2. الثوابت
 # ==========================================
 TEACHER_MASTER_KEY = "ADMIN_2024"
 CONTROL_SHEET_NAME = "App_Control"
@@ -48,10 +48,10 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 🛠️ الخدمات الخلفية (Backend Services)
+# 3. دوال الخدمات (Backend Functions)
 # ==========================================
 
-# --- 1. الاتصال بجداول جوجل (Sheets) ---
+# --- جداول جوجل ---
 @st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" not in st.secrets:
@@ -75,17 +75,15 @@ def get_sheet_data():
     except Exception:
         return None
 
-# --- 2. نظام التسجيل (Logging) ---
+# --- التسجيل والأنشطة ---
 def _bg_task(task_type, data):
     if "gcp_service_account" not in st.secrets:
         return
-
     try:
         client = get_gspread_client()
         if not client:
             return
         wb = client.open(CONTROL_SHEET_NAME)
-        
         tz = pytz.timezone('Africa/Cairo')
         now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -109,12 +107,11 @@ def _bg_task(task_type, data):
                 sheet = wb.worksheet("Gamification")
             except:
                 sheet = wb.add_worksheet("Gamification", 1000, 3)
-            
             try:
                 cell = sheet.find(data['name'])
                 if cell:
-                    current_val = sheet.cell(cell.row, 2).value
-                    current_xp = int(current_val) if current_val else 0
+                    val = sheet.cell(cell.row, 2).value
+                    current_xp = int(val) if val else 0
                     sheet.update_cell(cell.row, 2, current_xp + data['points'])
                 else:
                     sheet.append_row([data['name'], data['points']])
@@ -127,4 +124,18 @@ def log_login(user_name, user_type, details):
     threading.Thread(target=_bg_task, args=("login", {'name': user_name, 'type': user_type, 'details': details})).start()
 
 def log_activity(user_name, input_type, text):
-    
+    threading.Thread(target=_bg_task, args=("activity", {'name': user_name, 'input_type': input_type, 'text': text})).start()
+
+def update_xp(user_name, points):
+    if 'current_xp' in st.session_state:
+        st.session_state.current_xp += points
+    threading.Thread(target=_bg_task, args=("xp", {'name': user_name, 'points': points})).start()
+
+def get_current_xp(user_name):
+    client = get_gspread_client()
+    if not client:
+        return 0
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        cell = sheet.find(user_name)
+        
