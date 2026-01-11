@@ -1,9 +1,9 @@
 """
-AI Science Tutor Pro - Enhanced with diagnostics and robust provider handling
-- Adds diagnostics panel for AI providers
-- Improves call_model error reporting and accumulates provider errors
-- Adds safe_call_model wrapper to provide graceful fallback messages
-- Keeps safe_rerun and other defensive measures
+AI Science Tutor Pro - Enhanced with retries and local MCQ fallback
+- Adds safe_call_model_with_retries to handle transient 429/quota errors with backoff
+- Adds local_generate_mcq as a fallback MCQ generator when AI providers are unavailable
+- Integrates the above into process_ai_response for the mcq_generate flow
+- Retains diagnostics, safe_rerun, provider fallbacks, TTS, local logging, etc.
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ import os
 import json
 import base64
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 # Optional imports (wrapped)
 try:
@@ -69,7 +69,6 @@ except Exception:
 # ==========================================
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
-# Use secrets for sensitive info. Provide guidance if missing.
 TEACHER_MASTER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN_2024_PLACEHOLDER")
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
@@ -83,7 +82,7 @@ DAILY_FACTS = st.secrets.get("DAILY_FACTS", [
     "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
     "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
-    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
+    "هل تعلم؟ العسل ��ا يفسد أبداً! 🍯",
 ])
 
 LOCAL_LOG_FILE = "logs_local.json"
@@ -105,10 +104,6 @@ logger.setLevel(logging.INFO)
 # safe_rerun: cross-version safe rerun wrapper
 # ==========================================
 def safe_rerun():
-    """
-    Try to rerun the Streamlit script in a safe, cross-version way.
-    Falls back to st.rerun() or st.stop() if rerun isn't available or fails.
-    """
     try:
         if hasattr(st, "experimental_rerun") and callable(st.experimental_rerun):
             st.experimental_rerun()
@@ -118,7 +113,6 @@ def safe_rerun():
             return
     except Exception:
         logger.exception("safe_rerun: rerun attempt failed")
-    # Final fallback: stop current run (session_state persists)
     try:
         st.stop()
     except Exception:
@@ -243,10 +237,6 @@ def init_google_genai_if_available():
 _GOOGLE_INITIALIZED = init_google_genai_if_available()
 
 def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None, max_output_chars: int = 4000) -> str:
-    """
-    Unified model call. Attempts providers and collects provider-specific errors in _last_provider_errors.
-    Raises RuntimeError with aggregated diagnostics when all attempts fail.
-    """
     global _last_provider_errors
     _last_provider_errors = []
     if not prompt:
@@ -255,7 +245,6 @@ def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None, ma
     # Try Google Generative AI
     if genai and _GOOGLE_INITIALIZED:
         try:
-            # try common interfaces
             if hasattr(genai, "TextGenerationModel"):
                 for candidate in (model_preferences or ["gemini-2.5-flash", "gemini-flash-latest", "gemini-pro-latest", "gemini-2.0-flash"]):
                     try:
@@ -314,19 +303,67 @@ def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None, ma
         except Exception as e:
             _last_provider_errors.append(f"OpenAI(general) error: {e}")
 
-    # No provider succeeded
     if not _last_provider_errors:
         _last_provider_errors.append("No providers configured (no genai and no openai key).")
     raise RuntimeError("No AI provider available. Attempts:\n" + "\n".join(_last_provider_errors))
 
-# A safe wrapper that returns success flag, text, and error message (if any)
-def safe_call_model(prompt: str) -> (bool, str, Optional[str]):
+# safe wrapper and diagnostics
+def safe_call_model(prompt: str) -> Tuple[bool, str, Optional[str]]:
     try:
         text = call_model(prompt)
         return True, text, None
     except Exception as e:
         logger.exception("call_model failed")
         return False, "", str(e)
+
+# ==========================================
+# RETRY WRAPPER & LOCAL MCQ FALLBACK
+# ==========================================
+def local_generate_mcq(grade: str, language: str = "العربية") -> str:
+    bank_ar = [
+        ("ما هو العضو المسؤول عن ضخ الدم في الجسم؟", ["الرئتان", "القلب", "الدماغ", "الكبد"]),
+        ("ما لون الدم في معظم الحيوانات الفقارية نتيجة الأكسجين؟", ["أخضر", "أصفر", "أحمر", "أزرق"]),
+        ("أي من التالي مصدر للطاقة المتجدد؟", ["الفحم", "النفط", "الرياح", "الغاز الطبيعي"]),
+    ]
+    bank_en = [
+        ("Which organ pumps blood through the body?", ["Lungs", "Heart", "Brain", "Liver"]),
+        ("What is the color of oxygen-rich blood in vertebrates?", ["Green", "Yellow", "Red", "Blue"]),
+        ("Which is a renewable energy source?", ["Coal", "Oil", "Wind", "Natural gas"]),
+    ]
+
+    if language == "العربية":
+        q, choices = random.choice(bank_ar)
+        random.shuffle(choices)
+        options = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
+        return f"{q}\n{options}\n\n(ملاحظة: هذا سؤال مُولد محلياً كحل بديل — لا يتضمن الإجابة.)"
+    else:
+        q, choices = random.choice(bank_en)
+        random.shuffle(choices)
+        options = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
+        return f"{q}\n{options}\n\n(Note: locally generated fallback, answer not included.)"
+
+def safe_call_model_with_retries(prompt: str, max_retries: int = 3, base_delay: float = 2.0) -> Tuple[bool, str, Optional[str]]:
+    attempt = 0
+    last_err = None
+    while attempt < max_retries:
+        attempt += 1
+        ok, text, err = safe_call_model(prompt)
+        if ok:
+            return True, text, None
+        last_err = err or "unknown error"
+        lowered = last_err.lower()
+        if "quota" in lowered or "rate limit" in lowered or "429" in lowered or "retry" in lowered:
+            m = re.search(r"retry in\s*([0-9\.]+)s", last_err, flags=re.IGNORECASE)
+            if m:
+                delay = float(m.group(1)) + 0.5
+            else:
+                delay = base_delay * (2 ** (attempt - 1))
+            logger.warning("AI provider rate/quota error detected. Retry %d/%d after %.1fs. Error: %s", attempt, max_retries, delay, last_err)
+            time.sleep(delay)
+            continue
+        logger.error("Non-retriable provider error: %s", last_err)
+        break
+    return False, "", last_err
 
 # ==========================================
 # TTS helpers (edge-tts)
@@ -431,7 +468,7 @@ def draw_header():
     """, unsafe_allow_html=True)
 
 # ==========================================
-# Core: process_ai_response (improved) using safe_call_model
+# Core: process_ai_response (improved) using retries and fallback
 # ==========================================
 def process_ai_response(user_text: Any, input_type: str = "text"):
     last = st.session_state.get("last_request_time")
@@ -471,12 +508,10 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
             else:
                 prompt = base_prompt + f"\nTask: {caption}\n"
             placeholder.markdown("🔎 يتم تحليل الصورة... الرجاء الانتظار.")
-            ok, full_text, err = safe_call_model(prompt)
+            ok, full_text, err = safe_call_model_with_retries(prompt)
             if not ok:
-                # fallback message when AI is unavailable
                 fallback = "عذراً، خدمة الذكاء الاصطناعي غير متاحة الآن لتحليل الصورة. يمكنك المحاولة لاحقاً."
                 placeholder.error(fallback)
-                # show diagnostics summary
                 placeholder.write("تفاصيل الخطأ (موجز):")
                 placeholder.write(err)
                 append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<image>", "response": fallback})
@@ -492,10 +527,21 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
 
         elif input_type == "mcq_generate":
             prompt = base_prompt + f"\nGenerate 1 MCQ science question for grade {grade} in {lang_instr}. Provide 4 choices A-D and DO NOT provide the correct answer."
-            ok, raw, err = safe_call_model(prompt)
+            ok, raw, err = safe_call_model_with_retries(prompt)
             if not ok:
-                st.error("تعذّر إنشاء السؤال: " + (err or "مشكلة غير معروفة"))
-                return
+                # if transient/quota error -> provide local fallback MCQ
+                if err and any(k in err.lower() for k in ["quota", "rate limit", "429", "please retry", "retry in"]):
+                    fallback = local_generate_mcq(st.session_state.get("student_grade","General"), st.session_state.get("language","العربية"))
+                    st.warning("مزود الذكاء الاصطناعي غير متاح مؤقتًا — عرض سؤال احتياطي محلي.")
+                    st.markdown(fallback)
+                    st.session_state.q_curr = fallback
+                    st.session_state.q_active = True
+                    append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<generate_mcq_fallback_local>", "response": fallback})
+                    update_xp(user_name, 3)
+                    return
+                else:
+                    st.error("تعذّر إنشاء السؤال: " + (err or "مشكلة غير معروفة"))
+                    return
             st.success("تم إنشاء سؤال جديد")
             st.markdown(raw)
             st.session_state.q_curr = raw
@@ -507,7 +553,7 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
             q = user_text.get("question", "")
             a = user_text.get("answer", "")
             prompt = base_prompt + f"\nCheck the student's answer.\nQuestion:\n{q}\nStudent Answer: {a}\nRespond whether it's correct, provide brief explanation and the correct choice letter if wrong."
-            ok, raw, err = safe_call_model(prompt)
+            ok, raw, err = safe_call_model_with_retries(prompt)
             if not ok:
                 st.error("تعذّر التحقق من الإجابة: " + (err or "مشكلة غير معروفة"))
                 return
@@ -519,7 +565,7 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
 
         else:
             prompt = base_prompt + f"\nStudent: {user_text}\nAnswer:"
-            ok, raw, err = safe_call_model(prompt)
+            ok, raw, err = safe_call_model_with_retries(prompt)
             if not ok:
                 fallback = "عذراً، خدمة الذكاء الاصطناعي غير متاحة الآن. حاول إعادة المحاولة أو تحقق من إعدادات المفاتيح."
                 placeholder.error(fallback)
@@ -555,13 +601,13 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
         safe_write_local_log({"type": "error", "time": now_str(), "error": str(e), "context": str(user_text)[:1000]})
 
 # ==========================================
-# UI Layout & Interaction
+# UI Layout & Interaction (diagnostics + full UI)
 # ==========================================
 draw_header()
 
-# Sidebar with Diagnostics expander
+# Sidebar diagnostics and controls
 with st.sidebar:
-    st.write(f"أهلاً، **{st.session_state.get('user_name','ضيف')}**")    
+    st.write(f"أهلاً، **{st.session_state.get('user_name','ضيف')}**")
     diag = st.expander("⚙️ Diagnostics (AI providers)")
     with diag:
         st.write("Installed modules:")
@@ -574,9 +620,8 @@ with st.sidebar:
         st.write(f"- GOOGLE_API_KEYS: {len(GOOGLE_API_KEYS) if GOOGLE_API_KEYS else 0}")
         st.write(f"- OPENAI_API_KEY: {'✅' if OPENAI_API_KEY else '❌'}")
         if st.button("Run quick AI ping test"):
-            # Quick ping using safe_call_model (non-blocking minimal)
             try:
-                ok, resp, err = safe_call_model("Say 'ping' in a short sentence.")
+                ok, resp, err = safe_call_model_with_retries("Say 'ping' in a short sentence.", max_retries=2)
                 if ok:
                     st.success("AI ping OK")
                     st.write(resp[:500])
@@ -657,7 +702,7 @@ with st.sidebar:
                 logger.exception("Drive listing failed")
     st.caption("نسخة محسّنة - تحكّم كامل")
 
-# If not authenticated show login form
+# Authentication UI
 if not st.session_state.auth_status:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -689,7 +734,7 @@ if not st.session_state.auth_status:
         safe_rerun()
     st.stop()
 
-# If session expired, force logout
+# Session expiry handling
 if session_expired():
     st.warning("انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.")
     st.session_state.auth_status = False
@@ -712,7 +757,7 @@ with t1:
                 update_xp(st.session_state.user_name, 10)
                 process_ai_response(txt, "voice")
             else:
-                st.error("تعذر تحوي�� الصوت إلى نص.")
+                st.error("تعذر تحويل الصوت إلى نص.")
     else:
         st.info("مُسجل الميكروفون غير متوفر في بيئة التشغيل هذه.")
 
@@ -758,7 +803,7 @@ with t4:
         else:
             st.info("اضغط 'توليد سؤال جديد' لبدء.")
 
-# Footer and housekeeping
+# Footer and persist chat history
 st.markdown("---")
 st.caption("AI Science Tutor Pro — نسخة محسّنة. الرجاء حفظ المفاتيح الحساسة في `st.secrets`.")
 
