@@ -66,7 +66,8 @@ def get_gspread_client():
 
 def get_sheet_data():
     client = get_gspread_client()
-    if not client: return None
+    if not client:
+        return None
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         val = sheet.sheet1.acell('B1').value
@@ -76,30 +77,38 @@ def get_sheet_data():
 
 # --- 2. نظام التسجيل (Logging) ---
 def _bg_task(task_type, data):
-    if "gcp_service_account" not in st.secrets: return
+    if "gcp_service_account" not in st.secrets:
+        return
 
     try:
         client = get_gspread_client()
-        if not client: return
+        if not client:
+            return
         wb = client.open(CONTROL_SHEET_NAME)
         
         tz = pytz.timezone('Africa/Cairo')
         now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
         if task_type == "login":
-            try: sheet = wb.worksheet("Logs")
-            except: sheet = wb.add_worksheet("Logs", 1000, 5)
+            try:
+                sheet = wb.worksheet("Logs")
+            except:
+                sheet = wb.add_worksheet("Logs", 1000, 5)
             sheet.append_row([now_str, data['type'], data['name'], data['details']])
 
         elif task_type == "activity":
-            try: sheet = wb.worksheet("Activity")
-            except: sheet = wb.add_worksheet("Activity", 1000, 5)
+            try:
+                sheet = wb.worksheet("Activity")
+            except:
+                sheet = wb.add_worksheet("Activity", 1000, 5)
             clean_text = str(data['text'])[:1000]
             sheet.append_row([now_str, data['name'], data['input_type'], clean_text])
 
         elif task_type == "xp":
-            try: sheet = wb.worksheet("Gamification")
-            except: sheet = wb.add_worksheet("Gamification", 1000, 3)
+            try:
+                sheet = wb.worksheet("Gamification")
+            except:
+                sheet = wb.add_worksheet("Gamification", 1000, 3)
             
             try:
                 cell = sheet.find(data['name'])
@@ -118,43 +127,4 @@ def log_login(user_name, user_type, details):
     threading.Thread(target=_bg_task, args=("login", {'name': user_name, 'type': user_type, 'details': details})).start()
 
 def log_activity(user_name, input_type, text):
-    threading.Thread(target=_bg_task, args=("activity", {'name': user_name, 'input_type': input_type, 'text': text})).start()
-
-def update_xp(user_name, points):
-    if 'current_xp' in st.session_state:
-        st.session_state.current_xp += points
-    threading.Thread(target=_bg_task, args=("xp", {'name': user_name, 'points': points})).start()
-
-def get_current_xp(user_name):
-    client = get_gspread_client()
-    if not client: return 0
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        cell = sheet.find(user_name)
-        if cell:
-            val = sheet.cell(cell.row, 2).value
-            return int(val) if val else 0
-    except:
-        return 0
-    return 0
-
-def get_leaderboard():
-    client = get_gspread_client()
-    if not client: return []
-    try:
-        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        if df.empty: return []
-        if 'XP' not in df.columns:
-            df.columns = ['Student_Name', 'XP']
-        
-        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
-        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
-    except Exception:
-        return []
-
-# --- 3. خدمات جوجل درايف (Drive) ---
-@st.cache_resource
-def get_drive_service():
-    if 
+    
