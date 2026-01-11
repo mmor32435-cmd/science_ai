@@ -48,7 +48,7 @@ DAILY_FACTS = [
 ]
 
 # ==========================================
-# 3. دوال الخدمات (Backend Functions)
+# 3. دوال الخدمات (Backend)
 # ==========================================
 
 # --- جداول جوجل ---
@@ -75,7 +75,7 @@ def get_sheet_data():
     except Exception:
         return None
 
-# --- التسجيل والأنشطة ---
+# --- المعالجة الخلفية (تم تبسيطها لمنع الأخطاء) ---
 def _bg_task(task_type, data):
     if "gcp_service_account" not in st.secrets:
         return
@@ -111,8 +111,8 @@ def _bg_task(task_type, data):
                 cell = sheet.find(data['name'])
                 if cell:
                     val = sheet.cell(cell.row, 2).value
-                    current_xp = int(val) if val else 0
-                    sheet.update_cell(cell.row, 2, current_xp + data['points'])
+                    curr = int(val) if val else 0
+                    sheet.update_cell(cell.row, 2, curr + data['points'])
                 else:
                     sheet.append_row([data['name'], data['points']])
             except:
@@ -138,4 +138,110 @@ def get_current_xp(user_name):
     try:
         sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
         cell = sheet.find(user_name)
-        
+        if cell:
+            val = sheet.cell(cell.row, 2).value
+            return int(val) if val else 0
+        return 0
+    except:
+        return 0
+
+def get_leaderboard():
+    client = get_gspread_client()
+    if not client:
+        return []
+    try:
+        sheet = client.open(CONTROL_SHEET_NAME).worksheet("Gamification")
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty:
+            return []
+        # التأكد من الأعمدة
+        if 'XP' not in df.columns:
+            if len(df.columns) >= 2:
+                df.columns = ['Student_Name', 'XP'] + list(df.columns[2:])
+            else:
+                return []
+        df['XP'] = pd.to_numeric(df['XP'], errors='coerce').fillna(0)
+        return df.sort_values(by='XP', ascending=False).head(5).to_dict('records')
+    except Exception:
+        return []
+
+# --- جوجل درايف ---
+@st.cache_resource
+def get_drive_service():
+    if "gcp_service_account" not in st.secrets:
+        return None
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
+        return build('drive', 'v3', credentials=creds)
+    except Exception:
+        return None
+
+def list_drive_files(service, folder_id):
+    try:
+        q = f"'{folder_id}' in parents and trashed = false and mimeType = 'application/pdf'"
+        res = service.files().list(q=q, fields="files(id, name)").execute()
+        return res.get('files', [])
+    except Exception:
+        return []
+
+def download_pdf_text(service, file_id):
+    try:
+        req = service.files().get_media(fileId=file_id)
+        fh = BytesIO()
+        downloader = MediaIoBaseDownload(fh, req)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        reader = PyPDF2.PdfReader(fh)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        return text
+    except Exception:
+        return ""
+
+# --- الصوت ---
+async def generate_audio_stream(text, voice_code):
+    clean = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+    clean = re.sub(r'[*#_`\[\]()><=~-]', ' ', clean)
+    clean = re.sub(r'http\S+', ' ', clean)
+    clean = " ".join(clean.split())
+    if not clean:
+        return None
+    comm = edge_tts.Communicate(clean, voice_code, rate="-2%")
+    mp3 = BytesIO()
+    async for chunk in comm.stream():
+        if chunk["type"] == "audio":
+            mp3.write(chunk["data"])
+    return mp3
+
+def speech_to_text(audio_bytes, lang_code):
+    r = sr.Recognizer()
+    try:
+        with sr.AudioFile(BytesIO(audio_bytes)) as source:
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio_data = r.record(source)
+            return r.recognize_google(audio_data, language=lang_code)
+    except Exception:
+        return None
+
+# --- الذكاء الاصطناعي ---
+def get_working_model():
+    keys = st.secrets.get("GOOGLE_API_KEYS", [])
+    if not keys:
+        return None
+    keys_copy = list(keys)
+    random.shuffle(keys_copy)
+    models = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.5-pro']
+    for key in keys_copy:
+        genai.configure(api_key=key)
+        for m in models:
+            try:
+                model = genai.GenerativeModel(m)
+                return model
+            except:
+                continue
+    return None
