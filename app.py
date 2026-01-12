@@ -1,8 +1,8 @@
 """
-AI Science Tutor Pro - Instrumented Final Version
-- Adds detailed debugging in process_ai_response and sidebar
-- Keeps previous features: TTS, STT, Drive activation, MCQ generation with JSON, local fallbacks
-- Displays a fancy user name after login (no changes to auth logic)
+AI Science Tutor Pro - Final Updated Version (with text-input callback fix)
+- All previous features retained: AI provider fallbacks, retries, diagnostics, TTS, STT, Drive book activation, MCQ JSON flow, local fallbacks.
+- Fixed StreamlitAPIException by using a button callback to clear the text_input widget safely.
+- Fancy name rendering preserved.
 """
 import streamlit as st
 import time
@@ -498,7 +498,7 @@ def render_fancy_name(name: str):
     st.markdown(html, unsafe_allow_html=True)
 
 # ==========================================
-# Instrumented process_ai_response (replace earlier versions)
+# Instrumented process_ai_response (keeps debugging)
 # ==========================================
 def process_ai_response(user_text: Any, input_type: str = "text"):
     # rate-limit guard
@@ -765,7 +765,7 @@ with st.sidebar:
 # Authentication UI
 # ==========================================
 if not st.session_state.auth_status:
-    col1, col2, col3 = st.columns([1,2,1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.info(random.choice(DAILY_FACTS))
         with st.form("login_form"):
@@ -804,7 +804,9 @@ if session_expired():
 # Tabs
 t1, t2, t3, t4 = st.tabs(["🎙️ صوت","📝 نص","📷 صورة","🧠 تدريب/اختبار"])
 
+# ==========================================
 # Voice tab
+# ==========================================
 with t1:
     st.write("🎤 تحدث أو حمّل ملف صوتي")
     if not mic_recorder:
@@ -859,20 +861,37 @@ with t1:
                 else:
                     st.error("تعذّر تحويل التسجيل إلى نص")
 
-# Text tab (stable input)
+# ==========================================
+# Text tab (stable input) — using safe callback
+# ==========================================
 with t2:
     st.markdown("اكتب سؤالك نصياً ثم اضغط إرسال:")
-    q_text = st.text_area("سؤالك:", key="text_question", height=120)
-    if st.button("إرسال السؤال"):
-        if q_text and q_text.strip():
-            st.write("سؤالك:", q_text)
-            update_xp(st.session_state.user_name,5)
-            process_ai_response(q_text, "text")
-            st.session_state["text_question"] = ""
-        else:
-            st.warning("اكتب السؤال أولاً")
+    # Keep the widget key persistent, but do not mutate it from the main thread
+    st.text_area("سؤالك:", key="text_question", height=120)
 
+    def _on_send_text():
+        q = st.session_state.get("text_question", "").strip()
+        if not q:
+            st.session_state["text_question_error"] = True
+            return
+        # store for processing and clear the widget (allowed inside callback)
+        st.session_state["to_process_text"] = q
+        st.session_state["text_question"] = ""
+
+    st.button("إرسال السؤال", on_click=_on_send_text)
+
+    if st.session_state.pop("text_question_error", False):
+        st.warning("الرجاء كتابة السؤال أولاً.")
+
+    to_proc = st.session_state.pop("to_process_text", None)
+    if to_proc:
+        st.write("سؤالك:", to_proc)
+        update_xp(st.session_state.user_name, 5)
+        process_ai_response(to_proc, "text")
+
+# ==========================================
 # Image tab
+# ==========================================
 with t3:
     up = st.file_uploader("صورة (png/jpg)", type=["png","jpg","jpeg"])
     if up:
@@ -885,7 +904,9 @@ with t3:
         except Exception:
             st.exception("فشل فتح الصورة")
 
+# ==========================================
 # MCQ tab
+# ==========================================
 with t4:
     st.markdown("### 📝 أسئلة متعددة الاختيارات (MCQ)")
     colA, colB = st.columns(2)
