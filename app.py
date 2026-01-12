@@ -1,11 +1,17 @@
 """
-AI Science Tutor Pro - Enhanced with retries and local MCQ fallback
-- Adds safe_call_model_with_retries to handle transient 429/quota errors with backoff
-- Adds local_generate_mcq as a fallback MCQ generator when AI providers are unavailable
-- Integrates the above into process_ai_response for the mcq_generate flow
-- Retains diagnostics, safe_rerun, provider fallbacks, TTS, local logging, etc.
+AI Science Tutor Pro - Final Integrated Version
+- Provider fallbacks: Google Generative AI and OpenAI (if keys present)
+- Detailed diagnostics panel for providers and quick ping
+- safe_rerun wrapper to avoid streamlit version issues
+- Robust call_model with error aggregation
+- safe_call_model_with_retries: exponential backoff on quota/rate-limit (429)
+- local_generate_mcq fallback when providers are temporarily unavailable
+- TTS via edge-tts (sync wrapper)
+- Speech-to-text via speech_recognition (Google recognizer)
+- Robust microphone tab with uploader fallback and diagnostic messages
+- Local logging (JSONL) and optional Google Sheets integration
+- XP / gamification basics, teacher dashboard, Drive file loading
 """
-
 import streamlit as st
 import time
 import asyncio
@@ -21,7 +27,7 @@ import base64
 import logging
 from typing import Optional, Dict, Any, List, Tuple
 
-# Optional imports (wrapped)
+# Optional provider & tools imports
 try:
     import google.generativeai as genai
 except Exception:
@@ -65,7 +71,7 @@ except Exception:
     pd = None
 
 # ==========================================
-# Basic config & constants
+# Basic config & secrets
 # ==========================================
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
@@ -82,7 +88,7 @@ DAILY_FACTS = st.secrets.get("DAILY_FACTS", [
     "هل تعلم؟ المخ يولد كهرباء تكفي لمصباح! 💡",
     "هل تعلم؟ العظام أقوى من الخرسانة بـ 4 مرات! 🦴",
     "هل تعلم؟ الأخطبوط لديه 3 قلوب! 🐙",
-    "هل تعلم؟ العسل ��ا يفسد أبداً! 🍯",
+    "هل تعلم؟ العسل لا يفسد أبداً! 🍯",
 ])
 
 LOCAL_LOG_FILE = "logs_local.json"
@@ -529,7 +535,6 @@ If providing multiple-choice questions, return the question, 4 choices labeled A
             prompt = base_prompt + f"\nGenerate 1 MCQ science question for grade {grade} in {lang_instr}. Provide 4 choices A-D and DO NOT provide the correct answer."
             ok, raw, err = safe_call_model_with_retries(prompt)
             if not ok:
-                # if transient/quota error -> provide local fallback MCQ
                 if err and any(k in err.lower() for k in ["quota", "rate limit", "429", "please retry", "retry in"]):
                     fallback = local_generate_mcq(st.session_state.get("student_grade","General"), st.session_state.get("language","العربية"))
                     st.warning("مزود الذكاء الاصطناعي غير متاح مؤقتًا — عرض سؤال احتياطي محلي.")
@@ -615,6 +620,7 @@ with st.sidebar:
         st.write(f"- openai: {'✅' if openai else '❌'}")
         st.write(f"- edge-tts: {'✅' if edge_tts else '❌'}")
         st.write(f"- speech_recognition: {'✅' if sr else '❌'}")
+        st.write(f"- streamlit_mic_recorder: {'✅' if mic_recorder else '❌'}")
         st.write("---")
         st.write("Configured keys:")
         st.write(f"- GOOGLE_API_KEYS: {len(GOOGLE_API_KEYS) if GOOGLE_API_KEYS else 0}")
@@ -700,9 +706,9 @@ with st.sidebar:
                 st.success(f"تم جلب {len(files)} ملف(ـاً).")
             except Exception:
                 logger.exception("Drive listing failed")
-    st.caption("نسخة محسّنة - تحكّم كامل")
+    st.caption("نسخة محسّنة - تحكّم ��امل")
 
-# Authentication UI
+# If not authenticated show login form
 if not st.session_state.auth_status:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -734,7 +740,7 @@ if not st.session_state.auth_status:
         safe_rerun()
     st.stop()
 
-# Session expiry handling
+# If session expired, force logout
 if session_expired():
     st.warning("انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.")
     st.session_state.auth_status = False
@@ -743,23 +749,97 @@ if session_expired():
 # Main tabs
 t1, t2, t3, t4 = st.tabs(["🎙️ صوت", "📝 نص", "📷 صورة", "🧠 تدريب/اختبار"])
 
-# --- Voice tab ---
+# --------------- Voice tab (robust) ---------------
 with t1:
-    st.write("اضغط للتحدث (إن كانت الإضافة متاحة):")
-    if mic_recorder:
+    st.write("🎤 تحدث أو حمّل ملف صوتي، تأكد من السماح بالميكروفون في المتصفح.")
+    st.caption("تنبيهات: استخدم Chrome/Edge المحدث، وتأكد من السماح بالميكروفون. يعمل فقط عبر HTTPS أو localhost.")
+
+    # 1) Show diagnostics about mic_recorder availability
+    if not mic_recorder:
+        st.warning("مكوّن تسجيل الميكروفون (streamlit_mic_recorder) غير متوفر في بيئة التشغيل هذه.")
+        st.info("لتفعيله محلياً: pip install streamlit-mic-recorder ثم أعد تشغيل التطبيق.")
+        # Provide fallback: upload audio file
+        up_audio = st.file_uploader("أو حمّل ملف صوتي (wav/mp3):", type=["wav", "mp3", "m4a", "ogg"])
+        if up_audio:
+            st.audio(up_audio)
+            if st.button("تحويل الملف إلى نص"):
+                lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
+                audio_bytes = up_audio.read()
+                txt = speech_to_text_bytes(audio_bytes, lang)
+                if txt:
+                    st.success("تم تحويل الملف إلى نص:")
+                    st.write(txt)
+                    st.chat_message("user").write(txt)
+                    update_xp(st.session_state.user_name, 10)
+                    process_ai_response(txt, "voice")
+                else:
+                    st.error("تعذّر تحويل الصوت إلى نص. تأكد من جودة الملف أو جرّب ملفاً آخر.")
+        st.stop()
+
+    # 2) If mic_recorder present, show it and debug recorded output
+    st.write("اضغط لبدء التسجيل ثم لإيقافه. عند الانتهاء سيتم عرض المقطع وتحويله إلى نص (إن أمكن).")
+    aud = None
+    try:
         aud = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key='m')
-        if aud and aud.get('bytes') and aud['bytes'] != st.session_state.last_audio_bytes:
-            st.session_state.last_audio_bytes = aud['bytes']
-            lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
-            txt = speech_to_text_bytes(aud['bytes'], lang) if sr else None
-            if txt:
-                st.chat_message("user").write(txt)
-                update_xp(st.session_state.user_name, 10)
-                process_ai_response(txt, "voice")
-            else:
-                st.error("تعذر تحويل الصوت إلى نص.")
-    else:
-        st.info("مُسجل الميكروفون غير متوفر في بيئة التشغيل هذه.")
+    except Exception as e:
+        logger.exception("mic_recorder invocation failed: %s", e)
+        st.error("فشل استدعاء مكوّن التسجيل. تحقق من Console في المتصفح لمعرفة الأخطاء.")
+        up_audio = st.file_uploader("أو حمّل ملف صوتي (wav/mp3):", type=["wav", "mp3", "m4a", "ogg"])
+        if up_audio:
+            st.audio(up_audio)
+            if st.button("تحويل الملف إلى نص"):
+                lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
+                audio_bytes = up_audio.read()
+                txt = speech_to_text_bytes(audio_bytes, lang)
+                if txt:
+                    st.success("تم تحويل الملف إلى نص:")
+                    st.write(txt)
+                    st.chat_message("user").write(txt)
+                    update_xp(st.session_state.user_name, 10)
+                    process_ai_response(txt, "voice")
+                else:
+                    st.error("تعذّر تحويل الصوت إلى نص.")
+        st.stop()
+
+    # 3) When a recording is available: show debug info, playback and process
+    if aud:
+        audio_bytes = None
+        if isinstance(aud, dict):
+            audio_bytes = aud.get("bytes") or aud.get("data") or None
+        elif isinstance(aud, (bytes, bytearray)):
+            audio_bytes = aud
+        if audio_bytes:
+            if isinstance(audio_bytes, str):
+                try:
+                    if audio_bytes.startswith("data:"):
+                        audio_bytes = audio_bytes.split(",", 1)[1]
+                    audio_bytes = base64.b64decode(audio_bytes)
+                except Exception:
+                    logger.exception("Failed to decode audio bytes from recorder string.")
+            if audio_bytes != st.session_state.get("last_audio_bytes"):
+                st.session_state.last_audio_bytes = audio_bytes
+                st.success("تم استلام تسجيل صوتي — تشغيل معاينة أدناه:")
+                try:
+                    st.audio(BytesIO(audio_bytes), format="audio/wav")
+                except Exception:
+                    try:
+                        st.audio(BytesIO(audio_bytes))
+                    except Exception:
+                        st.warning("لا يمكن تشغيل المعاينة. ربما تنسيق الصوت غير مدعوم.")
+                lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
+                with st.spinner("يتم تحويل الصوت إلى نص..."):
+                    txt = speech_to_text_bytes(audio_bytes, lang) if sr else None
+                if txt:
+                    st.write("تم تحويل الصوت إلى نص:")
+                    st.write(txt)
+                    st.chat_message("user").write(txt)
+                    update_xp(st.session_state.user_name, 10)
+                    process_ai_response(txt, "voice")
+                else:
+                    st.error("تعذّر تحويل التسجيل إلى نص. تحقق من إعدادات الميكروفون وجودة الصوت.")
+                    st.info("اقتراحات: تأكد من السماح بالميكروفون، استخدم بيئة هادئة، أو جرّب رفع ملف صوتي بصيغة WAV/MP3.")
+        else:
+            st.info("لم يتم التسجيل بعد — اضغط على زر التسجيل وسمح للمتصفح بالوصول إلى الميكروفون إذا طُلب.")
 
 # --- Text tab ---
 with t2:
@@ -803,9 +883,9 @@ with t4:
         else:
             st.info("اضغط 'توليد سؤال جديد' لبدء.")
 
-# Footer and persist chat history
+# Footer and housekeeping
 st.markdown("---")
-st.caption("AI Science Tutor Pro — نسخة محسّنة. الرجاء حفظ المفاتيح الحساسة في `st.secrets`.")
+st.caption("AI Science Tutor Pro — نسخة نهائية. احتفظ بمفاتيحك في st.secrets وراجع لوحة التشخيص إذا ظهرت أخطاء.")
 
 try:
     if st.session_state.get("chat_history"):
