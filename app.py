@@ -1,11 +1,12 @@
 """
-AI Science Tutor Pro - Final Updated Version
-- Adds robust audio conversion (webm/m4a/mp3 -> wav) using pydub/ffmpeg when available
-- Replaces speech_to_text_bytes to convert recordings before recognition
-- MCQ generation now prefers textbook content (st.session_state.ref_text) and requests JSON output
-- Stores correct MCQ answers server-side (st.session_state.q_answer) and checks locally
-- Keeps provider retry/fallback logic and local MCQ fallback
-- Improved diagnostics and microphone handling retained
+AI Science Tutor Pro - Complete Final Version (Integrated fixes)
+- Provider fallbacks, diagnostics, retries and local MCQ fallback
+- Robust audio conversion (pydub/ffmpeg) and improved speech-to-text
+- TTS playback using BytesIO and format hints
+- Stable text input (text_area + send button) replacing st.chat_input
+- Drive book activation persisted in session_state.book_activated
+- MCQ generation strictly from activated textbook; stores correct answer in session_state.q_answer
+- Improved microphone tab with uploader fallback and clear diagnostics
 """
 import streamlit as st
 import time
@@ -392,7 +393,6 @@ def convert_audio_to_wav_bytes(raw_bytes: bytes, input_format: Optional[str] = N
         seg.export(out, format="wav")
         return out.getvalue()
     except Exception:
-        # fallback to ffmpeg subprocess if ffmpeg exists
         pass
 
     if _has_ffmpeg():
@@ -512,6 +512,7 @@ if "auth_status" not in st.session_state:
         "q_active": False,
         "q_answer": None,
         "q_explanation": None,
+        "book_activated": None,
     })
 
 def session_expired() -> bool:
@@ -528,6 +529,20 @@ def draw_header():
             <div style='font-size:0.95rem;opacity:0.95;'>مُنظّم للتعلم، مدعوم بعدة مزوّدين ونظام تعزيز تكاملي</div>
         </div>
     """, unsafe_allow_html=True)
+
+# ==========================================
+# Helper to play TTS bytes safely
+# ==========================================
+def play_tts_bytes(audio_bytes: bytes):
+    if not audio_bytes:
+        return
+    try:
+        st.audio(BytesIO(audio_bytes), format="audio/mp3", start_time=0)
+    except Exception:
+        try:
+            st.audio(BytesIO(audio_bytes), start_time=0)
+        except Exception:
+            logger.exception("Failed to play TTS audio")
 
 # ==========================================
 # Core: process_ai_response (with MCQ JSON flow)
@@ -583,9 +598,12 @@ Do NOT include any extra text outside the JSON.
             placeholder.empty()
             stream_text_to_placeholder(full_text, placeholder)
             vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-ChristopherNeural"
-            audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', full_text)[:800], vc) if edge_tts else None
-            if audio_bytes:
-                st.audio(audio_bytes, format="audio/mp3", start_time=0)
+            try:
+                audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', full_text)[:800], vc) if edge_tts else None
+                if audio_bytes:
+                    play_tts_bytes(audio_bytes)
+            except Exception:
+                logger.exception("TTS failed for image response")
             append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<image>", "response": full_text})
             update_xp(user_name, 15)
 
@@ -609,7 +627,7 @@ Do NOT include any extra text outside the JSON.
                     update_xp(user_name, 3)
                     return
                 else:
-                    st.error("تعذ��ر إنشاء السؤال: " + (err or "مشكلة غير معروفة"))
+                    st.error("تعذّر إنشاء السؤال: " + (err or "مشكلة غير معروفة"))
                     return
             # Parse JSON from model response
             try:
@@ -630,13 +648,11 @@ Do NOT include any extra text outside the JSON.
                 return
 
         elif input_type == "mcq_check":
-            # Expect that q_answer is stored in session state
             q_text = st.session_state.get("q_curr")
             correct = st.session_state.get("q_answer")
             if not q_text or not correct:
                 st.error("لا يوجد سؤال نشط أو لم يتم حفظ الإجابة الصحيحة. تأكد من توليد السؤال من كتاب الطالب أولاً.")
                 return
-            # user_text is expected to be dict with 'answer'
             user_ans = None
             if isinstance(user_text, dict):
                 user_ans = str(user_text.get("answer","")).strip().upper()
@@ -686,9 +702,12 @@ Do NOT include any extra text outside the JSON.
                 except Exception:
                     logger.exception("Failed to render graphviz dot")
             vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-ChristopherNeural"
-            audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', display_text)[:1000], vc) if edge_tts else None
-            if audio_bytes:
-                st.audio(audio_bytes, format="audio/mp3", start_time=0)
+            try:
+                audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', display_text)[:1000], vc) if edge_tts else None
+                if audio_bytes:
+                    play_tts_bytes(audio_bytes)
+            except Exception:
+                logger.exception("TTS failed for text response")
             append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": raw})
             update_xp(user_name, 5)
 
@@ -786,6 +805,7 @@ with st.sidebar:
             safe_write_local_log({"type": "broadcast", "time": now_str(), "from": st.session_state.user_name, "message": msg})
             st.success("تم البث محلياً")
     st.markdown("---")
+    # Drive listing and activation with persistent flag
     if DRIVE_FOLDER_ID and build and GCP_SA:
         if st.button("تحميل قائمة ملفات Drive"):
             try:
@@ -796,12 +816,14 @@ with st.sidebar:
                 files = res.get('files', [])
                 st.session_state.drive_files = files
                 st.success(f"تم جلب {len(files)} ملف(ـاً).")
-            except Exception:
+            except Exception as e:
                 logger.exception("Drive listing failed")
-        # If files loaded, allow activating a book
+                st.error(f"فشل جلب قائمة الملفات: {e}")
+
         if st.session_state.get("drive_files"):
+            st.markdown("**اختر كتابًا ثم اضغط تفعيل**")
             names = [f["name"] for f in st.session_state["drive_files"]]
-            sel = st.selectbox("📚 المكتبة:", names)
+            sel = st.selectbox("📚 المكتبة:", names, key="drive_select")
             if st.button("تفعيل الكتاب"):
                 fid = next((f["id"] for f in st.session_state["drive_files"] if f["name"] == sel), None)
                 if fid:
@@ -820,9 +842,13 @@ with st.sidebar:
                         for page in reader.pages:
                             text += (page.extract_text() or "")
                         st.session_state.ref_text = text
-                        st.toast("تم تفعيل الكتاب")
-                    except Exception:
-                        st.error("فشل تحميل الكتاب من Drive.")
+                        st.session_state.book_activated = sel
+                        st.success(f"تم تفعيل الكتاب: {sel}")
+                    except Exception as e:
+                        logger.exception("فشل تحميل الكتاب من Drive.")
+                        st.error(f"فشل تحميل الكتاب من Drive: {e}")
+        if st.session_state.get("book_activated"):
+            st.info(f"الكتاب المفعل حالياً: {st.session_state['book_activated']}")
     st.caption("نسخة محسّنة - تحكّم كامل")
 
 # If not authenticated show login form
@@ -869,7 +895,7 @@ t1, t2, t3, t4 = st.tabs(["🎙️ صوت", "📝 نص", "📷 صورة", "🧠 
 # --------------- Voice tab (robust) ---------------
 with t1:
     st.write("🎤 تحدث أو حمّل ملف صوتي، تأكد من السماح بالميكروفون في المتصفح.")
-    st.caption("تنبيهات: استخدم Chrome/Edge المحدث، وتأ��د من السماح بالميكروفون. يعمل فقط عبر HTTPS أو localhost.")
+    st.caption("تنبيهات: استخدم Chrome/Edge المحدث، وتأكد من السماح بالميكروفون. يعمل فقط عبر HTTPS أو localhost.")
 
     if not mic_recorder:
         st.warning("مكوّن تسجيل الميكروفون (streamlit_mic_recorder) غير متوفر في بيئة التشغيل هذه.")
@@ -891,7 +917,7 @@ with t1:
                     st.error("تعذّر تحويل الصوت إلى نص. تأكد من جودة الملف أو جرّب ملفاً آخر.")
         st.stop()
 
-    st.write("اضغط لبدء التسجيل ثم لإيقافه. عند الانتهاء سيتم عرض المقطع وتحويله إلى نص (��ن أمكن).")
+    st.write("اضغط لبدء التسجيل ثم لإيقافه. عند الانتهاء سيتم عرض المقطع وتحويله إلى نص (إن أمكن).")
     aud = None
     try:
         aud = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key='m')
@@ -954,13 +980,19 @@ with t1:
         else:
             st.info("لم يتم التسجيل بعد — اضغط على زر التسجيل وسمح للمتصفح بالوصول إلى الميكروفون إذا طُلب.")
 
-# --- Text tab ---
+# --- Text tab (stable input) ---
 with t2:
-    q = st.chat_input("اكتب سؤالك...")
-    if q:
-        st.chat_message("user").write(q)
-        update_xp(st.session_state.user_name, 5)
-        process_ai_response(q, "text")
+    st.markdown("اكتب سؤالك نصياً ثم اضغط إرسال:")
+    q_text = st.text_area("سؤالك:", key="text_question", height=120)
+    if st.button("إرسال السؤال"):
+        if q_text and q_text.strip():
+            st.chat_message("user").write(q_text)
+            update_xp(st.session_state.user_name, 5)
+            process_ai_response(q_text, "text")
+            # clear input for UX
+            st.session_state["text_question"] = ""
+        else:
+            st.warning("الرجاء كتابة السؤال أولاً.")
 
 # --- Image tab ---
 with t3:
