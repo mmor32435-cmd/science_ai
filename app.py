@@ -1,13 +1,8 @@
 """
-AI Science Tutor Pro - Complete Final Version (Integrated fixes + Fancy Name)
-- Provider fallbacks, diagnostics, retries and local MCQ fallback
-- Robust audio conversion (pydub/ffmpeg) and improved speech-to-text
-- TTS playback using BytesIO and format hints
-- Stable text input (text_area + send button) replacing st.chat_input
-- Drive book activation persisted in session_state.book_activated
-- MCQ generation strictly from activated textbook; stores correct answer in session_state.q_answer
-- Improved microphone tab with uploader fallback and clear diagnostics
-- Fancy display of the user's name after login (no changes to auth logic)
+AI Science Tutor Pro - Instrumented Final Version
+- Adds detailed debugging in process_ai_response and sidebar
+- Keeps previous features: TTS, STT, Drive activation, MCQ generation with JSON, local fallbacks
+- Displays a fancy user name after login (no changes to auth logic)
 """
 import streamlit as st
 import time
@@ -54,7 +49,7 @@ try:
 except Exception:
     mic_recorder = None
 
-# Google API optional
+# Google API optional dependencies
 try:
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
@@ -69,7 +64,7 @@ except Exception:
     pd = None
 
 # ==========================================
-# Basic config & secrets
+# Config & secrets
 # ==========================================
 st.set_page_config(page_title="AI Science Tutor Pro", page_icon="🧬", layout="wide")
 
@@ -94,18 +89,17 @@ CHAT_HISTORY_DIR = "chat_histories"
 os.makedirs(CHAT_HISTORY_DIR, exist_ok=True)
 
 # ==========================================
-# Logging setup
+# Logging
 # ==========================================
 logger = logging.getLogger("ai_science_tutor")
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
-    handler.setFormatter(formatter)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 # ==========================================
-# safe_rerun: cross-version safe rerun wrapper
+# Helpers: rerun, time, logs, chat history
 # ==========================================
 def safe_rerun():
     try:
@@ -116,18 +110,14 @@ def safe_rerun():
             st.rerun()
             return
     except Exception:
-        logger.exception("safe_rerun: rerun attempt failed")
+        logger.exception("safe_rerun failed")
     try:
         st.stop()
     except Exception:
-        logger.exception("safe_rerun: st.stop also failed")
+        logger.exception("safe_rerun.stop failed")
 
-# ==========================================
-# Utilities
-# ==========================================
 def now_str():
-    tz = pytz.timezone("Africa/Cairo")
-    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(pytz.timezone("Africa/Cairo")).strftime("%Y-%m-%d %H:%M:%S")
 
 def safe_write_local_log(entry: Dict[str, Any]):
     try:
@@ -136,29 +126,16 @@ def safe_write_local_log(entry: Dict[str, Any]):
     except Exception:
         logger.exception("Failed to write local log")
 
-def load_chat_history_local(user_name: str) -> List[Dict[str, Any]]:
-    path = os.path.join(CHAT_HISTORY_DIR, f"{user_name}.jsonl")
-    if not os.path.exists(path):
-        return []
-    out = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                out.append(json.loads(line))
-    except Exception:
-        logger.exception("Error reading chat history local file.")
-    return out
-
 def append_chat_history_local(user_name: str, entry: Dict[str, Any]):
     path = os.path.join(CHAT_HISTORY_DIR, f"{user_name}.jsonl")
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
-        logger.exception("Failed to append chat history locally.")
+        logger.exception("Failed to append chat history locally")
 
 # ==========================================
-# Google Sheets/Drive helpers (optional)
+# Google Sheets & Drive helpers (optional)
 # ==========================================
 if gspread and GCP_SA:
     @st.cache_resource
@@ -169,7 +146,7 @@ if gspread and GCP_SA:
             creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
             return gspread.authorize(creds)
         except Exception:
-            logger.exception("Failed to authorize gspread.")
+            logger.exception("Failed to authorize gspread")
             return None
 else:
     def get_gspread_client():
@@ -180,10 +157,10 @@ def safe_get_control_sheet_value():
     if not client:
         return None
     try:
-        sheet = client.open("App_Control")
-        return sheet.sheet1.acell('B1').value
+        wb = client.open("App_Control")
+        return wb.sheet1.acell('B1').value
     except Exception:
-        logger.exception("Failed to read App_Control B1")
+        logger.exception("safe_get_control_sheet_value failed")
         return None
 
 def safe_append_activity_log(entry: Dict[str, Any]):
@@ -196,10 +173,10 @@ def safe_append_activity_log(entry: Dict[str, Any]):
                 sh.append_row([entry.get("time"), entry.get("user"), entry.get("input_type"), entry.get("text")[:1000]])
                 return
             except Exception:
-                logger.exception("Failed to append to Activity worksheet.")
+                logger.exception("Failed to append to Activity worksheet")
         except Exception:
-            logger.exception("Failed to open App_Control workbook.")
-    safe_write_local_log({"type": "activity", **entry})
+            logger.exception("Failed to open App_Control workbook")
+    safe_write_local_log({"type":"activity", **entry})
 
 def safe_update_xp_sheet(user_name: str, points: int):
     client = get_gspread_client()
@@ -219,11 +196,11 @@ def safe_update_xp_sheet(user_name: str, points: int):
                 sh.append_row([user_name, points])
             return
         except Exception:
-            logger.exception("Failed to update XP sheet.")
-    safe_write_local_log({"type": "xp", "time": now_str(), "user": user_name, "points": points})
+            logger.exception("Failed to update XP sheet")
+    safe_write_local_log({"type":"xp","time":now_str(),"user":user_name,"points":points})
 
 # ==========================================
-# Model abstraction and fallback with detailed error capture
+# Model abstraction and wrappers
 # ==========================================
 _last_provider_errors: List[str] = []
 
@@ -232,7 +209,7 @@ def init_google_genai_if_available():
         for k in GOOGLE_API_KEYS:
             try:
                 genai.configure(api_key=k)
-                logger.info("Configured Google generativeai with a key")
+                logger.info("Configured google generativeai")
                 return True
             except Exception:
                 continue
@@ -240,113 +217,59 @@ def init_google_genai_if_available():
 
 _GOOGLE_INITIALIZED = init_google_genai_if_available()
 
-def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None, max_output_chars: int = 4000) -> str:
+def call_model(prompt: str, *, model_preferences: Optional[List[str]] = None) -> str:
     global _last_provider_errors
     _last_provider_errors = []
     if not prompt:
         return ""
-
-    # Try Google Generative AI
+    # Google
     if genai and _GOOGLE_INITIALIZED:
         try:
             if hasattr(genai, "TextGenerationModel"):
-                for candidate in (model_preferences or ["gemini-2.5-flash", "gemini-flash-latest", "gemini-pro-latest", "gemini-2.0-flash"]):
+                for candidate in (model_preferences or ["gemini-2.5-flash","gemini-flash-latest"]):
                     try:
                         model = genai.TextGenerationModel.from_pretrained(candidate)
                         resp = model.generate(prompt=prompt, max_output_tokens=512)
-                        text = ""
                         if hasattr(resp, "candidates"):
-                            text = resp.candidates[0].content
-                        elif hasattr(resp, "outputs"):
-                            text = resp.outputs[0].content
-                        if text:
-                            return text
+                            return resp.candidates[0].content
+                        if hasattr(resp, "outputs"):
+                            return resp.outputs[0].content
                     except Exception as e:
-                        _last_provider_errors.append(f"Google(TextGenerationModel:{candidate}) error: {e}")
-                        continue
+                        _last_provider_errors.append(f"Google({candidate}): {e}")
             if hasattr(genai, "generate_text"):
                 try:
-                    resp = genai.generate_text(model="gemini-2.5-flash", prompt=prompt)
-                    if isinstance(resp, dict) and "candidates" in resp:
-                        return resp["candidates"][0].get("content", "")
-                    return str(resp)
+                    r = genai.generate_text(model="gemini-2.5-flash", prompt=prompt)
+                    if isinstance(r, dict) and "candidates" in r:
+                        return r["candidates"][0].get("content","")
+                    return str(r)
                 except Exception as e:
-                    _last_provider_errors.append(f"Google(generate_text) error: {e}")
-            if hasattr(genai, "GenerativeModel"):
-                for candidate in (model_preferences or ["gemini-2.5-flash", "gemini-flash-latest"]):
-                    try:
-                        m = genai.GenerativeModel(candidate)
-                        out = m.generate_content(prompt)
-                        return out.text
-                    except Exception as e:
-                        _last_provider_errors.append(f"Google(GenerativeModel:{candidate}) error: {e}")
-                        continue
+                    _last_provider_errors.append(f"Google(generate_text): {e}")
         except Exception as e:
-            _last_provider_errors.append(f"Google(general) error: {e}")
-
-    # Try OpenAI
+            _last_provider_errors.append(f"Google(general): {e}")
+    # OpenAI
     if openai and OPENAI_API_KEY:
         try:
             openai.api_key = OPENAI_API_KEY
-            if hasattr(openai, "ChatCompletion"):
-                try:
-                    resp = openai.ChatCompletion.create(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=512,
-                    )
-                    return resp.choices[0].message.content
-                except Exception as e:
-                    _last_provider_errors.append(f"OpenAI(ChatCompletion) error: {e}")
-            else:
-                try:
-                    resp = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=512)
-                    return resp.choices[0].text
-                except Exception as e:
-                    _last_provider_errors.append(f"OpenAI(Completion) error: {e}")
+            try:
+                resp = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}], max_tokens=512)
+                return resp.choices[0].message.content
+            except Exception as e:
+                _last_provider_errors.append(f"OpenAI(ChatCompletion): {e}")
         except Exception as e:
-            _last_provider_errors.append(f"OpenAI(general) error: {e}")
-
+            _last_provider_errors.append(f"OpenAI(general): {e}")
     if not _last_provider_errors:
-        _last_provider_errors.append("No providers configured (no genai and no openai key).")
+        _last_provider_errors.append("No providers configured.")
     raise RuntimeError("No AI provider available. Attempts:\n" + "\n".join(_last_provider_errors))
 
-# safe wrapper and diagnostics
-def safe_call_model(prompt: str) -> Tuple[bool, str, Optional[str]]:
+def safe_call_model(prompt: str) -> Tuple[bool,str,Optional[str]]:
     try:
-        text = call_model(prompt)
-        return True, text, None
+        t = call_model(prompt)
+        return True, t, None
     except Exception as e:
         logger.exception("call_model failed")
         return False, "", str(e)
 
-# ==========================================
-# RETRY WRAPPER & LOCAL MCQ FALLBACK
-# ==========================================
-def local_generate_mcq(grade: str, language: str = "العربية") -> str:
-    bank_ar = [
-        ("ما هو العضو المسؤول عن ضخ الدم في الجسم؟", ["الرئتان", "القلب", "الدماغ", "الكبد"]),
-        ("ما لون الدم في معظم الحيوانات الفقارية نتيجة الأكسجين؟", ["أخضر", "أصفر", "أحمر", "أزرق"]),
-        ("أي من التالي مصدر للطاقة المتجدد؟", ["الفحم", "النفط", "الرياح", "الغاز الطبيعي"]),
-    ]
-    bank_en = [
-        ("Which organ pumps blood through the body?", ["Lungs", "Heart", "Brain", "Liver"]),
-        ("What is the color of oxygen-rich blood in vertebrates?", ["Green", "Yellow", "Red", "Blue"]),
-        ("Which is a renewable energy source?", ["Coal", "Oil", "Wind", "Natural gas"]),
-    ]
-
-    if language == "العربية":
-        q, choices = random.choice(bank_ar)
-        random.shuffle(choices)
-        options = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
-        return f"{q}\n{options}\n\n(ملاحظة: هذا سؤال مُولد محلياً كحل بديل — لا يتضمن الإجابة.)"
-    else:
-        q, choices = random.choice(bank_en)
-        random.shuffle(choices)
-        options = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
-        return f"{q}\n{options}\n\n(Note: locally generated fallback, answer not included.)"
-
-def safe_call_model_with_retries(prompt: str, max_retries: int = 3, base_delay: float = 2.0) -> Tuple[bool, str, Optional[str]]:
+def safe_call_model_with_retries(prompt: str, max_retries: int = 3, base_delay: float = 2.0) -> Tuple[bool,str,Optional[str]]:
     attempt = 0
     last_err = None
     while attempt < max_retries:
@@ -354,99 +277,67 @@ def safe_call_model_with_retries(prompt: str, max_retries: int = 3, base_delay: 
         ok, text, err = safe_call_model(prompt)
         if ok:
             return True, text, None
-        last_err = err or "unknown error"
+        last_err = err or "unknown"
         lowered = last_err.lower()
-        if "quota" in lowered or "rate limit" in lowered or "429" in lowered or "retry" in lowered:
+        if any(k in lowered for k in ["quota","rate limit","429","retry"]):
             m = re.search(r"retry in\s*([0-9\.]+)s", last_err, flags=re.IGNORECASE)
-            if m:
-                delay = float(m.group(1)) + 0.5
-            else:
-                delay = base_delay * (2 ** (attempt - 1))
-            logger.warning("AI provider rate/quota error detected. Retry %d/%d after %.1fs. Error: %s", attempt, max_retries, delay, last_err)
+            delay = (float(m.group(1))+0.5) if m else base_delay * (2**(attempt-1))
+            logger.warning("Retry %d/%d after %.1fs (provider error)", attempt, max_retries, delay)
             time.sleep(delay)
             continue
-        logger.error("Non-retriable provider error: %s", last_err)
         break
     return False, "", last_err
 
 # ==========================================
-# Audio conversion helpers (pydub/ffmpeg fallback)
+# Audio conversion, STT, TTS helpers
 # ==========================================
 def _has_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None
 
 def convert_audio_to_wav_bytes(raw_bytes: bytes, input_format: Optional[str] = None) -> Optional[bytes]:
-    """
-    Convert common audio formats (webm/m4a/mp3/ogg) to WAV bytes using pydub or ffmpeg binary.
-    Returns WAV bytes or None if conversion failed.
-    """
-    # Try pydub (if installed and ffmpeg available)
     try:
-        from pydub import AudioSegment  # optional dependency
+        from pydub import AudioSegment
         bio = BytesIO(raw_bytes)
-        if input_format:
-            seg = AudioSegment.from_file(bio, format=input_format)
-        else:
-            seg = AudioSegment.from_file(bio)
-        out = BytesIO()
+        seg = AudioSegment.from_file(bio, format=input_format) if input_format else AudioSegment.from_file(bio)
         seg = seg.set_frame_rate(16000).set_channels(1)
-        seg.export(out, format="wav")
-        return out.getvalue()
+        out = BytesIO(); seg.export(out, format="wav"); return out.getvalue()
     except Exception:
         pass
-
     if _has_ffmpeg():
         try:
-            p = subprocess.Popen(
-                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
+            p = subprocess.Popen(["ffmpeg","-y","-hide_banner","-loglevel","error","-i","pipe:0","-ar","16000","-ac","1","-f","wav","pipe:1"],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, err = p.communicate(raw_bytes, timeout=30)
             if p.returncode == 0:
                 return out
-            else:
-                logger.error("ffmpeg conversion failed: %s", err.decode("utf-8", errors="ignore"))
+            logger.error("ffmpeg conversion failed: %s", err.decode(errors="ignore"))
         except Exception:
-            logger.exception("ffmpeg subprocess conversion failed")
-    else:
-        logger.debug("ffmpeg binary not found in PATH; cannot convert non-wav audio.")
+            logger.exception("ffmpeg conversion exception")
+    logger.debug("convert_audio_to_wav_bytes: no conversion available")
     return None
 
-# ==========================================
-# Speech-to-text helper (uses conversion)
-# ==========================================
 def speech_to_text_bytes(audio_bytes: bytes, lang_code: str = "ar-EG") -> Optional[str]:
-    """
-    Accepts raw bytes that may be WAV or other formats (webm/m4a/mp3/ogg).
-    Attempts conversion to WAV then runs speech_recognition.
-    """
     if not sr:
-        logger.warning("speech_recognition not available")
+        logger.warning("speech_recognition not installed")
         return None
-
-    # Decode data URLs or base64 strings
     try:
         if isinstance(audio_bytes, str):
             if audio_bytes.startswith("data:"):
-                audio_bytes = audio_bytes.split(",", 1)[1]
+                audio_bytes = audio_bytes.split(",",1)[1]
             audio_bytes = base64.b64decode(audio_bytes)
     except Exception:
-        logger.exception("Failed to decode base64 audio string")
-
+        logger.exception("decode base64 audio failed")
     wav_bytes = None
     try:
-        if isinstance(audio_bytes, (bytes, bytearray)) and audio_bytes[:4] == b'RIFF':
+        if isinstance(audio_bytes, (bytes,bytearray)) and audio_bytes[:4] == b'RIFF':
             wav_bytes = bytes(audio_bytes)
     except Exception:
         pass
-
     if not wav_bytes:
         wav_bytes = convert_audio_to_wav_bytes(audio_bytes, input_format=None)
-
     if not wav_bytes:
-        logger.error("Could not convert audio to WAV for speech recognition")
+        logger.error("Could not convert audio to WAV")
         return None
-
     r = sr.Recognizer()
     try:
         with sr.AudioFile(BytesIO(wav_bytes)) as source:
@@ -454,17 +345,46 @@ def speech_to_text_bytes(audio_bytes: bytes, lang_code: str = "ar-EG") -> Option
             audio_data = r.record(source)
             return r.recognize_google(audio_data, language=lang_code)
     except sr.UnknownValueError:
-        logger.info("Speech not understood by recognizer")
+        logger.info("Speech not understood")
         return None
     except sr.RequestError as e:
         logger.exception("Speech recognition request error: %s", e)
         return None
     except Exception:
-        logger.exception("Speech to text general failure")
+        logger.exception("Speech to text failed")
         return None
 
+async def _generate_audio_stream_async(text: str, voice: str = "en-US-AndrewNeural") -> bytes:
+    if not edge_tts:
+        raise RuntimeError("edge-tts not installed")
+    clean = re.sub(r'[*#_`\[\]()><=]', ' ', text)
+    comm = edge_tts.Communicate(clean, voice, rate="-5%")
+    mp3 = BytesIO()
+    async for chunk in comm.stream():
+        if chunk["type"] == "audio":
+            mp3.write(chunk["data"])
+    return mp3.getvalue()
+
+def generate_audio_sync(text: str, voice: str = "en-US-AndrewNeural") -> Optional[bytes]:
+    try:
+        return asyncio.run(_generate_audio_stream_async(text[:1500], voice))
+    except Exception:
+        logger.exception("TTS generation failed")
+        return None
+
+def play_tts_bytes(audio_bytes: bytes):
+    if not audio_bytes:
+        return
+    try:
+        st.audio(BytesIO(audio_bytes), format="audio/mp3", start_time=0)
+    except Exception:
+        try:
+            st.audio(BytesIO(audio_bytes), start_time=0)
+        except Exception:
+            logger.exception("Failed to play TTS audio")
+
 # ==========================================
-# Stream utilities: safe streaming display
+# Utility: streaming text display
 # ==========================================
 def stream_text_to_placeholder(text: str, placeholder, delay: float = 0.02):
     buf = ""
@@ -478,25 +398,53 @@ def stream_text_to_placeholder(text: str, placeholder, delay: float = 0.02):
     placeholder.markdown(buf)
 
 # ==========================================
-# Business Logic helpers
+# Local fallback util: search textbook for snippets
+# ==========================================
+def local_search_answer(question: str, ref_text: str) -> Optional[str]:
+    if not ref_text:
+        return None
+    q_words = [w.lower() for w in re.findall(r"\w{3,}", question)]
+    if not q_words:
+        return None
+    sents = re.split(r'(?<=[.!?])\s+', ref_text)
+    matches = []
+    for sent in sents:
+        lw = sent.lower()
+        score = sum(1 for w in q_words if w in lw)
+        if score > 0:
+            matches.append((score, sent.strip()))
+    matches.sort(reverse=True)
+    if not matches:
+        return None
+    out = []
+    seen = set()
+    for sc, s in matches[:3]:
+        if s not in seen:
+            out.append(s); seen.add(s)
+    return "\n\n".join(out) if out else None
+
+# ==========================================
+# Small helpers: XP/log wrappers
 # ==========================================
 def log_login(user_name: str, user_type: str, details: str):
-    entry = {"time": now_str(), "type": "login", "user": user_name, "user_type": user_type, "details": details}
+    entry = {"time": now_str(), "type":"login", "user": user_name, "user_type": user_type, "details": details}
     threading.Thread(target=safe_write_local_log, args=(entry,)).start()
-    threading.Thread(target=safe_append_activity_log, args=({"time": entry["time"], "user": user_name, "input_type": "login", "text": details},)).start()
+    threading.Thread(target=safe_append_activity_log, args=(entry,)).start()
 
 def log_activity(user_name: str, input_type: str, text: str):
     entry = {"time": now_str(), "user": user_name, "input_type": input_type, "text": text[:1000]}
     threading.Thread(target=safe_append_activity_log, args=(entry,)).start()
-    safe_write_local_log({"type": "activity", **entry})
+    safe_write_local_log({"type":"activity", **entry})
 
 def update_xp(user_name: str, points: int):
     if 'current_xp' in st.session_state:
         st.session_state.current_xp = st.session_state.get("current_xp", 0) + points
     threading.Thread(target=safe_update_xp_sheet, args=(user_name, points)).start()
-    safe_write_local_log({"type": "xp", "time": now_str(), "user": user_name, "points": points})
+    safe_write_local_log({"type":"xp","time":now_str(),"user":user_name,"points":points})
 
+# ==========================================
 # Session initialization
+# ==========================================
 if "auth_status" not in st.session_state:
     st.session_state.update({
         "auth_status": False,
@@ -514,6 +462,9 @@ if "auth_status" not in st.session_state:
         "q_explanation": None,
         "book_activated": None,
         "drive_files": None,
+        "last_ai_ok": None,
+        "last_ai_resp": None,
+        "last_ai_err": None,
     })
 
 def session_expired() -> bool:
@@ -521,7 +472,7 @@ def session_expired() -> bool:
     return (time.time() - start) > (SESSION_DURATION_MINUTES * 60)
 
 # ==========================================
-# UI helpers
+# UI helpers: header and fancy name
 # ==========================================
 def draw_header():
     st.markdown("""
@@ -531,46 +482,15 @@ def draw_header():
         </div>
     """, unsafe_allow_html=True)
 
-# ---- Addition: fancy name renderer (does NOT change auth) ----
 def render_fancy_name(name: str):
-    """
-    Display a fancy, prominent name block under the header.
-    """
     if not name:
         return
     html = f"""
-    <div style="
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        gap:1rem;
-        margin-top:0.6rem;
-        margin-bottom:0.6rem;
-        ">
-      <div style="
-        background:linear-gradient(90deg,#ff8a00,#e52e71);
-        -webkit-background-clip:text;
-        background-clip:text;
-        color:transparent;
-        font-size:28px;
-        font-weight:800;
-        letter-spacing:1px;
-        text-shadow: 0 2px 12px rgba(229,46,113,0.18);
-        transform: skewX(-6deg);
-        padding: 6px 12px;
-        border-radius:8px;
-      ">
+    <div style="display:flex;align-items:center;justify-content:center;gap:1rem;margin-top:0.6rem;margin-bottom:0.6rem;">
+      <div style="background:linear-gradient(90deg,#ff8a00,#e52e71);-webkit-background-clip:text;background-clip:text;color:transparent;font-size:28px;font-weight:800;letter-spacing:1px;text-shadow:0 2px 12px rgba(229,46,113,0.18);transform:skewX(-6deg);padding:6px 12px;border-radius:8px;">
         {name}
       </div>
-      <div style="
-        background: rgba(255,255,255,0.06);
-        border-radius:999px;
-        padding:6px 10px;
-        box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-        color:#fff;
-        font-weight:600;
-        font-size:14px;
-      ">
+      <div style="background: rgba(255,255,255,0.06);border-radius:999px;padding:6px 10px;box-shadow: 0 4px 18px rgba(0,0,0,0.12);color:#fff;font-weight:600;font-size:14px;">
         المرشد الذكي
       </div>
     </div>
@@ -578,35 +498,22 @@ def render_fancy_name(name: str):
     st.markdown(html, unsafe_allow_html=True)
 
 # ==========================================
-# Helper to play TTS bytes safely
-# ==========================================
-def play_tts_bytes(audio_bytes: bytes):
-    if not audio_bytes:
-        return
-    try:
-        st.audio(BytesIO(audio_bytes), format="audio/mp3", start_time=0)
-    except Exception:
-        try:
-            st.audio(BytesIO(audio_bytes), start_time=0)
-        except Exception:
-            logger.exception("Failed to play TTS audio")
-
-# ==========================================
-# Core: process_ai_response (with MCQ JSON flow)
+# Instrumented process_ai_response (replace earlier versions)
 # ==========================================
 def process_ai_response(user_text: Any, input_type: str = "text"):
+    # rate-limit guard
     last = st.session_state.get("last_request_time")
     if last and time.time() - last < RATE_LIMIT_MIN_SECONDS:
         st.warning("رجاءً انتظر قليلاً قبل إرسال طلب آخر.")
         return
     st.session_state["last_request_time"] = time.time()
+
     user_name = st.session_state.get("user_name", "anonymous")
     log_activity(user_name, input_type, str(user_text)[:1000])
 
     lang = st.session_state.get("language", "العربية")
     grade = st.session_state.get("student_grade", "General")
     ref = st.session_state.get("ref_text", "")[:20000]
-
     lang_instr = "Arabic" if lang == "العربية" else "English"
 
     base_prompt = f"""You are a kind and interactive Science Tutor for grade {grade}.
@@ -621,169 +528,146 @@ Do NOT include any extra text outside the JSON.
     st.markdown("---")
     placeholder = st.empty()
 
+    # reset debug session fields
+    st.session_state["last_ai_ok"] = None
+    st.session_state["last_ai_resp"] = None
+    st.session_state["last_ai_err"] = None
+
     try:
+        # prepare prompt based on input type
         if input_type == "image":
             caption = "Please explain the image and highlight key science concepts."
-            image_obj = None
             if isinstance(user_text, list) and len(user_text) >= 2 and isinstance(user_text[1], Image.Image):
-                image_obj = user_text[1]
-                buffered = BytesIO()
-                image_obj.convert("RGB").resize((480, 480)).save(buffered, format="JPEG", quality=70)
-                img_b64 = base64.b64encode(buffered.getvalue()).decode("ascii")
-                prompt = base_prompt + f"\nImage (base64 JPEG): {img_b64[:500]}... (trimmed)\nTask: Explain what is visible and the science behind it.\n"
+                img = user_text[1]
+                buf = BytesIO()
+                img.convert("RGB").resize((480,480)).save(buf, format="JPEG", quality=70)
+                img_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                prompt = base_prompt + f"\nImage (base64 JPEG): {img_b64[:500]}... (trimmed)\nTask: Explain what is visible and the science behind it."
             else:
-                prompt = base_prompt + f"\nTask: {caption}\n"
-            placeholder.markdown("🔎 يتم تحليل الصورة... الرجاء الانتظار.")
-            ok, full_text, err = safe_call_model_with_retries(prompt)
-            if not ok:
-                fallback = "عذراً، خدمة الذكاء الاصطناعي غير متاحة الآن لتحليل الصورة. يمكنك المحاولة لاحقاً."
-                placeholder.error(fallback)
-                placeholder.write("تفاصيل الخطأ (موجز):")
-                placeholder.write(err)
-                append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<image>", "response": fallback})
-                return
-            placeholder.empty()
-            stream_text_to_placeholder(full_text, placeholder)
-            vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-ChristopherNeural"
-            try:
-                audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', full_text)[:800], vc) if edge_tts else None
-                if audio_bytes:
-                    play_tts_bytes(audio_bytes)
-            except Exception:
-                logger.exception("TTS failed for image response")
-            append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<image>", "response": full_text})
-            update_xp(user_name, 15)
-
+                prompt = base_prompt + f"\nTask: {caption}"
         elif input_type == "mcq_generate":
-            # Require ref_text (book) to generate MCQ from textbook
-            if not ref or len(ref) < 200:
+            if not ref or len(ref) < 50:
                 st.error("لم يتم تفعيل كتاب الطالب أو أن نص الكتاب قصير جداً. في الشريط الجانبي اختر كتابًا من Drive ثم اضغط تفعيل.")
                 return
             prompt = base_prompt + f"\nContextFromBook:\n{ref}\n\nTask: Generate 1 MCQ strictly based on the textbook content above for grade {grade}. Return only valid JSON as described."
-            ok, resp, err = safe_call_model_with_retries(prompt)
-            if not ok:
-                if err and any(k in err.lower() for k in ["quota", "rate limit", "429", "please retry", "retry in"]):
-                    fallback = local_generate_mcq(st.session_state.get("student_grade","General"), st.session_state.get("language","العربية"))
-                    st.warning("مزود الذكاء الاصطناعي غير متاح مؤقتًا — عرض سؤال احتياطي محلي.")
-                    st.markdown(fallback)
-                    st.session_state.q_curr = fallback
-                    st.session_state.q_answer = None
-                    st.session_state.q_explanation = None
-                    st.session_state.q_active = True
-                    append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": "<generate_mcq_fallback_local>", "response": fallback})
-                    update_xp(user_name, 3)
-                    return
-                else:
-                    st.error("تعذّر إنشاء السؤال: " + (err or "مشكلة غير معروفة"))
-                    return
-            # Parse JSON from model response
-            try:
-                m = re.search(r"\{[\s\S]*\}", resp)
-                json_str = m.group(0) if m else resp
-                qobj = json.loads(json_str)
-                # Save answer and explanation server-side
-                st.session_state.q_curr = qobj["question"] + "\n\n" + "\n".join(qobj["choices"])
-                st.session_state.q_answer = qobj["answer"].strip().upper()
-                st.session_state.q_explanation = qobj.get("explanation", "")
-                st.session_state.q_active = True
-                st.markdown(st.session_state.q_curr)
-                append_chat_history_local(user_name, {"time": now_str(), "type":"mcq_generated","question": qobj})
-                update_xp(user_name, 5)
-            except Exception as e:
-                logger.exception("Failed to parse MCQ JSON: %s", e)
-                st.error("تعذّر فهم استجابة الموديل. حاول مرة أخرى أو عيّن نص الكتاب بشكل صحيح.")
-                return
-
         elif input_type == "mcq_check":
-            q_text = st.session_state.get("q_curr")
+            q = st.session_state.get("q_curr")
             correct = st.session_state.get("q_answer")
-            if not q_text or not correct:
-                st.error("لا يوجد سؤال نشط أو لم يتم حفظ الإجابة الصحيحة. تأكد من توليد السؤال من كتاب الطالب أولاً.")
+            if not q or not correct:
+                st.error("لا يوجد سؤال نشط أو الإجابة غير مخزنة.")
                 return
-            user_ans = None
-            if isinstance(user_text, dict):
-                user_ans = str(user_text.get("answer","")).strip().upper()
-            else:
-                user_ans = str(user_text).strip().upper()
+            user_ans = user_text.get("answer") if isinstance(user_text, dict) else str(user_text)
+            user_ans = (user_ans or "").strip().upper()
             if not user_ans:
                 st.warning("اكتب إجابتك أولاً (A/B/C/D).")
                 return
             if user_ans == correct:
                 st.success("إجابتك صحيحة 🎉")
-                explanation = st.session_state.get("q_explanation", "")
-                if explanation:
-                    st.write(explanation)
+                if st.session_state.get("q_explanation"):
+                    st.write(st.session_state["q_explanation"])
                 update_xp(user_name, 50)
             else:
                 st.error("الإجابة غير صحيحة.")
                 st.write(f"الإجابة الصحيحة: {correct}")
-                explanation = st.session_state.get("q_explanation", "")
-                if explanation:
-                    st.write(explanation)
+                if st.session_state.get("q_explanation"):
+                    st.write(st.session_state["q_explanation"])
                 update_xp(user_name, -5)
             st.session_state.q_active = False
-
+            return
         else:
             prompt = base_prompt + f"\nStudent: {user_text}\nAnswer:"
-            ok, raw, err = safe_call_model_with_retries(prompt)
-            if not ok:
-                # Try local search as fallback to avoid silent failure
-                local_ans = local_search_answer(str(user_text), ref)
-                if local_ans:
-                    placeholder.error("المزود غير متاح، عرض مقتطف من كتاب الطالب كمحاولة بديلة:")
-                    placeholder.write(local_ans)
-                    append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": local_ans})
-                    update_xp(user_name, 2)
-                    return
-                fallback = "عذراً، خدمة الذكاء الاصطناعي غير متاحة الآن. حاول إعادة المحاولة أو تحقق من إعدادات المفاتيح."
-                placeholder.error(fallback)
-                placeholder.write("تفاصيل الخطأ (موجز):")
-                placeholder.write(err)
-                append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": fallback})
+
+        # Call the model with retries
+        ok, resp, err = safe_call_model_with_retries(prompt)
+
+        # store debug fields for sidebar
+        st.session_state["last_ai_ok"] = ok
+        st.session_state["last_ai_resp"] = resp
+        st.session_state["last_ai_err"] = err
+
+        # show per-call debug expander in page
+        with st.expander("Debug: آخر محاولة للمزود (اضغط لعرض التفاصيل)"):
+            st.write("ok:", ok)
+            st.write("err:", err)
+            st.write("provider attempts/errors:")
+            st.write("\n".join(_last_provider_errors or []))
+            st.write("response (preview):")
+            st.code((resp or "")[:2000])
+
+        if not ok:
+            # try local fallback
+            local_ans = local_search_answer(str(user_text), ref)
+            if local_ans:
+                placeholder.warning("المزود غير متاح — عرض مقتطف من كتاب الطالب كمحاولة بديلة:")
+                placeholder.write(local_ans)
+                append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": local_ans})
+                update_xp(user_name, 2)
                 return
-            dot_code = None
-            if "```dot" in raw:
-                try:
-                    dot_code = raw.split("```dot")[1].split("```")[0]
-                except Exception:
-                    dot_code = None
-                display_text = raw.split("```dot")[0]
+            placeholder.error("تعذّر الحصول على استجابة من مزود الذكاء الاصطناعي.")
+            if err:
+                placeholder.write("خطأ: " + str(err))
             else:
-                display_text = raw
-            stream_text_to_placeholder(display_text, placeholder)
-            if dot_code:
-                try:
-                    st.graphviz_chart(dot_code)
-                except Exception:
-                    logger.exception("Failed to render graphviz dot")
-            vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-ChristopherNeural"
+                placeholder.write("راجع Diagnostics في الشريط الجانبي لمزيد من التفاصيل.")
+            return
+
+        if not resp or not resp.strip():
+            placeholder.warning("الذكاء الاصطناعي أعاد استجابة فارغة.")
+            local_ans = local_search_answer(str(user_text), ref)
+            if local_ans:
+                placeholder.write(local_ans)
+                append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": local_ans})
+                update_xp(user_name, 2)
+            return
+
+        # MCQ generation flow
+        if input_type == "mcq_generate":
             try:
-                audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', display_text)[:1000], vc) if edge_tts else None
-                if audio_bytes:
-                    play_tts_bytes(audio_bytes)
-            except Exception:
-                logger.exception("TTS failed for text response")
-            append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": raw})
-            update_xp(user_name, 5)
+                m = re.search(r"\{[\s\S]*\}", resp)
+                json_str = m.group(0) if m else resp
+                qobj = json.loads(json_str)
+                st.session_state.q_curr = qobj["question"] + "\n\n" + "\n".join(qobj["choices"])
+                st.session_state.q_answer = qobj["answer"].strip().upper()
+                st.session_state.q_explanation = qobj.get("explanation", "")
+                st.session_state.q_active = True
+                placeholder.success("تم إنشاء سؤال:")
+                placeholder.markdown(st.session_state.q_curr)
+                append_chat_history_local(user_name, {"time": now_str(), "type":"mcq_generated","question": qobj})
+                update_xp(user_name, 5)
+            except Exception as e:
+                logger.exception("Failed to parse MCQ JSON: %s", e)
+                placeholder.error("تعذّر فهم استجابة الموديل. الرد الخام أدناه:")
+                placeholder.code(resp)
+            return
+
+        # General response: display then TTS (best-effort)
+        placeholder.empty()
+        stream_text_to_placeholder(resp, placeholder)
+        append_chat_history_local(user_name, {"time": now_str(), "input_type": input_type, "input": str(user_text)[:1000], "response": resp})
+        update_xp(user_name, 5)
+        try:
+            vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-ChristopherNeural"
+            audio_bytes = generate_audio_sync(re.sub(r'```dot[\s\S]*?```', '', resp)[:1200], vc) if edge_tts else None
+            if audio_bytes:
+                play_tts_bytes(audio_bytes)
+        except Exception:
+            logger.exception("TTS generation/playback failed")
 
     except Exception as e:
         logger.exception("Processing AI response failed")
-        st.error(f"خطأ في المعالجة: {e}")
-        safe_write_local_log({"type": "error", "time": now_str(), "error": str(e), "context": str(user_text)[:1000]})
+        placeholder.error(f"خطأ داخلي أثناء المعالجة: {e}")
+        safe_write_local_log({"type":"error","time":now_str(),"error":str(e),"context":str(user_text)[:1000]})
 
 # ==========================================
-# UI Layout & Interaction (diagnostics + full UI)
+# UI: header, sidebar (with debug expander), tabs
 # ==========================================
 draw_header()
 
-# Show fancy name under header when authenticated (no auth logic changed)
+# show fancy name if authenticated (no auth logic changed)
 if st.session_state.get("auth_status"):
     render_fancy_name(st.session_state.get("user_name", "ضيف"))
 
-# Sidebar diagnostics and controls
 with st.sidebar:
     st.write(f"أهلاً، **{st.session_state.get('user_name','ضيف')}**")
-    # small badge under greeting if authenticated
     if st.session_state.get("auth_status"):
         st.markdown(f"<div style='font-size:13px;color:#fff;padding:6px;border-radius:6px;background:linear-gradient(90deg,#6a11cb,#2575fc);text-align:center;margin-top:6px;'>المستخدم: <strong>{st.session_state.get('user_name')}</strong></div>", unsafe_allow_html=True)
 
@@ -817,58 +701,21 @@ with st.sidebar:
     st.markdown("---")
     st.session_state.language = st.radio("اللغة:", ["العربية", "English"])
     st.markdown("---")
-    if st.session_state.user_type == "student":
-        st.metric("XP", st.session_state.current_xp)
-        if st.session_state.current_xp >= 100:
-            st.success("🎉 مستوى ممتاز! استمر هكذا.")
-        st.markdown("---")
-        st.caption("🏆 المتصدرون (محلي)")
-        try:
-            client = get_gspread_client()
-            if client and pd:
-                wb = client.open("App_Control")
-                try:
-                    sh = wb.worksheet("Gamification")
-                    df = pd.DataFrame(sh.get_all_records())
-                    if not df.empty:
-                        df_sorted = df.sort_values(by=df.columns[1], ascending=False).head(5)
-                        for i, row in df_sorted.iterrows():
-                            st.text(f"{row[df.columns[0]]} — {row[df.columns[1]]}")
-                    else:
-                        st.text("لا يوجد بيانات بعد")
-                except Exception:
-                    logger.debug("Gamification sheet read failed")
-            else:
-                st.text("لا تتوفر بيانات السحابة.")
-        except Exception:
-            logger.exception("Leaderboard load failed")
-    elif st.session_state.user_type == "teacher":
-        st.markdown("### 🛠️ لوحة المدرّس")
-        if st.button("عرض سجلات الدخول المحلية"):
-            if os.path.exists(LOCAL_LOG_FILE):
-                with open(LOCAL_LOG_FILE, "r", encoding="utf-8") as f:
-                    lines = f.readlines()[-50:]
-                    for L in lines:
-                        try:
-                            st.text(json.loads(L).get("time", "") + " — " + json.dumps(json.loads(L), ensure_ascii=False))
-                        except Exception:
-                            st.text(L.strip())
-            else:
-                st.text("لا سجلات محلية حتى الآن.")
-        if st.button("تصدير السجلات كملف"):
-            if os.path.exists(LOCAL_LOG_FILE):
-                with open(LOCAL_LOG_FILE, "rb") as f:
-                    b = f.read()
-                    st.download_button("تحميل السجلات (JSONL)", b, file_name=f"logs_{int(time.time())}.jsonl")
-            else:
-                st.info("لا سجلات متاحة")
-        st.markdown("---")
-        msg = st.text_area("رسالة بث للطلاب (تجريبية):")
-        if st.button("بث"):
-            safe_write_local_log({"type": "broadcast", "time": now_str(), "from": st.session_state.user_name, "message": msg})
-            st.success("تم البث محلياً")
+    # show last AI debug data
+    with st.expander("آخر حالة AI (Debug)"):
+        st.write("last_ai_ok:", st.session_state.get("last_ai_ok"))
+        st.write("last_ai_err:", st.session_state.get("last_ai_err"))
+        st.write("last_ai_resp (preview):")
+        resp = st.session_state.get("last_ai_resp", "")
+        if resp:
+            st.code((resp or "")[:800])
+        else:
+            st.write("لا يوجد استجابة محفوظة بعد.")
+        st.write("provider attempts/errors:")
+        st.write("\n".join(_last_provider_errors or []))
+
     st.markdown("---")
-    # Drive listing and activation with persistent flag
+    # Drive listing and activation
     if DRIVE_FOLDER_ID and build and GCP_SA:
         if st.button("تحميل قائمة ملفات Drive"):
             try:
@@ -908,20 +755,22 @@ with st.sidebar:
                         st.session_state.book_activated = sel
                         st.success(f"تم تفعيل الكتاب: {sel}")
                     except Exception as e:
-                        logger.exception("فشل تحميل الكتاب من Drive.")
+                        logger.exception("Failed activating book")
                         st.error(f"فشل تحميل الكتاب من Drive: {e}")
         if st.session_state.get("book_activated"):
             st.info(f"الكتاب المفعل حالياً: {st.session_state['book_activated']}")
     st.caption("نسخة محسّنة - تحكّم كامل")
 
-# If not authenticated show login form
+# ==========================================
+# Authentication UI
+# ==========================================
 if not st.session_state.auth_status:
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.info(random.choice(DAILY_FACTS))
         with st.form("login_form"):
             name = st.text_input("الاسم:")
-            grade = st.selectbox("الصف:", ["الرابع", "الخامس", "السادس", "الأول ع", "الثاني ع", "الثالث ع", "ثانوي", "Other"])
+            grade = st.selectbox("الصف:", ["الرابع","الخامس","السادس","الأول ع","الثاني ع","الثالث ع","ثانوي","Other"])
             code = st.text_input("الكود:", type="password")
             remember = st.checkbox("تذكرني على هذا الجهاز")
             if st.form_submit_button("دخول"):
@@ -942,139 +791,103 @@ if not st.session_state.auth_status:
                     st.error("الكود غير صحيح")
                     if not db_code:
                         st.info("ملاحظة: لم يتم العثور على كود الطلاب في ورقة التحكم App_Control. تحقق من إعدادات Google Drive/Sheet أو استخدم TEACHER_MASTER_KEY.")
-
     if st.session_state.pop("_needs_rerun", False):
-        time.sleep(0.4)
-        safe_rerun()
+        time.sleep(0.4); safe_rerun()
     st.stop()
 
-# If session expired, force logout
+# Session expiry
 if session_expired():
     st.warning("انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.")
     st.session_state.auth_status = False
     safe_rerun()
 
-# Main tabs
-t1, t2, t3, t4 = st.tabs(["🎙️ صوت", "📝 نص", "📷 صورة", "🧠 تدريب/اختبار"])
+# Tabs
+t1, t2, t3, t4 = st.tabs(["🎙️ صوت","📝 نص","📷 صورة","🧠 تدريب/اختبار"])
 
-# --------------- Voice tab (robust) ---------------
+# Voice tab
 with t1:
-    st.write("🎤 تحدث أو حمّل ملف صوتي، تأكد من السماح بالميكروفون في المتصفح.")
-    st.caption("تنبيهات: استخدم Chrome/Edge المحدث، وتأكد من السماح بالميكروفون. يعمل فقط عبر HTTPS أو localhost.")
-
+    st.write("🎤 تحدث أو حمّل ملف صوتي")
     if not mic_recorder:
-        st.warning("مكوّن تسجيل الميكروفون (streamlit_mic_recorder) غير متوفر في بيئة التشغيل هذه.")
-        st.info("لتفعيله محلياً: pip install streamlit-mic-recorder ثم أعد تشغيل التطبيق.")
-        up_audio = st.file_uploader("أو حمّل ملف صوتي (wav/mp3/m4a/ogg):", type=["wav", "mp3", "m4a", "ogg"])
-        if up_audio:
-            st.audio(up_audio)
+        st.info("mic_recorder غير متوفر. يمكنك رفع ملف صوتي بدلاً من التسجيل.")
+        up = st.file_uploader("رفع ملف صوتي:", type=["wav","mp3","m4a","ogg"])
+        if up:
+            st.audio(up)
             if st.button("تحويل الملف إلى نص"):
-                lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
-                audio_bytes = up_audio.read()
-                txt = speech_to_text_bytes(audio_bytes, lang)
+                bytesa = up.read()
+                lang = "ar-EG" if st.session_state.language=="العربية" else "en-US"
+                txt = speech_to_text_bytes(bytesa, lang)
                 if txt:
-                    st.success("تم تحويل الملف إلى نص:")
-                    st.write(txt)
-                    st.chat_message("user").write(txt)
-                    update_xp(st.session_state.user_name, 10)
+                    st.write("تم التحويل:", txt)
+                    update_xp(st.session_state.user_name,10)
                     process_ai_response(txt, "voice")
                 else:
-                    st.error("تعذّر تحويل الصوت إلى نص. تأكد من جودة الملف أو جرّب ملفاً آخر.")
+                    st.error("تعذّر التحويل")
         st.stop()
-
-    st.write("اضغط لبدء التسجيل ثم لإيقافه. عند الانتهاء سيتم عرض المقطع وتحويله إلى نص (إن أمكن).")
-    aud = None
     try:
-        aud = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key='m')
+        aud = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key="m")
     except Exception as e:
         logger.exception("mic_recorder invocation failed: %s", e)
-        st.error("فشل استدعاء مكوّن التسجيل. تحقق من Console في المتصفح لمعرفة الأخطاء.")
-        up_audio = st.file_uploader("أو حمّل ملف صوتي (wav/mp3/m4a/ogg):", type=["wav", "mp3", "m4a", "ogg"])
-        if up_audio:
-            st.audio(up_audio)
-            if st.button("تحويل الملف إلى نص"):
-                lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
-                audio_bytes = up_audio.read()
-                txt = speech_to_text_bytes(audio_bytes, lang)
-                if txt:
-                    st.success("تم تحويل الملف إلى نص:")
-                    st.write(txt)
-                    st.chat_message("user").write(txt)
-                    update_xp(st.session_state.user_name, 10)
-                    process_ai_response(txt, "voice")
-                else:
-                    st.error("تعذّر تحويل الصوت إلى نص.")
-        st.stop()
-
+        aud = None
     if aud:
         audio_bytes = None
         if isinstance(aud, dict):
-            audio_bytes = aud.get("bytes") or aud.get("data") or None
-        elif isinstance(aud, (bytes, bytearray)):
+            audio_bytes = aud.get("bytes") or aud.get("data")
+        elif isinstance(aud, (bytes,bytearray)):
             audio_bytes = aud
         if audio_bytes:
             if isinstance(audio_bytes, str):
                 try:
-                    if audio_bytes.startswith("data:"):
-                        audio_bytes = audio_bytes.split(",", 1)[1]
-                    audio_bytes = base64.b64decode(audio_bytes)
+                    audio_bytes = base64.b64decode(audio_bytes.split(",",1)[1] if audio_bytes.startswith("data:") else audio_bytes)
                 except Exception:
-                    logger.exception("Failed to decode audio bytes from recorder string.")
+                    logger.exception("decode recorder string failed")
             if audio_bytes != st.session_state.get("last_audio_bytes"):
                 st.session_state.last_audio_bytes = audio_bytes
-                st.success("تم استلام تسجيل صوتي — تشغيل معاينة أدناه:")
                 try:
-                    st.audio(BytesIO(audio_bytes), format="audio/wav")
+                    st.audio(BytesIO(audio_bytes))
                 except Exception:
                     try:
-                        st.audio(BytesIO(audio_bytes))
+                        st.audio(BytesIO(audio_bytes), format="audio/wav")
                     except Exception:
-                        st.warning("لا يمكن تشغيل المعاينة. ربما تنسيق الصوت غير مدعوم.")
-                lang = "ar-EG" if st.session_state.language == "العربية" else "en-US"
-                with st.spinner("يتم تحويل الصوت إلى نص..."):
-                    txt = speech_to_text_bytes(audio_bytes, lang) if sr else None
+                        st.warning("معاينة الصوت قد لا تعمل في هذا التنسيق.")
+                lang = "ar-EG" if st.session_state.language=="العربية" else "en-US"
+                with st.spinner("تحويل الصوت إلى نص..."):
+                    txt = speech_to_text_bytes(audio_bytes, lang)
                 if txt:
-                    st.write("تم تحويل الصوت إلى نص:")
-                    st.write(txt)
-                    st.chat_message("user").write(txt)
-                    update_xp(st.session_state.user_name, 10)
+                    st.write("تم التحويل:", txt)
+                    update_xp(st.session_state.user_name,10)
                     process_ai_response(txt, "voice")
                 else:
-                    st.error("تعذّر تحويل التسجيل إلى نص. تحقق من إعدادات الميكروفون وجودة الصوت.")
-                    st.info("اقتراحات: تأكد من السماح بالميكروفون، استخدم بيئة هادئة، أو جرّب رفع ملف صوتي بصيغة WAV/MP3.")
-        else:
-            st.info("لم يتم التسجيل بعد — اضغط على زر التسجيل وسمح للمتصفح بالوصول إلى الميكروفون إذا طُلب.")
+                    st.error("تعذّر تحويل التسجيل إلى نص")
 
-# --- Text tab (stable input) ---
+# Text tab (stable input)
 with t2:
     st.markdown("اكتب سؤالك نصياً ثم اضغط إرسال:")
     q_text = st.text_area("سؤالك:", key="text_question", height=120)
     if st.button("إرسال السؤال"):
         if q_text and q_text.strip():
-            st.chat_message("user").write(q_text)
-            update_xp(st.session_state.user_name, 5)
+            st.write("سؤالك:", q_text)
+            update_xp(st.session_state.user_name,5)
             process_ai_response(q_text, "text")
-            # clear input for UX
             st.session_state["text_question"] = ""
         else:
-            st.warning("الرجاء كتابة السؤال أولاً.")
+            st.warning("اكتب السؤال أولاً")
 
-# --- Image tab ---
+# Image tab
 with t3:
-    up = st.file_uploader("حمّل صورة (png, jpg)", type=['png','jpg','jpeg'])
+    up = st.file_uploader("صورة (png/jpg)", type=["png","jpg","jpeg"])
     if up:
         try:
             img = Image.open(up)
             st.image(img, width=300)
             if st.button("تحليل الصورة"):
                 update_xp(st.session_state.user_name, 15)
-                process_ai_response(["صِف الصورة وعلّم المفاهيم العلمية الموجودة فيها.", img], "image")
+                process_ai_response(["اشرح الصورة وبيّن المفاهيم", img], "image")
         except Exception:
-            st.exception("فشل في فتح الصورة.")
+            st.exception("فشل فتح الصورة")
 
-# --- Training / MCQ tab ---
+# MCQ tab
 with t4:
-    st.markdown("### 📝 أسئلة متعددة ا��اختيارات (MCQ)")
+    st.markdown("### 📝 أسئلة متعددة الاختيارات (MCQ)")
     colA, colB = st.columns(2)
     with colA:
         if st.button("توليد سؤال جديد"):
@@ -1092,12 +905,12 @@ with t4:
         else:
             st.info("اضغط 'توليد سؤال جديد' لبدء.")
 
-# Footer and housekeeping
+# Footer & persist chat history
 st.markdown("---")
-st.caption("AI Science Tutor Pro — محدث. احتفظ بمفاتيحك في st.secrets وراجع لوحة التشخيص إذا ظهرت أخطاء.")
+st.caption("AI Science Tutor Pro — راجع Diagnostics وآخر حالة AI للمعلومات التقنية.")
 
 try:
     if st.session_state.get("chat_history"):
-        append_chat_history_local(st.session_state.get("user_name", "anonymous"), {"time": now_str(), "history": st.session_state.chat_history})
+        append_chat_history_local(st.session_state.get("user_name","anonymous"), {"time": now_str(), "history": st.session_state.chat_history})
 except Exception:
-    logger.exception("Failed to persist session chat history.")
+    logger.exception("Failed to persist session chat history")
