@@ -28,11 +28,11 @@ import gspread
 import pandas as pd
 
 # ==========================================
-# 🎛️ الثوابت
+# 🎛️ الثوابت (تقرأ من secrets مع قيم افتراضية)
 # ==========================================
 TEACHER_MASTER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN_2024")
 CONTROL_SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-SESSION_DURATION_MINUTES = 60
+SESSION_DURATION_MINUTES = int(st.secrets.get("SESSION_DURATION_MINUTES", 60))
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 DAILY_FACTS = [
@@ -46,6 +46,7 @@ DAILY_FACTS = [
 # 🛠️ الخدمات الخلفية
 # ==========================================
 
+# --- جداول جوجل ---
 @st.cache_resource
 def get_gspread_client():
     if "gcp_service_account" not in st.secrets:
@@ -58,7 +59,9 @@ def get_gspread_client():
         ]
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
         return gspread.authorize(creds)
-    except Exception:
+    except Exception as e:
+        # أثناء البناء: أظهر السبب بدل الصمت
+        st.error(f"Service account error: {e}")
         return None
 
 
@@ -69,13 +72,14 @@ def get_sheet_data():
     try:
         sheet = client.open(CONTROL_SHEET_NAME)
         val = sheet.sheet1.acell("B1").value
-        return str(val).strip()
-    except Exception:
+        return str(val).strip() if val is not None else None
+    except Exception as e:
+        st.error(f"Google Sheet open/read error: {e}")
         return None
 
 
+# --- التسجيل (Logs) ---
 def _bg_task(task_type, data):
-    """مهام جوجل شيت بالخلفية: Logs / Activity / XP"""
     if "gcp_service_account" not in st.secrets:
         return
 
@@ -112,7 +116,6 @@ def _bg_task(task_type, data):
                 sheet = wb.worksheet("Gamification")
             except Exception:
                 return
-            # ملاحظة: find() قد يكون بطيئًا مع كثرة المستخدمين، لكنه مقبول كبداية
             cell = sheet.find(data["name"])
             if cell:
                 val = sheet.cell(cell.row, 2).value
@@ -174,7 +177,6 @@ def get_leaderboard():
         df = pd.DataFrame(data)
         if df.empty:
             return []
-        # يفترض الأعمدة: Student_Name و XP
         if "XP" not in df.columns:
             return []
         df["XP"] = pd.to_numeric(df["XP"], errors="coerce").fillna(0)
@@ -219,8 +221,7 @@ def download_pdf_text(service, file_id):
         reader = PyPDF2.PdfReader(fh)
         text = ""
         for page in reader.pages:
-            t = page.extract_text() or ""
-            text += t + "\n"
+            text += (page.extract_text() or "") + "\n"
         return text
     except Exception:
         return ""
@@ -242,11 +243,9 @@ async def generate_audio_stream(text, voice_code):
 
 
 def generate_audio_bytes(text, voice_code):
-    """تشغيل آمن نسبيًا داخل Streamlit."""
     try:
         return asyncio.run(generate_audio_stream(text, voice_code))
     except RuntimeError:
-        # fallback إذا كان هناك event loop شغال
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(generate_audio_stream(text, voice_code))
@@ -257,7 +256,6 @@ def generate_audio_bytes(text, voice_code):
 def speech_to_text(audio_bytes, lang_code):
     r = sr.Recognizer()
     try:
-        # ملاحظة: هذا يتطلب أن bytes تمثل WAV/AIFF/FLAC مدعومة
         with sr.AudioFile(BytesIO(audio_bytes)) as source:
             r.adjust_for_ambient_noise(source, duration=0.5)
             audio_data = r.record(source)
@@ -269,20 +267,19 @@ def speech_to_text(audio_bytes, lang_code):
 # ==========================================
 # 🧠 الذكاء الاصطناعي
 # ==========================================
+@st.cache_resource
+def get_model_names_to_try():
+    # أسماء أكثر شيوعاً في google-generativeai (قد تختلف حسب حسابك)
+    return [
+        "models/gemini-1.5-flash",
+        "models/gemini-1.5-pro",
+    ]
+
+
 def pil_to_png_bytes(img: Image.Image) -> bytes:
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
-
-
-@st.cache_resource
-def get_model_names_to_try():
-    # قائمة “محافظة” + يمكنك تعديلها
-    return [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-    ]
 
 
 def get_working_model():
@@ -305,27 +302,6 @@ def get_working_model():
     return None
 
 
-def render_ai_message(full_text: str):
-    """عرض النص + Graphviz إن وجد."""
-    disp_text = full_text.split("```dot")[0].strip()
-    dot_code = None
-    if "```dot" in full_text:
-        try:
-            dot_code = full_text.split("```dot")[1].split("```")[0].strip()
-        except Exception:
-            dot_code = None
-
-    st.chat_message("assistant").write(disp_text)
-
-    if dot_code:
-        try:
-            st.graphviz_chart(dot_code)
-        except Exception:
-            pass
-
-    return disp_text
-
-
 def process_ai_response(user_text, input_type="text"):
     log_activity(st.session_state.user_name, input_type, user_text)
 
@@ -333,7 +309,7 @@ def process_ai_response(user_text, input_type="text"):
         try:
             model = get_working_model()
             if not model:
-                st.error("⚠️ فشل الاتصال. يرجى إعادة تحميل الصفحة.")
+                st.error("⚠️ فشل الاتصال بـ Gemini. تحقق من المفاتيح/النماذج.")
                 return
 
             lang = st.session_state.language
@@ -349,30 +325,33 @@ Instructions: Answer in {lang_instr}. Be helpful.
 If diagram needed, use Graphviz DOT code inside ```dot ... ``` block.
 """.strip()
 
-            # حفظ رسالة المستخدم في الهيستوري
-            if input_type == "image":
-                st.session_state.chat_history.append({"role": "user", "type": "image", "content": "📷 image"})
-            else:
-                st.session_state.chat_history.append({"role": "user", "type": input_type, "content": str(user_text)})
-
             if input_type == "image":
                 prompt = f"{base_prompt}\nStudent: {user_text[0]}"
-                img: Image.Image = user_text[1]
-                img_bytes = pil_to_png_bytes(img)
-                resp = model.generate_content(
-                    [
-                        prompt,
-                        {"mime_type": "image/png", "data": img_bytes},
-                    ]
-                )
+                img_bytes = pil_to_png_bytes(user_text[1].convert("RGB"))
+                resp = model.generate_content([prompt, {"mime_type": "image/png", "data": img_bytes}])
             else:
                 resp = model.generate_content(f"{base_prompt}\nStudent: {user_text}")
 
             full_text = getattr(resp, "text", "") or ""
-            st.session_state.chat_history.append({"role": "assistant", "type": "text", "content": full_text})
+            st.session_state.chat_history.append((str(user_text)[:50], full_text))
 
-            # العرض
-            disp_text = render_ai_message(full_text)
+            # عرض + Graphviz
+            disp_text = full_text.split("```dot")[0].strip()
+            dot_code = None
+            if "```dot" in full_text:
+                try:
+                    dot_code = full_text.split("```dot")[1].split("```")[0].strip()
+                except Exception:
+                    dot_code = None
+
+            st.markdown("---")
+            st.chat_message("assistant").write(disp_text)
+
+            if dot_code:
+                try:
+                    st.graphviz_chart(dot_code)
+                except Exception:
+                    pass
 
             # الصوت
             vc = "ar-EG-ShakirNeural" if lang == "العربية" else "en-US-AndrewNeural"
@@ -417,6 +396,13 @@ if "auth_status" not in st.session_state:
 # --- تسجيل الدخول ---
 if not st.session_state.auth_status:
     draw_header()
+
+    with st.expander("🔧 Diagnostics", expanded=False):
+        st.write("Has GOOGLE_API_KEYS:", bool(st.secrets.get("GOOGLE_API_KEYS", [])))
+        st.write("Has gcp_service_account:", "gcp_service_account" in st.secrets)
+        st.write("CONTROL_SHEET_NAME:", CONTROL_SHEET_NAME)
+        st.write("Has DRIVE_FOLDER_ID:", bool(DRIVE_FOLDER_ID))
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.info(f"💡 {random.choice(DAILY_FACTS)}")
@@ -427,7 +413,13 @@ if not st.session_state.auth_status:
             if st.form_submit_button("دخول"):
                 db_pass = get_sheet_data()
                 is_teacher = (code == TEACHER_MASTER_KEY)
-                is_student = (db_pass and code == db_pass)
+
+                # لو الشيت غير متاح: اسمح للمعلم فقط
+                if db_pass is None and not is_teacher:
+                    st.error("تعذر الاتصال بقاعدة أكواد الطلاب (Google Sheet). راجع secrets ومشاركة الشيت مع service account.")
+                    st.stop()
+
+                is_student = (db_pass is not None and code == db_pass)
 
                 if is_teacher or is_student:
                     st.session_state.auth_status = True
@@ -439,7 +431,7 @@ if not st.session_state.auth_status:
                         st.session_state.current_xp = get_current_xp(name)
                         log_login(name, "student", grade)
                     st.success("تم الدخول!")
-                    time.sleep(0.3)
+                    time.sleep(0.4)
                     st.rerun()
                 else:
                     st.error("الكود غير صحيح")
@@ -459,7 +451,6 @@ with st.sidebar:
         st.markdown("---")
         st.caption("🏆 المتصدرون")
         for i, r in enumerate(get_leaderboard()):
-            # يتوقع الأعمدة Student_Name و XP
             sn = r.get("Student_Name", "Unknown")
             xp = r.get("XP", 0)
             st.text(f"{i+1}. {sn} ({xp})")
@@ -478,16 +469,6 @@ with st.sidebar:
                         if txt:
                             st.session_state.ref_text = txt
                             st.toast("تم تفعيل الكتاب")
-
-
-# عرض المحادثة السابقة (اختياري لكنه مفيد)
-for m in st.session_state.chat_history:
-    if m["role"] == "user":
-        st.chat_message("user").write(m["content"])
-    else:
-        # نعرض نص المساعد فقط بدون إعادة رسم graphviz هنا
-        st.chat_message("assistant").write(m["content"])
-
 
 t1, t2, t3, t4 = st.tabs(["🎙️", "📝", "📷", "🧠"])
 
@@ -516,7 +497,7 @@ with t3:
     up = st.file_uploader("صورة", type=["png", "jpg", "jpeg"])
     if st.button("تحليل") and up:
         img = Image.open(up).convert("RGB")
-        st.image(img, width=180)
+        st.image(img, width=150)
         update_xp(st.session_state.user_name, 15)
         process_ai_response(["اشرح الصورة", img], "image")
 
@@ -549,4 +530,4 @@ with t4:
                         update_xp(st.session_state.user_name, 50)
                     st.session_state.q_active = False
                 except Exception:
-                    st.error("خطأ في التحقق")
+                    st.error("خطأ في 
