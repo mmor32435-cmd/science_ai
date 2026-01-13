@@ -506,7 +506,10 @@ with t4:
         m = get_working_model()
         if m:
             try:
-                p = f"Write 1 MCQ science question suitable for grade {st.session_state.student_grade}. Language: {st.session_state.language}. Do NOT include the answer."
+                p = (
+                    f"Write 1 MCQ science question suitable for grade {st.session_state.student_grade}. "
+                    f"Language: {st.session_state.language}. Do NOT include the answer."
+                )
                 st.session_state.q_curr = m.generate_content(p).text
                 st.session_state.q_active = True
                 st.rerun()
@@ -521,13 +524,16 @@ with t4:
             m = get_working_model()
             if m:
                 try:
-                    res = m.generate_content(
-                        f"Q: {st.session_state.q_curr}\nStudent answer: {ans}\nCheck correctness. Reply briefly in the same language."
-                    ).text
+                    prompt = (
+                        f"Q: {st.session_state.q_curr}\n"
+                        f"Student answer: {ans}\n"
+                        "Check correctness. Reply briefly in the same language."
+                    )
+                    res = m.generate_content(prompt).text
                     st.write(res)
                     if "correct" in res.lower() or "صحيح" in res:
                         st.balloons()
                         update_xp(st.session_state.user_name, 50)
                     st.session_state.q_active = False
                 except Exception:
-                    st.error("خطأ في 
+                    st.error("خطأ في التحقق")
