@@ -4,6 +4,11 @@ import google.generativeai as genai
 import gspread
 from PIL import Image
 import random
+import speech_recognition as sr
+from gtts import gTTS
+from streamlit_mic_recorder import mic_recorder
+import io
+import tempfile
 
 # ==========================================
 # 1. إعدادات الصفحة
@@ -27,8 +32,10 @@ st.markdown("""
         background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
         padding: 2rem; border-radius: 15px; color: white; text-align: center; margin-bottom: 2rem;
     }
-    .stButton>button { background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; font-weight: bold; font-size: 18px; }
-    .stButton>button:hover { background-color: #141E30; }
+    .stButton>button { background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; font-weight: bold; }
+    
+    /* تنسيق زر الميكروفون */
+    .mic-btn { text-align: center; margin: 10px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,7 +57,7 @@ if 'user_data' not in st.session_state:
 if 'messages' not in st.session_state: st.session_state.messages = []
 
 # ==========================================
-# 4. دوال الاتصال (Authentication)
+# 4. دوال الاتصال (Backend)
 # ==========================================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -63,12 +70,7 @@ def get_gspread_client():
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-        # تصاريح كاملة (Drive + Sheets)
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
     except: return None
@@ -83,55 +85,76 @@ def check_student_code(input_code):
     except: return False
 
 # ==========================================
-# 5. الذكاء الاصطناعي (Dynamic Model Selection)
+# 5. الصوت والذكاء الاصطناعي
 # ==========================================
 
-def get_best_model():
-    """البحث عن أفضل نموذج متاح لتجنب خطأ 404"""
+# دالة تحويل الصوت لنص (للطلاب)
+def speech_to_text(audio_bytes):
+    r = sr.Recognizer()
     try:
-        # جلب كل النماذج المتاحة
+        # تحويل البايتات إلى ملف صوتي مؤقت
+        audio_file = io.BytesIO(audio_bytes.read())
+        with sr.AudioFile(audio_file) as source:
+            audio_data = r.record(source)
+            # التعرف على الكلام (يدعم العربية)
+            text = r.recognize_google(audio_data, language="ar-EG")
+            return text
+    except Exception:
+        return None
+
+# دالة تحويل النص لصوت (للمعلم)
+def text_to_speech(text):
+    try:
+        # إنشاء ملف صوتي مؤقت
+        tts = gTTS(text=text, lang='ar', slow=False)
+        # حفظه في ذاكرة مؤقتة
+        fp = io.BytesIO()
+        tts.write_to_fp(fp)
+        return fp
+    except:
+        return None
+
+def get_best_model():
+    try:
         models = genai.list_models()
-        # تصفية النماذج التي تدعم الشات
         chat_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-        
         if not chat_models: return 'models/gemini-1.5-flash'
-        
-        # 1. البحث عن Flash (الأفضل حالياً)
         for m in chat_models:
             if 'flash' in m.lower(): return m
-            
-        # 2. البحث عن Pro 1.5
         for m in chat_models:
             if 'pro' in m.lower() and '1.5' in m.lower(): return m
-            
-        # 3. أي نموذج آخر متاح
         return chat_models[0]
-    except:
-        return 'models/gemini-1.5-flash'
+    except: return 'models/gemini-1.5-flash'
 
 def get_ai_response(user_text, img_obj=None):
     try:
         keys = st.secrets.get("GOOGLE_API_KEYS", [])
         if not keys: return "⚠️ المفاتيح مفقودة."
-        
-        # إعداد المفتاح
         genai.configure(api_key=random.choice(keys))
-        
-        # اختيار الموديل المتاح تلقائياً
-        model_name = get_best_model()
-        model = genai.GenerativeModel(model_name)
         
         u = st.session_state.user_data
         lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
-        sys_prompt = f"أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}). التزم بالمنهج. {lang_prompt}"
+        
+        # 🔥 تعديل التعليمات لتكون الإجابة مختصرة ومركزة
+        sys_prompt = f"""
+        أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}).
+        
+        تعليمات صارمة:
+        1. التزم بالمنهج المصري.
+        2. {lang_prompt}
+        3. ⛔ ممنوع الإجابات الطويلة.
+        4. ✅ أعط الإجابة "الخلاصة المختصرة المفيدة" في نقاط محددة (Bullet points).
+        5. كن مرحاً ومشجعاً.
+        """
+        
+        model_name = get_best_model()
+        model = genai.GenerativeModel(model_name)
         
         inputs = [sys_prompt, user_text]
-        if img_obj: inputs.extend([img_obj, "حل الصورة"])
+        if img_obj: inputs.extend([img_obj, "اشرح الصورة باختصار."])
         
         return model.generate_content(inputs).text
-
-    except Exception as e:
-        return f"حدث خطأ: {e}"
+    except Exception as e: return f"خطأ: {e}"
 
 # ==========================================
 # 6. الواجهات والتشغيل
@@ -168,23 +191,65 @@ def main_app():
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
-    st.subheader("💬 اسأل المعلم")
-    with st.expander("📸 إرفاق صورة (اختياري)"):
-        f = st.file_uploader("اختر صورة", type=['jpg', 'png'])
-        img = Image.open(f) if f else None
-        if img: st.image(img, width=200)
+    st.subheader("💬 اسأل المعلم (صوت أو كتابة)")
+    
+    # 1. الميكروفون
+    col_mic, col_cam = st.columns([1, 1])
+    with col_mic:
+        st.write("🎙️ اضغط للتحدث:")
+        audio = mic_recorder(start_prompt="ابدأ التسجيل", stop_prompt="توقف", key='recorder')
+    
+    with col_cam:
+        with st.expander("📸 إرفاق صورة"):
+            f = st.file_uploader("اختر صورة", type=['jpg', 'png'])
+            img = Image.open(f) if f else None
+            if img: st.image(img, width=150)
 
+    # معالجة الصوت المسجل
+    user_input = None
+    if audio:
+        with st.spinner("جاري تحويل صوتك لنص..."):
+            # تحويل البايتات إلى كائن قابل للقراءة
+            audio_bio = io.BytesIO(audio['bytes'])
+            audio_bio.name = 'audio.wav'
+            # استخدام SpeechRecognition
+            r = sr.Recognizer()
+            try:
+                with sr.AudioFile(audio_bio) as source:
+                    audio_data = r.record(source)
+                    user_input = r.recognize_google(audio_data, language="ar-EG")
+            except:
+                st.warning("لم أتمكن من سماعك بوضوح، حاول مرة أخرى.")
+
+    # 2. عرض المحادثة السابقة
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.write(msg["content"])
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            # إذا كانت رسالة المعلم، نعرض زر تشغيل الصوت القديم (اختياري)
 
-    if prompt := st.chat_input("سؤالك..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"): st.write(prompt)
+    # 3. استقبال المدخلات (كتابة أو صوت)
+    prompt = st.chat_input("أو اكتب سؤالك هنا...")
+    
+    # تحديد مصدر السؤال (كتابة أم صوت)
+    final_prompt = prompt if prompt else user_input
+
+    if final_prompt:
+        # عرض سؤال الطالب
+        st.session_state.messages.append({"role": "user", "content": final_prompt})
+        with st.chat_message("user"): st.write(final_prompt)
+        
+        # معالجة الرد
         with st.chat_message("assistant"):
             with st.spinner("جاري التفكير..."):
-                resp = get_ai_response(prompt, img)
-                st.write(resp)
-        st.session_state.messages.append({"role": "assistant", "content": resp})
+                resp_text = get_ai_response(final_prompt, img)
+                st.write(resp_text)
+                
+                # توليد الصوت للإجابة
+                audio_fp = text_to_speech(resp_text)
+                if audio_fp:
+                    st.audio(audio_fp, format='audio/mp3')
+        
+        st.session_state.messages.append({"role": "assistant", "content": resp_text})
 
 if __name__ == "__main__":
     if st.session_state.user_data["logged_in"]:
