@@ -10,6 +10,7 @@ import asyncio
 import edge_tts
 import tempfile
 import os
+import re # مكتبة للتعامل مع النصوص وإزالة الرموز
 
 # ==========================================
 # 1. إعدادات الصفحة
@@ -22,7 +23,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. التصميم عالي التباين (High Contrast CSS)
+# 2. تصميم الواجهة (إصلاح ألوان الكتابة)
 # ==========================================
 st.markdown("""
 <style>
@@ -32,50 +33,52 @@ st.markdown("""
         font-family: 'Cairo', sans-serif;
         direction: rtl;
         text-align: right;
-        color: #000000 !important; /* فرض اللون الأسود للنصوص */
     }
     
-    /* خلفية التطبيق */
+    /* خلفية زرقاء فاتحة مريحة للعين */
     .stApp {
-        background-color: #f0f2f6;
+        background-color: #f0f8ff;
     }
     
     /* صندوق العنوان */
     .header-box {
-        background: linear-gradient(135deg, #004e92 0%, #000428 100%);
+        background: linear-gradient(90deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
         padding: 2rem;
         border-radius: 15px;
-        color: #ffffff !important; /* نص أبيض داخل العنوان فقط */
+        color: white;
         text-align: center;
         margin-bottom: 2rem;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
     }
-    .header-box h1, .header-box h3 { color: #ffffff !important; }
-
-    /* تحسين فقاعات الشات لتكون واضحة */
-    .stChatMessage {
-        background-color: #ffffff;
-        border: 1px solid #ddd;
-        border-radius: 10px;
+    
+    /* إصلاح جذري لمشكلة اختفاء الكتابة */
+    /* نجبر الحقول أن تكون بيضاء والنص أسود */
+    .stTextInput input {
         color: #000000 !important;
+        background-color: #ffffff !important;
+        border: 1px solid #ccc;
+    }
+    .stSelectbox div[data-baseweb="select"] > div {
+        color: #000000 !important;
+        background-color: #ffffff !important;
     }
     
     /* الأزرار */
     .stButton>button {
-        background-color: #004e92;
+        background-color: #2c5364;
         color: white !important;
         border-radius: 8px;
         height: 50px;
         width: 100%;
-        font-weight: bold;
         font-size: 18px;
-    }
-    .stButton>button:hover { background-color: #003366; }
-
-    /* النصوص داخل الحقول */
-    .stTextInput input, .stSelectbox div, .stTextArea textarea {
-        color: #000000 !important;
         font-weight: bold;
+    }
+    
+    /* رسائل الشات */
+    .stChatMessage {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        color: #000000;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -124,47 +127,53 @@ def check_student_code(input_code):
     except: return False
 
 # ==========================================
-# 5. تقنيات الصوت والذكاء (The Brain)
+# 5. معالجة الصوت والذكاء (The Brain)
 # ==========================================
 
-# 🎤 دالة تحويل الصوت لنص (تم إصلاحها بملف مؤقت)
+# 🧹 دالة تنظيف النص من الرموز (لحل مشكلة نجمة نجمة)
+def clean_text_for_speech(text):
+    # إزالة النجوم والهاشتاج والشرطات
+    clean = re.sub(r'[\*\#\-\_]', '', text)
+    # إزالة المسافات الزائدة
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean
+
+# 🎤 دالة الميكروفون (محسنة)
 def speech_to_text(audio_bytes):
     r = sr.Recognizer()
     try:
-        # حفظ الصوت في ملف مؤقت ليتمكن Google Recognizer من قراءته
+        # حفظ كملف WAV مؤقت
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_file.write(audio_bytes)
             tmp_filename = tmp_file.name
         
-        # قراءة الملف
         with sr.AudioFile(tmp_filename) as source:
+            # تقليل الضوضاء
+            r.adjust_for_ambient_noise(source, duration=0.5)
             audio_data = r.record(source)
-            # التعرف (يدعم اللهجة المصرية والسعودية والعربية الفصحى)
             text = r.recognize_google(audio_data, language="ar-EG")
         
-        # تنظيف الملف
         os.remove(tmp_filename)
         return text
-    except Exception:
+    except:
         return None
 
-# 🔊 دالة تحويل النص لصوت (بشري واحترافي)
-async def generate_speech_async(text, voice="ar-EG-SalmaNeural"):
-    communicate = edge_tts.Communicate(text, voice)
-    # حفظ في ملف مؤقت
+# 🔊 دالة تحويل النص لصوت (بصوت شاكر - رجل مصري)
+async def generate_speech_async(text, voice="ar-EG-ShakirNeural"):
+    # تنظيف النص قبل النطق
+    cleaned_text = clean_text_for_speech(text)
+    communicate = edge_tts.Communicate(cleaned_text, voice)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         await communicate.save(tmp_file.name)
         return tmp_file.name
 
 def text_to_speech_pro(text):
-    # تشغيل الدالة اللامتزامنة
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         file_path = loop.run_until_complete(generate_speech_async(text))
         return file_path
-    except Exception:
-        return None
+    except: return None
 
 # 🧠 الذكاء الاصطناعي
 def get_best_model():
@@ -186,21 +195,21 @@ def get_ai_response(user_text, img_obj=None):
         u = st.session_state.user_data
         lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
         
+        # تعليمات المعلم (الرد المختصر)
         sys_prompt = f"""
         أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}).
-        التعليمات:
-        1. التزم بالمنهج المصري.
+        1. التزم بالمنهج.
         2. {lang_prompt}
-        3. ⛔ كن مختصراً جداً (Brief & Concise).
+        3. ⛔ الرد يجب أن يكون مختصراً جداً ومركزاً (Concise Summary).
         4. ✅ استخدم نقاط (Bullet points).
-        5. كن مرحاً.
+        5. تجنب المقدمات الطويلة.
         """
         
         model_name = get_best_model()
         model = genai.GenerativeModel(model_name)
         
         inputs = [sys_prompt, user_text]
-        if img_obj: inputs.extend([img_obj, "اشرح الصورة باختصار."])
+        if img_obj: inputs.extend([img_obj, "اشرح الصورة."])
         
         return model.generate_content(inputs).text
     except Exception as e: return f"خطأ: {e}"
@@ -235,19 +244,17 @@ def login_page():
 
 def main_app():
     with st.sidebar:
-        st.success(f"أهلاً: {st.session_state.user_data['name']}")
+        st.success(f"مرحباً: {st.session_state.user_data['name']}")
         if st.button("خروج"):
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
     st.subheader("💬 اسأل المعلم (تحدث أو اكتب)")
     
-    # منطقة الميكروفون
     c_mic, c_img = st.columns([1, 1])
     with c_mic:
-        st.info("🎙️ اضغط للتحدث، واضغط مرة أخرى للإرسال:")
-        # هذا الزر يعيد بايتات الصوت
-        audio = mic_recorder(start_prompt="تسجيل ⏺️", stop_prompt="إرسال ⏹️", key='recorder')
+        st.info("🎙️ اضغط للتحدث:")
+        audio = mic_recorder(start_prompt="بدء التسجيل ⏺️", stop_prompt="إنهاء ⏹️", key='recorder')
     
     with c_img:
         with st.expander("📸 إرفاق صورة"):
@@ -255,38 +262,30 @@ def main_app():
             img = Image.open(f) if f else None
             if img: st.image(img, width=150)
 
-    # معالجة الإدخال الصوتي
+    # معالجة الصوت
     voice_text = None
     if audio:
-        with st.spinner("جاري سماعك..."):
+        with st.spinner("جاري معالجة الصوت..."):
             voice_text = speech_to_text(audio['bytes'])
             if not voice_text:
-                st.warning("⚠️ لم أسمع جيداً، حاول الاقتراب من الميكروفون.")
+                st.warning("⚠️ الصوت غير واضح، يرجى المحاولة مرة أخرى.")
 
-    # عرض المحادثة
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+        with st.chat_message(msg["role"]): st.write(msg["content"])
 
-    # الإدخال النصي
     text_input = st.chat_input("اكتب سؤالك...")
-    
-    # تحديد السؤال النهائي (صوت أو نص)
     final_q = text_input if text_input else voice_text
 
     if final_q:
-        # إضافة السؤال
         st.session_state.messages.append({"role": "user", "content": final_q})
         with st.chat_message("user"): st.write(final_q)
         
-        # الإجابة
         with st.chat_message("assistant"):
-            with st.spinner("جاري التفكير وتجهيز الرد الصوتي..."):
-                # 1. النص
+            with st.spinner("جاري التحضير..."):
                 resp_text = get_ai_response(final_q, img)
                 st.write(resp_text)
                 
-                # 2. الصوت (Edge TTS)
+                # الصوت (النظيف)
                 audio_file = text_to_speech_pro(resp_text)
                 if audio_file:
                     st.audio(audio_file, format='audio/mp3')
