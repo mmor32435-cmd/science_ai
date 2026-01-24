@@ -4,202 +4,269 @@ import google.generativeai as genai
 import gspread
 import time
 import random
+import os
+import base64
+from PIL import Image
 
 # =========================================================
-# 1. إعدادات الصفحة والتصميم
+# 1. إعدادات الصفحة والتصميم الفائق (Super UI/UX)
 # =========================================================
 st.set_page_config(
-    page_title="المعلم العلمي الذكي",
-    page_icon="🧬",
+    page_title="AI Science Tutor | الأستاذ السيد البدوي",
+    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# تنسيق CSS لدعم العربية وتحسين المظهر
+# حقن CSS احترافي لتغيير شكل التطبيق بالكامل
 st.markdown("""
 <style>
-    .stApp { direction: rtl; text-align: right; }
-    .stTextInput label, .stSelectbox label, .stTextArea label {
-        font-family: sans-serif;
-        font-size: 1.1rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: right;
+    /* استيراد خطوط عربية جميلة */
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif;
+        direction: rtl;
     }
-    .stTextInput input { text-align: right; }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        height: 3em;
-        background-color: #1f77b4;
+    
+    /* خلفية متدرجة عصرية */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+
+    /* تصميم كارت العنوان */
+    .header-card {
+        background: linear-gradient(90deg, #1CB5E0 0%, #000851 100%);
+        padding: 20px;
+        border-radius: 15px;
         color: white;
-        font-weight: bold;
-        font-size: 16px;
+        text-align: center;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
-    .stButton>button:hover { background-color: #0d47a1; color: white; }
-    .stAlert { direction: rtl; text-align: right; }
+    .header-name-ar { font-size: 2.5em; font-weight: bold; margin: 0; }
+    .header-name-en { font-size: 1.2em; font-weight: 300; margin-top: 5px; color: #e0e0e0; }
+
+    /* تحسين فقاعات المحادثة */
+    .stChatMessage {
+        border-radius: 15px;
+        padding: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    
+    /* تنسيق المعادلات الكيميائية */
+    .katex { font-size: 1.2em; color: #000851; }
+
+    /* الأزرار */
+    .stButton>button {
+        background: linear-gradient(45deg, #11998e, #38ef7d);
+        color: white;
+        border: none;
+        border-radius: 25px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: scale(1.05);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# تحميل الثوابت من ملف الأسرار
+# عرض بانر الاسم المميز
+st.markdown("""
+<div class="header-card">
+    <div class="header-name-ar">الأستاذ / السيد البدوي</div>
+    <div class="header-name-en">Mr. Elsayed Elbadawy - Expert Science Tutor</div>
+</div>
+""", unsafe_allow_html=True)
+
+# تحميل الثوابت
 TEACHER_MASTER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN_DEFAULT")
 CONTROL_SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 # =========================================================
-# 2. دوال الاتصال وإدارة الجلسة
+# 2. المحرك الذكي (The Brain) والاتصال
 # =========================================================
 
 @st.cache_resource
 def get_gspread_client():
-    """إنشاء اتصال آمن مع Google Sheets"""
-    if "gcp_service_account" not in st.secrets:
-        st.error("⚠️ خطأ: بيانات حساب الخدمة مفقودة.")
-        return None
-    
+    if "gcp_service_account" not in st.secrets: return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        
-        # إصلاح تنسيق المفتاح الخاص
         if "private_key" in creds_dict:
-            pk = creds_dict["private_key"]
-            creds_dict["private_key"] = pk.replace("\\n", "\n")
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-        scopes = [
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets",
-        ]
-        
+        scopes = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
-        
-    except Exception as e:
-        st.error("⚠️ فشل الاتصال بخدمات جوجل.")
-        print(f"Connection Error: {e}")
-        return None
+    except: return None
 
 def get_student_code_from_sheet():
-    """جلب كود الطالب من ورقة التحكم"""
     client = get_gspread_client()
-    if not client:
-        return None
-        
+    if not client: return None
     try:
         sh = client.open(CONTROL_SHEET_NAME)
-        sheet = sh.sheet1
-        val = sheet.acell("B1").value
-        return str(val).strip() if val else None
-    except Exception as e:
-        return None
+        return str(sh.sheet1.acell("B1").value).strip()
+    except: return None
 
-# إدارة حالة الجلسة
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'user_role' not in st.session_state:
-    st.session_state.user_role = None
-if 'user_name' not in st.session_state:
-    st.session_state.user_name = ""
+# إدارة الجلسة والبيانات الدراسية
+if 'user_data' not in st.session_state:
+    st.session_state.user_data = {
+        "logged_in": False, "role": None, "name": "",
+        "grade": "الصف الأول الإعدادي", "lang": "العربية", "stage": "الإعدادية"
+    }
 
-def do_login(name, role):
-    st.session_state.logged_in = True
-    st.session_state.user_name = name
-    st.session_state.user_role = role
-    st.rerun()
-
-def do_logout():
-    st.session_state.logged_in = False
-    st.session_state.user_role = None
-    st.session_state.user_name = ""
-    st.rerun()
-    # =========================================================
-# 3. الذكاء الاصطناعي والواجهات
-# =========================================================
-
-def get_best_available_model(api_key):
-    """دالة تبحث عن أي نموذج متاح تلقائياً"""
-    try:
-        genai.configure(api_key=api_key)
-        models = genai.list_models()
-        # البحث عن نموذج يدعم المحادثة
-        for m in models:
-            if 'generateContent' in m.supported_generation_methods:
-                if 'flash' in m.name: return m.name # الأفضلية للسرعة
-                if 'pro' in m.name: return m.name   # ثم للقوة
-        return 'models/gemini-pro' # افتراضي
-    except:
-        return 'models/gemini-pro'
-
-def get_ai_response(user_prompt):
+def get_ai_response(user_text, image_data=None):
+    """دالة ذكية تحلل النص والصورة وتجيب حسب المنهج"""
     try:
         keys = st.secrets.get("GOOGLE_API_KEYS", [])
-        if not keys: return "⚠️ خطأ: المفاتيح غير موجودة."
+        if not keys: return "⚠️ خطأ: المفاتيح مفقودة."
         
-        selected_key = random.choice(keys)
-        model_name = get_best_available_model(selected_key)
+        genai.configure(api_key=random.choice(keys))
         
-        genai.configure(api_key=selected_key)
-        model = genai.GenerativeModel(model_name)
+        # استخدام نموذج Flash لأنه يدعم الصور والنصوص وسريع
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        role = "أنت معلم علوم خبير (فيزياء، كيمياء، أحياء). اشرح بالعربية بوضوح."
-        response = model.generate_content(f"{role}\n\nالسؤال: {user_prompt}")
+        # بناء الشخصية (System Prompt) بناءً على بيانات الطالب
+        u = st.session_state.user_data
+        lang_instruction = "اشرح باللغة العربية." if u['lang'] == "العربية" else "Explain in English but clarify difficult terms in Arabic."
+        
+        system_prompt = f"""
+        أنت الأستاذ السيد البدوي، معلم خبير.
+        الطالب في المرحلة: {u['stage']}، الصف: {u['grade']}.
+        يدرس العلوم باللغة: {u['lang']}.
+        
+        القواعد الصارمة:
+        1. التزم بمنهج هذا الصف تحديداً ولا تخرج عنه.
+        2. {lang_instruction}
+        3. اكتب المعادلات الكيميائية والرموز داخل علامة $ لتظهر بشكل جميل (LaTeX).
+        4. كن مختصراً ومفيداً، وفي نهاية الإجابة اسأل الطالب: "هل تحتاج تفاصيل أكثر أم ننتقل لنقطة أخرى؟".
+        5. كن مرحاً ومشجعاً.
+        """
+        
+        # تجهيز المدخلات (نص + صورة)
+        content = [f"{system_prompt}\n\nسؤال الطالب: {user_text}"]
+        if image_data:
+            content.append(image_data)
+            content[0] += "\n(قام الطالب بإرفاق صورة، قم بتحليلها وحل ما فيها بناءً على منهجه)."
+
+        response = model.generate_content(content)
         return response.text
     except Exception as e:
         return f"حدث خطأ تقني: {str(e)}"
+       # =========================================================
+# 3. واجهة التطبيق التفاعلية
+# =========================================================
 
 def show_login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("<h2 style='text-align: center; color:#1f77b4;'>🧪 المعلم العلمي</h2>", unsafe_allow_html=True)
         with st.form("login_form"):
-            name = st.text_input("الاسم")
-            code = st.text_input("الكود", type="password")
-            submitted = st.form_submit_button("دخول")
+            st.markdown("### 🔐 تسجيل الدخول")
+            name = st.text_input("الاسم الثلاثي")
+            code = st.text_input("الكود السري", type="password")
             
-            if submitted:
-                if not name or not code:
-                    st.warning("املأ البيانات")
-                elif code == TEACHER_MASTER_KEY:
-                    do_login(name, "Teacher")
+            # بيانات الطالب الإضافية (تظهر فقط للطلاب)
+            st.markdown("---")
+            st.markdown("### 📝 بياناتك الدراسية")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
+                study_lang = st.selectbox("لغة الدراسة", ["العربية (علوم)", "English (Science)"])
+            with col_b:
+                grade = st.selectbox("الصف الدراسي", [
+                    "الصف الرابع", "الصف الخامس", "الصف السادس",
+                    "الصف الأول", "الصف الثاني", "الصف الثالث"
+                ])
+            
+            submit = st.form_submit_button("بدء الرحلة التعليمية 🚀")
+            
+            if submit:
+                if code == TEACHER_MASTER_KEY:
+                    st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
+                    st.rerun()
                 else:
                     db_code = get_student_code_from_sheet()
                     if db_code and code == db_code:
-                        do_login(name, "Student")
+                        st.session_state.user_data.update({
+                            "logged_in": True, "role": "Student", "name": name,
+                            "stage": stage, "grade": grade, "lang": study_lang
+                        })
+                        st.rerun()
                     else:
-                        st.error("الكود خطأ")
+                        st.error("بيانات الدخول غير صحيحة")
 
 def show_main_app():
+    # الشريط الجانبي الذكي
     with st.sidebar:
-        st.title(f"مرحباً {st.session_state.user_name}")
-        st.caption(f"الصلاحية: {st.session_state.user_role}")
-        st.markdown("---")
-        menu = st.radio("القائمة", ["المحادثة", "المكتبة"])
-        st.markdown("---")
-        if st.button("خروج"): do_logout()
-
-    if menu == "المحادثة":
-        st.header("🤖 المحادثة الذكية")
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]): st.write(msg["content"])
+        u = st.session_state.user_data
+        st.image("https://cdn-icons-png.flaticon.com/512/3408/3408755.png", width=80)
+        st.title(f"أهلاً {u['name']}")
+        st.info(f"📚 {u['grade']} | {u['lang']}")
         
-        if prompt := st.chat_input("سؤالك العلمي..."):
+        st.markdown("---")
+        action = st.radio("الأدوات", ["💬 اسأل المعلم", "📝 اختبرني (Quiz)", "📊 ملخص الدرس"])
+        
+        if st.button("تسجيل الخروج"):
+            st.session_state.user_data["logged_in"] = False
+            st.rerun()
+
+    # الواجهة الرئيسية
+    if action == "💬 اسأل المعلم":
+        st.markdown("### 🧬 غرفة النقاش العلمي")
+        
+        # رفع صورة
+        uploaded_img = st.file_uploader("📸 ارفع صورة مسألة أو معادلة لتحليلها", type=["jpg", "png"])
+        image_part = None
+        if uploaded_img:
+            st.image(uploaded_img, width=200, caption="الصورة المرفقة")
+            image_part = Image.open(uploaded_img)
+
+        # سجل المحادثة
+        if "messages" not in st.session_state: st.session_state.messages = []
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                # معالجة المعادلات الرياضية في النص
+                st.markdown(msg["content"]) # يدعم LaTeX تلقائياً
+
+        # المدخلات (نص + ميكروفون تخيلي)
+        col_in1, col_in2 = st.columns([5, 1])
+        with col_in2:
+             # زر محاكاة الميكروفون (في التحديث القادم سنضيف التسجيل الفعلي)
+             st.button("🎙️", help="تسجيل صوتي (قريباً)")
+        
+        with col_in1:
+            prompt = st.chat_input("اكتب سؤالك هنا...")
+
+        if prompt or (uploaded_img and prompt):
+            # إضافة سؤال المستخدم
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"): st.write(prompt)
+            with st.chat_message("user"): st.markdown(prompt)
             
+            # الإجابة
             with st.chat_message("assistant"):
-                with st.spinner("جاري الاتصال..."):
-                    response_text = get_ai_response(prompt)
-                    st.write(response_text)
-            st.session_state.messages.append({"role": "assistant", "content": response_text})
+                with st.spinner("جاري استحضار المعلومات من المنهج..."):
+                    response = get_ai_response(prompt, image_part)
+                    st.markdown(response)
+                    
+                    # قراءة صوتية (اختياري - Placeholder)
+                    # st.audio(generate_audio(response)) 
             
-    elif menu == "المكتبة":
-        st.header("📚 المكتبة")
-        st.info("قريباً...")
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+    elif action == "📝 اختبرني (Quiz)":
+        st.header("🎯 بنك الأسئلة الذكي")
+        if st.button("أنشئ اختباراً قصيراً على ما سبق"):
+            with st.spinner("جاري إعداد الأسئلة..."):
+                quiz = get_ai_response("أنشئ لي 3 أسئلة اختيار من متعدد بناءً على منهجي الحالي مع الحل في النهاية.")
+                st.markdown(quiz)
+
+    elif action == "📊 ملخص الدرس":
+        st.header("📌 الخرائط الذهنية")
+        st.info("ارفع ملف الدرس (PDF) لتلخيصه هنا (سيتم تفعيل الربط مع الدرايف في الخطوة القادمة).")
 
 if __name__ == "__main__":
-    if st.session_state.logged_in:
+    if st.session_state.user_data["logged_in"]:
         show_main_app()
     else:
-        show_login_page()
+        show_login_page() 
