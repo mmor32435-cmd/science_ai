@@ -27,7 +27,8 @@ st.markdown("""
         background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
         padding: 2rem; border-radius: 15px; color: white; text-align: center; margin-bottom: 2rem;
     }
-    .stButton>button { background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; }
+    .stButton>button { background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; font-weight: bold; font-size: 18px; }
+    .stButton>button:hover { background-color: #141E30; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,7 +50,7 @@ if 'user_data' not in st.session_state:
 if 'messages' not in st.session_state: st.session_state.messages = []
 
 # ==========================================
-# 4. دوال الاتصال (تم إصلاح Scopes هنا)
+# 4. دوال الاتصال (Authentication)
 # ==========================================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -62,7 +63,7 @@ def get_gspread_client():
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-        # 🔥 هنا تم الإصلاح: إضافة صلاحيات Drive الكاملة
+        # تصاريح كاملة (Drive + Sheets)
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
@@ -78,33 +79,59 @@ def check_student_code(input_code):
     try:
         sh = client.open(SHEET_NAME)
         real_code = str(sh.sheet1.acell("B1").value).strip()
-        # مقارنة الكود (مع إزالة المسافات للضمان)
         return str(input_code).strip() == real_code
     except: return False
 
 # ==========================================
-# 5. الذكاء الاصطناعي
+# 5. الذكاء الاصطناعي (Dynamic Model Selection)
 # ==========================================
+
+def get_best_model():
+    """البحث عن أفضل نموذج متاح لتجنب خطأ 404"""
+    try:
+        # جلب كل النماذج المتاحة
+        models = genai.list_models()
+        # تصفية النماذج التي تدعم الشات
+        chat_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+        
+        if not chat_models: return 'models/gemini-1.5-flash'
+        
+        # 1. البحث عن Flash (الأفضل حالياً)
+        for m in chat_models:
+            if 'flash' in m.lower(): return m
+            
+        # 2. البحث عن Pro 1.5
+        for m in chat_models:
+            if 'pro' in m.lower() and '1.5' in m.lower(): return m
+            
+        # 3. أي نموذج آخر متاح
+        return chat_models[0]
+    except:
+        return 'models/gemini-1.5-flash'
+
 def get_ai_response(user_text, img_obj=None):
     try:
         keys = st.secrets.get("GOOGLE_API_KEYS", [])
         if not keys: return "⚠️ المفاتيح مفقودة."
+        
+        # إعداد المفتاح
         genai.configure(api_key=random.choice(keys))
+        
+        # اختيار الموديل المتاح تلقائياً
+        model_name = get_best_model()
+        model = genai.GenerativeModel(model_name)
         
         u = st.session_state.user_data
         lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
         sys_prompt = f"أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}). التزم بالمنهج. {lang_prompt}"
         
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            inputs = [sys_prompt, user_text]
-            if img_obj: inputs.extend([img_obj, "حل الصورة"])
-            return model.generate_content(inputs).text
-        except:
-            if img_obj: return "خطأ في الصورة."
-            model = genai.GenerativeModel('gemini-pro')
-            return model.generate_content(f"{sys_prompt}\n{user_text}").text
-    except Exception as e: return f"خطأ: {e}"
+        inputs = [sys_prompt, user_text]
+        if img_obj: inputs.extend([img_obj, "حل الصورة"])
+        
+        return model.generate_content(inputs).text
+
+    except Exception as e:
+        return f"حدث خطأ: {e}"
 
 # ==========================================
 # 6. الواجهات والتشغيل
