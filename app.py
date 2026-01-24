@@ -27,106 +27,123 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم عالي الوضوح والتباين (High Contrast UI)
+# 2. تصميم "المستقبل" (Modern Gradient UI)
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
-    /* 1. إعدادات الخط والاتجاه */
+    /* 1. الخط العام */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
 
-    /* 2. خلفية التطبيق (رمادي فاتح جداً لراحة العين) */
+    /* 2. خلفية التطبيق (تدرج لوني عصري - أزرق سماوي) */
     .stApp {
-        background-color: #F5F7FA;
+        background: linear-gradient(135deg, #00c6ff 0%, #0072ff 100%);
+        background-attachment: fixed;
     }
 
-    /* 3. إجبار النصوص العادية على اللون الأسود */
-    h1, h2, h3, h4, h5, h6, p, span, label, div {
-        color: #1E1E1E !important;
+    /* 3. البطاقات (Cards) - خلفية بيضاء مع ظلال */
+    div[data-testid="stForm"], div[data-testid="stExpander"], .stChatMessage {
+        background-color: rgba(255, 255, 255, 0.95) !important;
+        border-radius: 20px !important;
+        padding: 20px !important;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15) !important;
+        border: 1px solid rgba(255, 255, 255, 0.18) !important;
+        color: #000000 !important;
     }
 
-    /* 4. تصميم حقول الإدخال (مهم جداً للوضوح) */
-    .stTextInput input, .stSelectbox div[data-baseweb="select"], .stTextArea textarea {
-        background-color: #FFFFFF !important; /* خلفية بيضاء */
-        color: #000000 !important;           /* نص أسود */
-        border: 2px solid #004e92 !important; /* حدود زرقاء واضحة */
-        border-radius: 8px !important;
+    /* 4. تحسين حقول الإدخال لتكون واضحة جداً */
+    .stTextInput input, .stSelectbox div, .stTextArea textarea {
+        background-color: #f8f9fa !important;
+        color: #000000 !important;
+        border: 2px solid #e0e0e0 !important;
+        border-radius: 10px !important;
+        font-size: 16px !important;
         font-weight: bold !important;
     }
+    
+    /* التركيز على الحقل */
+    .stTextInput input:focus, .stTextArea textarea:focus {
+        border-color: #0072ff !important;
+        box-shadow: 0 0 5px rgba(0, 114, 255, 0.5);
+    }
 
-    /* 5. إصلاح القوائم المنسدلة (Dropdown Options) - هذه كانت المشكلة */
+    /* 5. القوائم المنسدلة (Dropdowns) - إصلاح الاختفاء */
     ul[data-baseweb="menu"] {
-        background-color: #FFFFFF !important;
+        background-color: #ffffff !important;
     }
     li[data-baseweb="option"] {
         color: #000000 !important;
-        background-color: #FFFFFF !important;
     }
     li[data-baseweb="option"]:hover {
-        background-color: #E3F2FD !important; /* لون عند المرور */
+        background-color: #e6f2ff !important;
     }
 
-    /* 6. الأزرار */
+    /* 6. الأزرار العصرية */
     .stButton>button {
-        background-color: #004e92 !important;
-        color: #FFFFFF !important; /* نص أبيض */
+        background: linear-gradient(45deg, #11998e, #38ef7d) !important;
+        color: white !important;
         border: none;
-        border-radius: 8px;
-        height: 50px;
-        font-size: 18px !important;
+        border-radius: 25px;
+        height: 55px;
+        width: 100%;
+        font-size: 20px !important;
         font-weight: bold !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .stButton>button:hover {
-        background-color: #003366 !important;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.3);
     }
 
-    /* 7. صندوق العنوان */
-    .header-box {
-        background: linear-gradient(135deg, #000428 0%, #004e92 100%);
-        padding: 2rem;
-        border-radius: 15px;
+    /* 7. العناوين والنصوص */
+    h1, h2, h3, h4, h5, p, label {
+        color: #000000 !important; /* أسود داخل البطاقات */
+    }
+    
+    /* استثناء للعنوان الرئيسي في الأعلى ليكون أبيض ليناسب الخلفية الزرقاء */
+    .main-title {
+        color: #ffffff !important;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         text-align: center;
-        margin-bottom: 2rem;
-        border: 2px solid #FFFFFF;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        font-size: 2.5rem;
+        font-weight: bold;
     }
-    /* استثناء للعنوان ليكون أبيض */
-    .header-box h1, .header-box h3 {
-        color: #FFFFFF !important;
+    .sub-title {
+        color: #f0f0f0 !important;
+        text-align: center;
+        margin-bottom: 30px;
     }
 
-    /* 8. فقاعات المحادثة */
-    .stChatMessage {
-        background-color: #FFFFFF !important;
-        border: 1px solid #D1D5DB !important;
-        border-radius: 12px !important;
-        padding: 15px !important;
+    /* 8. مربع الشات السفلي */
+    .stChatInput {
+        position: fixed;
+        bottom: 20px;
+        z-index: 1000;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# بانر العنوان
-st.markdown("""
-<div class="header-box">
-    <h1>الأستاذ / السيد البدوي</h1>
-    <h3>المنصة التعليمية الذكية (ابتدائي - إعدادي - ثانوي)</h3>
-</div>
-""", unsafe_allow_html=True)
+# عنوان الصفحة الرئيسي (خارج البطاقات)
+st.markdown('<div class="main-title">🧬 الأستاذ / السيد البدوي</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">المنصة التعليمية المتطورة (ابتدائي - إعدادي - ثانوي)</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 3. إدارة الجلسة والبيانات
+# 3. إدارة الجلسة
 # ==========================================
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""}
 if 'messages' not in st.session_state: st.session_state.messages = []
 if 'book_content' not in st.session_state: st.session_state.book_content = ""
 
+# ==========================================
+# 4. الاتصال والبيانات
+# ==========================================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
@@ -192,7 +209,7 @@ def get_book_text_from_drive(stage, grade, lang):
     except: return None
 
 # ==========================================
-# 4. الصوت والميكروفون
+# 5. الصوت والميكروفون
 # ==========================================
 def clean_text_for_speech(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
@@ -223,7 +240,7 @@ def text_to_speech_pro(text):
     except: return None
 
 # ==========================================
-# 5. الذكاء الاصطناعي
+# 6. الذكاء الاصطناعي
 # ==========================================
 def get_dynamic_model():
     try:
@@ -275,32 +292,36 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
     except Exception as e: return f"خطأ: {e}"
 
 # ==========================================
-# 6. الواجهات والتشغيل
+# 7. الواجهات والتشغيل
 # ==========================================
+def celebrate_success():
+    st.balloons()
+    st.toast("🌟 ممتاز! أحسنت!", icon="🎉")
+
 def login_page():
-    # استخدام Container لتجميع العناصر بوضوح
-    with st.container():
-        st.markdown("<h3 style='text-align: center;'>🔐 تسجيل الدخول</h3>", unsafe_allow_html=True)
-        
+    # استخدام أعمدة لتوسيط البطاقة
+    col_spacer1, col_main, col_spacer2 = st.columns([1, 6, 1])
+    
+    with col_main:
         with st.form("login_form"):
-            st.markdown("##### 👤 البيانات الشخصية")
-            name = st.text_input("الاسم الثلاثي", placeholder="اكتب اسمك هنا")
+            st.markdown("<h3 style='text-align: center;'>🔐 بوابة تسجيل الدخول</h3>", unsafe_allow_html=True)
+            st.write("---")
+            
+            name = st.text_input("الاسم الثلاثي", placeholder="اسمك...")
             code = st.text_input("الكود السري", type="password", placeholder="******")
             
-            st.markdown("---")
-            st.markdown("##### 📚 البيانات الدراسية")
-            
+            st.markdown("##### 📝 بياناتك الدراسية")
             col1, col2 = st.columns(2)
             with col1:
                 stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
-                lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
+                lang = st.selectbox("لغة الدراسة", ["العربية (علوم)", "English (Science)"])
             with col2:
                 grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
             
-            st.write("") # مسافة
-            submit_btn = st.form_submit_button("🚀 بدء الرحلة التعليمية")
+            st.write("")
+            submit = st.form_submit_button("🚀 انطلق الآن")
             
-            if submit_btn:
+            if submit:
                 if code == TEACHER_KEY:
                     st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
                     st.rerun()
@@ -324,27 +345,29 @@ def main_app():
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
-    st.subheader("💬 اسأل المعلم")
+    st.subheader("💬 غرفة الصف الذكية")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info("🎙️ الميكروفون:")
+    c_mic, c_img = st.columns([1, 1])
+    with c_mic:
+        st.info("🎙️ تحدث مع المعلم:")
         audio = mic_recorder(start_prompt="تسجيل ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
-    with col2:
-        with st.expander("📸 صورة"):
-            f = st.file_uploader("رفع", type=['jpg', 'png'])
+    
+    with c_img:
+        with st.expander("📸 رفع صورة مسألة"):
+            f = st.file_uploader("اختر صورة", type=['jpg', 'png'])
             img = Image.open(f) if f else None
             if img: st.image(img, width=150)
 
     voice_text = None
     if audio:
-        with st.spinner("جاري السماع..."):
+        with st.spinner("جاري الاستماع..."):
             voice_text = speech_to_text(audio['bytes'])
 
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.write(msg["content"])
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
-    text_input = st.chat_input("سؤالك...")
+    text_input = st.chat_input("اكتب سؤالك هنا...")
     final_q = text_input if text_input else voice_text
 
     if final_q:
@@ -352,14 +375,17 @@ def main_app():
         with st.chat_message("user"): st.write(final_q)
         
         with st.chat_message("assistant"):
-            with st.spinner("جاري الرد..."):
+            with st.spinner("الأستاذ السيد يكتب..."):
                 is_quiz = "اختبار" in final_q or "سؤال" in final_q
-                resp = get_ai_response(final_q, img, is_quiz)
-                st.write(resp)
-                if any(x in resp for x in ["أحسنت", "ممتاز"]): st.balloons()
-                aud = text_to_speech_pro(resp)
-                if aud: st.audio(aud, format='audio/mp3')
-        st.session_state.messages.append({"role": "assistant", "content": resp})
+                resp_text = get_ai_response(final_q, img, is_quiz_mode=is_quiz)
+                st.write(resp_text)
+                
+                if any(w in resp_text for w in ["أحسنت", "ممتاز", "رائع"]): celebrate_success()
+                
+                audio_file = text_to_speech_pro(resp_text)
+                if audio_file: st.audio(audio_file, format='audio/mp3')
+        
+        st.session_state.messages.append({"role": "assistant", "content": resp_text})
 
 if __name__ == "__main__":
     if st.session_state.user_data["logged_in"]:
