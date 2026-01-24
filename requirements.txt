@@ -11,3 +11,4 @@ numpy
 SpeechRecognition
 streamlit-mic-recorder
 edge-tts
+PyPDF2
