@@ -5,10 +5,11 @@ import gspread
 from PIL import Image
 import random
 import speech_recognition as sr
-from gtts import gTTS
 from streamlit_mic_recorder import mic_recorder
-import io
+import asyncio
+import edge_tts
 import tempfile
+import os
 
 # ==========================================
 # 1. إعدادات الصفحة
@@ -21,21 +22,61 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. التصميم (CSS)
+# 2. التصميم عالي التباين (High Contrast CSS)
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; direction: rtl; text-align: right; }
-    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
-    .header-box {
-        background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
-        padding: 2rem; border-radius: 15px; color: white; text-align: center; margin-bottom: 2rem;
-    }
-    .stButton>button { background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; font-weight: bold; }
     
-    /* تنسيق زر الميكروفون */
-    .mic-btn { text-align: center; margin: 10px 0; }
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif;
+        direction: rtl;
+        text-align: right;
+        color: #000000 !important; /* فرض اللون الأسود للنصوص */
+    }
+    
+    /* خلفية التطبيق */
+    .stApp {
+        background-color: #f0f2f6;
+    }
+    
+    /* صندوق العنوان */
+    .header-box {
+        background: linear-gradient(135deg, #004e92 0%, #000428 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        color: #ffffff !important; /* نص أبيض داخل العنوان فقط */
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    }
+    .header-box h1, .header-box h3 { color: #ffffff !important; }
+
+    /* تحسين فقاعات الشات لتكون واضحة */
+    .stChatMessage {
+        background-color: #ffffff;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        color: #000000 !important;
+    }
+    
+    /* الأزرار */
+    .stButton>button {
+        background-color: #004e92;
+        color: white !important;
+        border-radius: 8px;
+        height: 50px;
+        width: 100%;
+        font-weight: bold;
+        font-size: 18px;
+    }
+    .stButton>button:hover { background-color: #003366; }
+
+    /* النصوص داخل الحقول */
+    .stTextInput input, .stSelectbox div, .stTextArea textarea {
+        color: #000000 !important;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,11 +94,10 @@ if 'user_data' not in st.session_state:
     st.session_state.user_data = {
         "logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""
     }
-
 if 'messages' not in st.session_state: st.session_state.messages = []
 
 # ==========================================
-# 4. دوال الاتصال (Backend)
+# 4. دوال الاتصال
 # ==========================================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -69,7 +109,6 @@ def get_gspread_client():
         creds_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
@@ -85,35 +124,49 @@ def check_student_code(input_code):
     except: return False
 
 # ==========================================
-# 5. الصوت والذكاء الاصطناعي
+# 5. تقنيات الصوت والذكاء (The Brain)
 # ==========================================
 
-# دالة تحويل الصوت لنص (للطلاب)
+# 🎤 دالة تحويل الصوت لنص (تم إصلاحها بملف مؤقت)
 def speech_to_text(audio_bytes):
     r = sr.Recognizer()
     try:
-        # تحويل البايتات إلى ملف صوتي مؤقت
-        audio_file = io.BytesIO(audio_bytes.read())
-        with sr.AudioFile(audio_file) as source:
+        # حفظ الصوت في ملف مؤقت ليتمكن Google Recognizer من قراءته
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(audio_bytes)
+            tmp_filename = tmp_file.name
+        
+        # قراءة الملف
+        with sr.AudioFile(tmp_filename) as source:
             audio_data = r.record(source)
-            # التعرف على الكلام (يدعم العربية)
+            # التعرف (يدعم اللهجة المصرية والسعودية والعربية الفصحى)
             text = r.recognize_google(audio_data, language="ar-EG")
-            return text
+        
+        # تنظيف الملف
+        os.remove(tmp_filename)
+        return text
     except Exception:
         return None
 
-# دالة تحويل النص لصوت (للمعلم)
-def text_to_speech(text):
+# 🔊 دالة تحويل النص لصوت (بشري واحترافي)
+async def generate_speech_async(text, voice="ar-EG-SalmaNeural"):
+    communicate = edge_tts.Communicate(text, voice)
+    # حفظ في ملف مؤقت
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+        await communicate.save(tmp_file.name)
+        return tmp_file.name
+
+def text_to_speech_pro(text):
+    # تشغيل الدالة اللامتزامنة
     try:
-        # إنشاء ملف صوتي مؤقت
-        tts = gTTS(text=text, lang='ar', slow=False)
-        # حفظه في ذاكرة مؤقتة
-        fp = io.BytesIO()
-        tts.write_to_fp(fp)
-        return fp
-    except:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        file_path = loop.run_until_complete(generate_speech_async(text))
+        return file_path
+    except Exception:
         return None
 
+# 🧠 الذكاء الاصطناعي
 def get_best_model():
     try:
         models = genai.list_models()
@@ -121,8 +174,6 @@ def get_best_model():
         if not chat_models: return 'models/gemini-1.5-flash'
         for m in chat_models:
             if 'flash' in m.lower(): return m
-        for m in chat_models:
-            if 'pro' in m.lower() and '1.5' in m.lower(): return m
         return chat_models[0]
     except: return 'models/gemini-1.5-flash'
 
@@ -135,16 +186,14 @@ def get_ai_response(user_text, img_obj=None):
         u = st.session_state.user_data
         lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
         
-        # 🔥 تعديل التعليمات لتكون الإجابة مختصرة ومركزة
         sys_prompt = f"""
         أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}).
-        
-        تعليمات صارمة:
+        التعليمات:
         1. التزم بالمنهج المصري.
         2. {lang_prompt}
-        3. ⛔ ممنوع الإجابات الطويلة.
-        4. ✅ أعط الإجابة "الخلاصة المختصرة المفيدة" في نقاط محددة (Bullet points).
-        5. كن مرحاً ومشجعاً.
+        3. ⛔ كن مختصراً جداً (Brief & Concise).
+        4. ✅ استخدم نقاط (Bullet points).
+        5. كن مرحاً.
         """
         
         model_name = get_best_model()
@@ -186,68 +235,61 @@ def login_page():
 
 def main_app():
     with st.sidebar:
-        st.success(f"مرحباً: {st.session_state.user_data['name']}")
+        st.success(f"أهلاً: {st.session_state.user_data['name']}")
         if st.button("خروج"):
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
-    st.subheader("💬 اسأل المعلم (صوت أو كتابة)")
+    st.subheader("💬 اسأل المعلم (تحدث أو اكتب)")
     
-    # 1. الميكروفون
-    col_mic, col_cam = st.columns([1, 1])
-    with col_mic:
-        st.write("🎙️ اضغط للتحدث:")
-        audio = mic_recorder(start_prompt="ابدأ التسجيل", stop_prompt="توقف", key='recorder')
+    # منطقة الميكروفون
+    c_mic, c_img = st.columns([1, 1])
+    with c_mic:
+        st.info("🎙️ اضغط للتحدث، واضغط مرة أخرى للإرسال:")
+        # هذا الزر يعيد بايتات الصوت
+        audio = mic_recorder(start_prompt="تسجيل ⏺️", stop_prompt="إرسال ⏹️", key='recorder')
     
-    with col_cam:
+    with c_img:
         with st.expander("📸 إرفاق صورة"):
             f = st.file_uploader("اختر صورة", type=['jpg', 'png'])
             img = Image.open(f) if f else None
             if img: st.image(img, width=150)
 
-    # معالجة الصوت المسجل
-    user_input = None
+    # معالجة الإدخال الصوتي
+    voice_text = None
     if audio:
-        with st.spinner("جاري تحويل صوتك لنص..."):
-            # تحويل البايتات إلى كائن قابل للقراءة
-            audio_bio = io.BytesIO(audio['bytes'])
-            audio_bio.name = 'audio.wav'
-            # استخدام SpeechRecognition
-            r = sr.Recognizer()
-            try:
-                with sr.AudioFile(audio_bio) as source:
-                    audio_data = r.record(source)
-                    user_input = r.recognize_google(audio_data, language="ar-EG")
-            except:
-                st.warning("لم أتمكن من سماعك بوضوح، حاول مرة أخرى.")
+        with st.spinner("جاري سماعك..."):
+            voice_text = speech_to_text(audio['bytes'])
+            if not voice_text:
+                st.warning("⚠️ لم أسمع جيداً، حاول الاقتراب من الميكروفون.")
 
-    # 2. عرض المحادثة السابقة
+    # عرض المحادثة
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
-            # إذا كانت رسالة المعلم، نعرض زر تشغيل الصوت القديم (اختياري)
 
-    # 3. استقبال المدخلات (كتابة أو صوت)
-    prompt = st.chat_input("أو اكتب سؤالك هنا...")
+    # الإدخال النصي
+    text_input = st.chat_input("اكتب سؤالك...")
     
-    # تحديد مصدر السؤال (كتابة أم صوت)
-    final_prompt = prompt if prompt else user_input
+    # تحديد السؤال النهائي (صوت أو نص)
+    final_q = text_input if text_input else voice_text
 
-    if final_prompt:
-        # عرض سؤال الطالب
-        st.session_state.messages.append({"role": "user", "content": final_prompt})
-        with st.chat_message("user"): st.write(final_prompt)
+    if final_q:
+        # إضافة السؤال
+        st.session_state.messages.append({"role": "user", "content": final_q})
+        with st.chat_message("user"): st.write(final_q)
         
-        # معالجة الرد
+        # الإجابة
         with st.chat_message("assistant"):
-            with st.spinner("جاري التفكير..."):
-                resp_text = get_ai_response(final_prompt, img)
+            with st.spinner("جاري التفكير وتجهيز الرد الصوتي..."):
+                # 1. النص
+                resp_text = get_ai_response(final_q, img)
                 st.write(resp_text)
                 
-                # توليد الصوت للإجابة
-                audio_fp = text_to_speech(resp_text)
-                if audio_fp:
-                    st.audio(audio_fp, format='audio/mp3')
+                # 2. الصوت (Edge TTS)
+                audio_file = text_to_speech_pro(resp_text)
+                if audio_file:
+                    st.audio(audio_file, format='audio/mp3')
         
         st.session_state.messages.append({"role": "assistant", "content": resp_text})
 
