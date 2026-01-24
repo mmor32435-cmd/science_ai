@@ -16,9 +16,7 @@ import re
 import io
 import PyPDF2
 
-# ==========================================
 # 1. إعدادات الصفحة
-# ==========================================
 st.set_page_config(
     page_title="المعلم العلمي",
     page_icon="🧬",
@@ -26,49 +24,39 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ==========================================
-# 2. الحل العبقري لمشكلة الاختفاء (CSS Reset)
-# ==========================================
+# 2. الحل الجذري للألوان (CSS)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
-    /* 1. إجبار الخط العربي */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
 
-    /* 2. إجبار الخلفية البيضاء تماماً */
-    .stApp {
-        background-color: #ffffff !important;
-    }
+    /* إجبار الخلفية البيضاء والنص الأسود */
+    .stApp { background-color: #ffffff !important; }
+    * { color: #000000 !important; }
 
-    /* 3. الكود النووي: أي نص في التطبيق يجب أن يكون أسود */
-    * {
-        color: #000000 !important;
-        --text-color: #000000 !important;
-    }
-
-    /* 4. تنسيق حقول الإدخال لتكون واضحة جداً */
+    /* حقول الإدخال */
     .stTextInput input, .stSelectbox div, .stTextArea textarea {
-        background-color: #f0f2f6 !important; /* رمادي فاتح جداً */
-        border: 2px solid #004e92 !important; /* حدود زرقاء */
+        background-color: #f0f2f6 !important;
+        border: 2px solid #004e92 !important;
         color: #000000 !important;
         font-weight: bold !important;
     }
     
-    /* 5. الأزرار */
+    /* الأزرار */
     .stButton>button {
         background-color: #004e92 !important;
-        color: #ffffff !important; /* استثناء النص الأبيض للأزرار فقط */
+        color: #ffffff !important;
         border-radius: 8px;
         height: 50px;
         font-size: 18px !important;
     }
 
-    /* 6. رسائل الشات */
+    /* الشات */
     .stChatMessage {
         background-color: #f9f9f9 !important;
         border: 1px solid #ccc !important;
@@ -81,9 +69,7 @@ st.title("🧬 الأستاذ / السيد البدوي")
 st.markdown("### المنصة التعليمية الذكية")
 st.markdown("---")
 
-# ==========================================
-# 3. إدارة الجلسة والاتصال (Backend)
-# ==========================================
+# إدارة الجلسة
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""}
 if 'messages' not in st.session_state: st.session_state.messages = []
@@ -91,7 +77,7 @@ if 'book_content' not in st.session_state: st.session_state.book_content = ""
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-
+# 3. دوال الاتصال
 @st.cache_resource
 def get_credentials():
     if "gcp_service_account" not in st.secrets: return None
@@ -145,16 +131,14 @@ def get_book_text_from_drive(stage, grade, lang):
         downloader = MediaIoBaseDownload(file_stream, request)
         done = False
         while done is False: status, done = downloader.next_chunk()
+        
         file_stream.seek(0)
         pdf_reader = PyPDF2.PdfReader(file_stream)
         text = ""
         for page in pdf_reader.pages[:50]: text += page.extract_text() + "\n"
         return text
     except: return None
-
-# ==========================================
-# 4. الصوت والميكروفون
-# ==========================================
+        # 4. الصوت والذكاء
 def clean_text_for_speech(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
     return text
@@ -183,9 +167,6 @@ def text_to_speech_pro(text):
         return loop.run_until_complete(generate_speech_async(text))
     except: return None
 
-# ==========================================
-# 5. الذكاء الاصطناعي
-# ==========================================
 def get_dynamic_model():
     try:
         all_models = genai.list_models()
@@ -208,4 +189,105 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
     
     u = st.session_state.user_data
     if not st.session_state.book_content:
-        book_text = get_book_text_from_drive(u['stage'], u['grade'], 
+        # هنا كان الخطأ، تم إصلاحه وتجميعه في سطر واحد
+        st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
+
+    lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
+    context = ""
+    if st.session_state.book_content:
+        context = f"استخدم الكتاب:\n{st.session_state.book_content[:30000]}..."
+    
+    quiz_instr = "أنشئ سؤالاً واحداً فقط." if is_quiz_mode else ""
+    
+    sys_prompt = f"""
+    أنت الأستاذ السيد البدوي.
+    {context}
+    1. التزم بالمنهج.
+    2. {lang_prompt}
+    3. كن مختصراً (نقاط).
+    4. {quiz_instr}
+    """
+    
+    inputs = [sys_prompt, user_text]
+    if img_obj: inputs.extend([img_obj, "اشرح الصورة."])
+
+    try:
+        model = genai.GenerativeModel(model_name)
+        return model.generate_content(inputs).text
+    except Exception as e: return f"خطأ: {e}"
+        # 5. الواجهات
+def login_page():
+    with st.container(border=True):
+        st.header("🔐 تسجيل الدخول")
+        with st.form("login"):
+            name = st.text_input("الاسم الثلاثي")
+            code = st.text_input("الكود السري", type="password")
+            st.markdown("---")
+            c1, c2 = st.columns(2)
+            with c1:
+                stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
+                lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
+            with c2:
+                grade = st.selectbox("الصف", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
+            
+            if st.form_submit_button("دخول"):
+                if code == TEACHER_KEY:
+                    st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
+                    st.rerun()
+                elif check_student_code(code):
+                    st.session_state.user_data.update({"logged_in": True, "role": "Student", "name": name, "stage": stage, "grade": grade, "lang": lang})
+                    st.session_state.book_content = ""
+                    st.rerun()
+                else:
+                    st.error("الكود غير صحيح")
+
+def main_app():
+    with st.sidebar:
+        st.success(f"مرحباً: {st.session_state.user_data['name']}")
+        st.info(f"{st.session_state.user_data['grade']}")
+        if st.button("🚪 خروج"):
+            st.session_state.user_data["logged_in"] = False
+            st.rerun()
+
+    st.subheader("💬 اسأل المعلم")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("🎙️ الميكروفون:")
+        audio = mic_recorder(start_prompt="تحدث", stop_prompt="إرسال", key='recorder', format='wav')
+    with col2:
+        with st.expander("📸 صورة"):
+            f = st.file_uploader("رفع", type=['jpg', 'png'])
+            img = Image.open(f) if f else None
+            if img: st.image(img, width=150)
+
+    voice_text = None
+    if audio:
+        with st.spinner("جاري السماع..."):
+            voice_text = speech_to_text(audio['bytes'])
+
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]): st.write(msg["content"])
+
+    text_input = st.chat_input("سؤالك...")
+    final_q = text_input if text_input else voice_text
+
+    if final_q:
+        st.session_state.messages.append({"role": "user", "content": final_q})
+        with st.chat_message("user"): st.write(final_q)
+        
+        with st.chat_message("assistant"):
+            with st.spinner("جاري الرد..."):
+                is_quiz = "اختبار" in final_q
+                resp = get_ai_response(final_q, img, is_quiz)
+                st.write(resp)
+                if any(x in resp for x in ["أحسنت", "ممتاز"]): st.balloons()
+                aud = text_to_speech_pro(resp)
+                if aud: st.audio(aud, format='audio/mp3')
+        st.session_state.messages.append({"role": "assistant", "content": resp})
+
+if __name__ == "__main__":
+    if st.session_state.user_data["logged_in"]:
+        main_app()
+    else:
+        login_page()
