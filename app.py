@@ -16,60 +16,112 @@ import re
 import io
 import PyPDF2
 
+# ==========================================
 # 1. إعدادات الصفحة
+# ==========================================
 st.set_page_config(
-    page_title="المعلم العلمي",
+    page_title="المعلم العلمي | السيد البدوي",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 2. الحل الجذري للألوان (CSS)
+# ==========================================
+# 2. تصميم عالي الوضوح والتباين (High Contrast UI)
+# ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
+    /* 1. إعدادات الخط والاتجاه */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
 
-    /* إجبار الخلفية البيضاء والنص الأسود */
-    .stApp { background-color: #ffffff !important; }
-    * { color: #000000 !important; }
+    /* 2. خلفية التطبيق (رمادي فاتح جداً لراحة العين) */
+    .stApp {
+        background-color: #F5F7FA;
+    }
 
-    /* حقول الإدخال */
-    .stTextInput input, .stSelectbox div, .stTextArea textarea {
-        background-color: #f0f2f6 !important;
-        border: 2px solid #004e92 !important;
-        color: #000000 !important;
+    /* 3. إجبار النصوص العادية على اللون الأسود */
+    h1, h2, h3, h4, h5, h6, p, span, label, div {
+        color: #1E1E1E !important;
+    }
+
+    /* 4. تصميم حقول الإدخال (مهم جداً للوضوح) */
+    .stTextInput input, .stSelectbox div[data-baseweb="select"], .stTextArea textarea {
+        background-color: #FFFFFF !important; /* خلفية بيضاء */
+        color: #000000 !important;           /* نص أسود */
+        border: 2px solid #004e92 !important; /* حدود زرقاء واضحة */
+        border-radius: 8px !important;
         font-weight: bold !important;
     }
-    
-    /* الأزرار */
+
+    /* 5. إصلاح القوائم المنسدلة (Dropdown Options) - هذه كانت المشكلة */
+    ul[data-baseweb="menu"] {
+        background-color: #FFFFFF !important;
+    }
+    li[data-baseweb="option"] {
+        color: #000000 !important;
+        background-color: #FFFFFF !important;
+    }
+    li[data-baseweb="option"]:hover {
+        background-color: #E3F2FD !important; /* لون عند المرور */
+    }
+
+    /* 6. الأزرار */
     .stButton>button {
         background-color: #004e92 !important;
-        color: #ffffff !important;
+        color: #FFFFFF !important; /* نص أبيض */
+        border: none;
         border-radius: 8px;
         height: 50px;
         font-size: 18px !important;
+        font-weight: bold !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+    .stButton>button:hover {
+        background-color: #003366 !important;
     }
 
-    /* الشات */
+    /* 7. صندوق العنوان */
+    .header-box {
+        background: linear-gradient(135deg, #000428 0%, #004e92 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 2rem;
+        border: 2px solid #FFFFFF;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    /* استثناء للعنوان ليكون أبيض */
+    .header-box h1, .header-box h3 {
+        color: #FFFFFF !important;
+    }
+
+    /* 8. فقاعات المحادثة */
     .stChatMessage {
-        background-color: #f9f9f9 !important;
-        border: 1px solid #ccc !important;
+        background-color: #FFFFFF !important;
+        border: 1px solid #D1D5DB !important;
+        border-radius: 12px !important;
+        padding: 15px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# العنوان
-st.title("🧬 الأستاذ / السيد البدوي")
-st.markdown("### المنصة التعليمية الذكية")
-st.markdown("---")
+# بانر العنوان
+st.markdown("""
+<div class="header-box">
+    <h1>الأستاذ / السيد البدوي</h1>
+    <h3>المنصة التعليمية الذكية (ابتدائي - إعدادي - ثانوي)</h3>
+</div>
+""", unsafe_allow_html=True)
 
-# إدارة الجلسة
+# ==========================================
+# 3. إدارة الجلسة والبيانات
+# ==========================================
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""}
 if 'messages' not in st.session_state: st.session_state.messages = []
@@ -77,7 +129,7 @@ if 'book_content' not in st.session_state: st.session_state.book_content = ""
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-# 3. دوال الاتصال
+
 @st.cache_resource
 def get_credentials():
     if "gcp_service_account" not in st.secrets: return None
@@ -126,19 +178,22 @@ def get_book_text_from_drive(stage, grade, lang):
         files = results.get('files', [])
         
         if not files: return None
+        
         request = service.files().get_media(fileId=files[0]['id'])
         file_stream = io.BytesIO()
         downloader = MediaIoBaseDownload(file_stream, request)
         done = False
         while done is False: status, done = downloader.next_chunk()
-        
         file_stream.seek(0)
         pdf_reader = PyPDF2.PdfReader(file_stream)
         text = ""
-        for page in pdf_reader.pages[:50]: text += page.extract_text() + "\n"
+        for page in pdf_reader.pages[:60]: text += page.extract_text() + "\n"
         return text
     except: return None
-        # 4. الصوت والذكاء
+
+# ==========================================
+# 4. الصوت والميكروفون
+# ==========================================
 def clean_text_for_speech(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
     return text
@@ -167,6 +222,9 @@ def text_to_speech_pro(text):
         return loop.run_until_complete(generate_speech_async(text))
     except: return None
 
+# ==========================================
+# 5. الذكاء الاصطناعي
+# ==========================================
 def get_dynamic_model():
     try:
         all_models = genai.list_models()
@@ -189,13 +247,13 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
     
     u = st.session_state.user_data
     if not st.session_state.book_content:
-        # هنا كان الخطأ، تم إصلاحه وتجميعه في سطر واحد
-        st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
+        book_text = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
+        if book_text: st.session_state.book_content = book_text
 
     lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
     context = ""
     if st.session_state.book_content:
-        context = f"استخدم الكتاب:\n{st.session_state.book_content[:30000]}..."
+        context = f"استخدم هذا الكتاب للإجابة:\n{st.session_state.book_content[:30000]}..."
     
     quiz_instr = "أنشئ سؤالاً واحداً فقط." if is_quiz_mode else ""
     
@@ -215,22 +273,34 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
         model = genai.GenerativeModel(model_name)
         return model.generate_content(inputs).text
     except Exception as e: return f"خطأ: {e}"
-        # 5. الواجهات
+
+# ==========================================
+# 6. الواجهات والتشغيل
+# ==========================================
 def login_page():
-    with st.container(border=True):
-        st.header("🔐 تسجيل الدخول")
-        with st.form("login"):
-            name = st.text_input("الاسم الثلاثي")
-            code = st.text_input("الكود السري", type="password")
+    # استخدام Container لتجميع العناصر بوضوح
+    with st.container():
+        st.markdown("<h3 style='text-align: center;'>🔐 تسجيل الدخول</h3>", unsafe_allow_html=True)
+        
+        with st.form("login_form"):
+            st.markdown("##### 👤 البيانات الشخصية")
+            name = st.text_input("الاسم الثلاثي", placeholder="اكتب اسمك هنا")
+            code = st.text_input("الكود السري", type="password", placeholder="******")
+            
             st.markdown("---")
-            c1, c2 = st.columns(2)
-            with c1:
+            st.markdown("##### 📚 البيانات الدراسية")
+            
+            col1, col2 = st.columns(2)
+            with col1:
                 stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
                 lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
-            with c2:
-                grade = st.selectbox("الصف", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
+            with col2:
+                grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
             
-            if st.form_submit_button("دخول"):
+            st.write("") # مسافة
+            submit_btn = st.form_submit_button("🚀 بدء الرحلة التعليمية")
+            
+            if submit_btn:
                 if code == TEACHER_KEY:
                     st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
                     st.rerun()
@@ -239,13 +309,18 @@ def login_page():
                     st.session_state.book_content = ""
                     st.rerun()
                 else:
-                    st.error("الكود غير صحيح")
+                    st.error("❌ الكود غير صحيح، حاول مرة أخرى.")
 
 def main_app():
     with st.sidebar:
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
-        st.info(f"{st.session_state.user_data['grade']}")
-        if st.button("🚪 خروج"):
+        st.info(f"{st.session_state.user_data['stage']} - {st.session_state.user_data['grade']}")
+        
+        st.markdown("---")
+        if st.button("📝 اختبار سريع"):
+             st.session_state.messages.append({"role": "user", "content": "أريد سؤال اختبار."})
+        
+        if st.button("🚪 تسجيل الخروج"):
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
@@ -253,8 +328,8 @@ def main_app():
     
     col1, col2 = st.columns(2)
     with col1:
-        st.write("🎙️ الميكروفون:")
-        audio = mic_recorder(start_prompt="تحدث", stop_prompt="إرسال", key='recorder', format='wav')
+        st.info("🎙️ الميكروفون:")
+        audio = mic_recorder(start_prompt="تسجيل ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
     with col2:
         with st.expander("📸 صورة"):
             f = st.file_uploader("رفع", type=['jpg', 'png'])
@@ -278,7 +353,7 @@ def main_app():
         
         with st.chat_message("assistant"):
             with st.spinner("جاري الرد..."):
-                is_quiz = "اختبار" in final_q
+                is_quiz = "اختبار" in final_q or "سؤال" in final_q
                 resp = get_ai_response(final_q, img, is_quiz)
                 st.write(resp)
                 if any(x in resp for x in ["أحسنت", "ممتاز"]): st.balloons()
