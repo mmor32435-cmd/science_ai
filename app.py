@@ -27,81 +27,68 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم آمن وواضح (Safe & Clear UI)
+# 2. تصميم "البطاقة البيضاء" (White Card UI)
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
-    /* توحيد الخط والاتجاه */
+    /* 1. تعميم الخط والاتجاه */
     html, body, [class*="css"] {
-        font-family: 'Cairo', sans-serif;
+        font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
     
-    /* خلفية التطبيق رمادية فاتحة جداً لتمييز العناصر */
+    /* 2. خلفية التطبيق */
     .stApp {
-        background-color: #f7f9fc;
+        background-color: #f0f2f5;
     }
     
-    /* --- تنسيق حقول الإدخال لتكون ظاهرة بوضوح --- */
-    /* حدود زرقاء، خلفية بيضاء، نص أسود */
+    /* 3. تصميم نموذج الدخول (بطاقة بيضاء بظلال) */
+    div[data-testid="stForm"] {
+        background-color: #ffffff;
+        padding: 30px;
+        border-radius: 15px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        border: 1px solid #ddd;
+    }
+    
+    /* 4. إجبار النصوص العادية والعناوين على الأسود */
+    h1, h2, h3, h4, h5, h6, p, span, div, label {
+        color: #000000 !important;
+    }
+    
+    /* 5. تنسيق حقول الإدخال */
     .stTextInput input, .stSelectbox div, .stTextArea textarea {
         background-color: #ffffff !important;
         color: #000000 !important;
-        border: 1px solid #ced4da !important;
+        border: 1px solid #ccc !important;
         border-radius: 8px !important;
     }
     
-    /* عناوين الحقول (Label) */
-    .stTextInput label, .stSelectbox label {
-        color: #000000 !important;
-        font-weight: bold !important;
-        font-size: 16px !important;
-    }
-
-    /* --- تنسيق الأزرار --- */
-    .stButton>button {
-        background-color: #2c3e50; /* لون كحلي غامق */
-        color: #ffffff !important;
-        border-radius: 8px;
-        height: 50px;
-        width: 100%;
-        font-size: 18px !important;
-        font-weight: bold !important;
-        border: none;
-    }
-    .stButton>button:hover {
-        background-color: #34495e;
-    }
-
-    /* --- تنسيق العنوان الرئيسي --- */
+    /* 6. تنسيق صندوق العنوان */
     .header-box {
-        background: linear-gradient(135deg, #000428 0%, #004e92 100%);
+        background: linear-gradient(135deg, #141E30 0%, #243B55 100%);
         padding: 2rem;
         border-radius: 15px;
         text-align: center;
         margin-bottom: 2rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
+    /* استثناء للعنوان ليكون أبيض */
     .header-box h1, .header-box h3 {
         color: #ffffff !important;
-        margin: 0;
     }
     
-    /* --- تنسيق رسائل المحادثة --- */
-    .stChatMessage {
-        background-color: #ffffff !important;
-        border: 1px solid #e1e4e8 !important;
-        border-radius: 12px !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
-    }
-    
-    /* النصوص داخل الشات */
-    .stChatMessage p {
-        color: #000000 !important;
-        font-size: 17px !important;
+    /* 7. الأزرار */
+    .stButton>button {
+        background-color: #004e92;
+        color: #ffffff !important;
+        border-radius: 10px;
+        height: 50px;
+        font-size: 18px !important;
+        font-weight: bold !important;
+        width: 100%;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -156,7 +143,6 @@ def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        # تحديد اسم الملف بدقة بناءً على المرحلة
         file_prefix = ""
         if "الثانوية" in stage:
             mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
@@ -172,13 +158,11 @@ def get_book_text_from_drive(stage, grade, lang):
         expected_name = f"{file_prefix}_{lang_code}"
         
         service = build('drive', 'v3', credentials=creds)
-        # البحث عن الملف
         results = service.files().list(q=f"name contains '{expected_name}' and mimeType='application/pdf'", fields="files(id, name)").execute()
         files = results.get('files', [])
         
         if not files: return None
         
-        # تحميل وقراءة
         request = service.files().get_media(fileId=files[0]['id'])
         file_stream = io.BytesIO()
         downloader = MediaIoBaseDownload(file_stream, request)
@@ -188,7 +172,6 @@ def get_book_text_from_drive(stage, grade, lang):
         file_stream.seek(0)
         pdf_reader = PyPDF2.PdfReader(file_stream)
         text = ""
-        # قراءة أول 60 صفحة لعدم التحميل الزائد
         for page in pdf_reader.pages[:60]: text += page.extract_text() + "\n"
         return text
     except: return None
@@ -199,3 +182,29 @@ def get_book_text_from_drive(stage, grade, lang):
 def clean_text_for_speech(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
     return text
+
+def speech_to_text(audio_bytes):
+    r = sr.Recognizer()
+    try:
+        audio_io = io.BytesIO(audio_bytes)
+        with sr.AudioFile(audio_io) as source:
+            audio_data = r.record(source)
+            text = r.recognize_google(audio_data, language="ar-EG")
+            return text
+    except: return None
+
+async def generate_speech_async(text, voice="ar-EG-ShakirNeural"):
+    cleaned = clean_text_for_speech(text)
+    communicate = edge_tts.Communicate(cleaned, voice)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+        await communicate.save(tmp_file.name)
+        return tmp_file.name
+
+def text_to_speech_pro(text):
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(generate_speech_async(text))
+    except: return None
+
+# 
