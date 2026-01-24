@@ -1,94 +1,166 @@
 import streamlit as st
 from google.oauth2 import service_account
+import google.generativeai as genai
 import gspread
+from PIL import Image
+import random
 
-st.set_page_config(page_title="فحص الاتصال", layout="wide")
+# ==========================================
+# 1. إعدادات الصفحة
+# ==========================================
+st.set_page_config(
+    page_title="المعلم العلمي | السيد البدوي",
+    page_icon="🧬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# ==========================================
+# 2. التصميم (CSS)
+# ==========================================
 st.markdown("""
 <style>
-    .stApp { direction: rtl; text-align: right; }
-    .success-box { padding: 15px; background-color: #d4edda; border-radius: 10px; color: #155724; margin-bottom: 10px; }
-    .error-box { padding: 15px; background-color: #f8d7da; border-radius: 10px; color: #721c24; margin-bottom: 10px; }
-    .info-box { padding: 15px; background-color: #d1ecf1; border-radius: 10px; color: #0c5460; margin-bottom: 10px; }
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; direction: rtl; text-align: right; }
+    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+    .header-box {
+        background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
+        padding: 2rem; border-radius: 15px; color: white; text-align: center; margin-bottom: 2rem;
+    }
+    .stButton>button { background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛠️ أداة كشف أخطاء كود الدخول")
-st.write("تقوم هذه الأداة بفحص الاتصال بجوجل شيت وقراءة الكود المخزن لمقارنته.")
-st.markdown("---")
+st.markdown("""
+<div class="header-box">
+    <h1>الأستاذ / السيد البدوي</h1>
+    <h3>Mr. Elsayed Elbadawy - Expert Science Tutor</h3>
+</div>
+""", unsafe_allow_html=True)
 
-# 1. عرض بيانات الاتصال
-st.header("1. بيانات حساب الخدمة (Service Account)")
+# ==========================================
+# 3. إدارة الجلسة
+# ==========================================
+if 'user_data' not in st.session_state:
+    st.session_state.user_data = {
+        "logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""
+    }
 
-if "gcp_service_account" in st.secrets:
-    creds_data = st.secrets["gcp_service_account"]
-    client_email = creds_data.get("client_email", "غير موجود")
-    
-    st.code(client_email, language="text")
-    st.warning(f"⚠️ هام جداً: هل قمت بعمل 'مشاركة' (Share) لملف الإكسل مع هذا الإيميل وجعلته Editor؟")
-else:
-    st.error("❌ لم يتم العثور على بيانات [gcp_service_account] في ملف secrets.toml")
-    st.stop()
+if 'messages' not in st.session_state: st.session_state.messages = []
 
-# 2. محاولة الاتصال
-st.header("2. اختبار الاتصال بجوجل شيت")
+# ==========================================
+# 4. دوال الاتصال (تم إصلاح Scopes هنا)
+# ==========================================
+TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
+SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
-try:
-    # إصلاح المفتاح
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    if "private_key" in creds_dict:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-    
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    client = gspread.authorize(creds)
-    
-    st.markdown('<div class="success-box">✅ تم الاتصال بسيرفرات جوجل بنجاح (Authentication Success).</div>', unsafe_allow_html=True)
-
-    # 3. محاولة فتح الملف
-    sheet_name = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-    st.write(f"📂 اسم الملف المطلوب: `{sheet_name}`")
-    
-    sh = client.open(sheet_name)
-    st.markdown(f'<div class="success-box">✅ تم العثور على الملف: {sh.title}</div>', unsafe_allow_html=True)
-    
-    # 4. قراءة الكود
-    sheet = sh.sheet1
-    raw_val = sheet.acell("B1").value
-    clean_val = str(raw_val).strip() if raw_val else "فارغ"
-    
-    st.header("3. فحص الكود المخزن")
-    st.markdown(f'<div class="info-box">القيمة الموجودة في الخلية <b>B1</b> هي: <h2 style="text-align:center; color:blue;">"{raw_val}"</h2></div>', unsafe_allow_html=True)
-    
-    if raw_val is None:
-        st.error("❌ الخلية B1 فارغة! الرجاء وضع كود داخلها في ملف الإكسل.")
-    else:
-        st.write("---")
-        st.subheader("جرب كتابة الكود هنا للمقارنة:")
-        user_input = st.text_input("اكتب الكود كما كنت تكتبه في التطبيق:")
+@st.cache_resource
+def get_gspread_client():
+    if "gcp_service_account" not in st.secrets: return None
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-        if user_input:
-            if user_input == clean_val:
-                st.success("✅ الكود متطابق تماماً! المشكلة تم حلها.")
-            else:
-                st.error("❌ غير متطابق!")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("الكود في الإكسل:")
-                    st.code(f"'{clean_val}'")
-                with col2:
-                    st.write("ما كتبته أنت:")
-                    st.code(f"'{user_input}'")
-                
-                if len(user_input) != len(clean_val):
-                    st.warning(f"طول الكود مختلف! (الإكسل: {len(clean_val)} حروف، أنت: {len(user_input)} حروف). ربما توجد مسافات زائدة؟")
+        # 🔥 هنا تم الإصلاح: إضافة صلاحيات Drive الكاملة
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        return gspread.authorize(creds)
+    except: return None
 
-except gspread.exceptions.SpreadsheetNotFound:
-    st.error(f"❌ لم يتم العثور على ملف باسم '{sheet_name}'.")
-    st.info("الاحتمالات:")
-    st.write("1. اسم الملف في جوجل درايف مختلف (حرف زائد أو ناقص).")
-    st.write("2. لم تقم بمشاركة الملف مع الإيميل الموضح في الأعلى.")
+def check_student_code(input_code):
+    client = get_gspread_client()
+    if not client: return False
+    try:
+        sh = client.open(SHEET_NAME)
+        real_code = str(sh.sheet1.acell("B1").value).strip()
+        # مقارنة الكود (مع إزالة المسافات للضمان)
+        return str(input_code).strip() == real_code
+    except: return False
 
-except Exception as e:
-    st.error("❌ حدث خطأ غير متوقع:")
-    st.code(str(e))
+# ==========================================
+# 5. الذكاء الاصطناعي
+# ==========================================
+def get_ai_response(user_text, img_obj=None):
+    try:
+        keys = st.secrets.get("GOOGLE_API_KEYS", [])
+        if not keys: return "⚠️ المفاتيح مفقودة."
+        genai.configure(api_key=random.choice(keys))
+        
+        u = st.session_state.user_data
+        lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
+        sys_prompt = f"أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}). التزم بالمنهج. {lang_prompt}"
+        
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            inputs = [sys_prompt, user_text]
+            if img_obj: inputs.extend([img_obj, "حل الصورة"])
+            return model.generate_content(inputs).text
+        except:
+            if img_obj: return "خطأ في الصورة."
+            model = genai.GenerativeModel('gemini-pro')
+            return model.generate_content(f"{sys_prompt}\n{user_text}").text
+    except Exception as e: return f"خطأ: {e}"
+
+# ==========================================
+# 6. الواجهات والتشغيل
+# ==========================================
+def login_page():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("### 🔐 تسجيل الدخول")
+        with st.form("login"):
+            name = st.text_input("الاسم")
+            code = st.text_input("الكود", type="password")
+            st.markdown("---")
+            c1, c2 = st.columns(2)
+            with c1:
+                stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
+                lang = st.selectbox("اللغة", ["العربية", "English"])
+            with c2:
+                grade = st.selectbox("الصف", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
+            
+            if st.form_submit_button("دخول"):
+                if code == TEACHER_KEY:
+                    st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
+                    st.rerun()
+                elif check_student_code(code):
+                    st.session_state.user_data.update({"logged_in": True, "role": "Student", "name": name, "stage": stage, "grade": grade, "lang": lang})
+                    st.rerun()
+                else:
+                    st.error("الكود خطأ")
+
+def main_app():
+    with st.sidebar:
+        st.success(f"مرحباً: {st.session_state.user_data['name']}")
+        if st.button("خروج"):
+            st.session_state.user_data["logged_in"] = False
+            st.rerun()
+
+    st.subheader("💬 اسأل المعلم")
+    with st.expander("📸 إرفاق صورة (اختياري)"):
+        f = st.file_uploader("اختر صورة", type=['jpg', 'png'])
+        img = Image.open(f) if f else None
+        if img: st.image(img, width=200)
+
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]): st.write(msg["content"])
+
+    if prompt := st.chat_input("سؤالك..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.write(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("جاري التفكير..."):
+                resp = get_ai_response(prompt, img)
+                st.write(resp)
+        st.session_state.messages.append({"role": "assistant", "content": resp})
+
+if __name__ == "__main__":
+    if st.session_state.user_data["logged_in"]:
+        main_app()
+    else:
+        login_page()
