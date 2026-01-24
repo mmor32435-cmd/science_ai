@@ -5,9 +5,7 @@ import gspread
 from PIL import Image
 import random
 
-# ==========================================
-# 1. إعدادات الصفحة (يجب أن يكون أول سطر)
-# ==========================================
+# 1. إعدادات الصفحة
 st.set_page_config(
     page_title="المعلم العلمي | السيد البدوي",
     page_icon="🧬",
@@ -15,9 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ==========================================
-# 2. التصميم (CSS)
-# ==========================================
+# 2. التصميم الجذاب (CSS)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
@@ -29,7 +25,7 @@ st.markdown("""
     .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
     .header-box {
         background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
-        padding: 2rem; border-radius: 15px; color: white; text-align: center; margin-bottom: 2rem;
+        padding: 20px; border-radius: 15px; color: white; text-align: center; margin-bottom: 20px;
     }
     .stButton>button {
         background-color: #243B55; color: white; border-radius: 10px; height: 50px; width: 100%; font-weight: bold;
@@ -38,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# بانر العنوان
+# 3. بانر الاسم
 st.markdown("""
 <div class="header-box">
     <h1>الأستاذ / السيد البدوي</h1>
@@ -46,9 +42,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 3. إدارة الجلسة (Session State)
-# ==========================================
+# 4. تهيئة الجلسة
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {
         "logged_in": False, "role": None, "name": "",
@@ -57,10 +51,7 @@ if 'user_data' not in st.session_state:
 
 if 'messages' not in st.session_state:
     st.session_state.messages = []
-
-# ==========================================
-# 4. دوال الاتصال (Backend)
-# ==========================================
+   # 5. دوال الاتصال (Backend)
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
@@ -71,7 +62,6 @@ def get_gspread_client():
         creds_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
@@ -86,48 +76,32 @@ def check_student_code(input_code):
         return input_code == real_code
     except: return False
 
-# ==========================================
-# 5. الذكاء الاصطناعي (AI Logic)
-# ==========================================
+# 6. الذكاء الاصطناعي (AI Logic)
 def get_ai_response(user_text, img_obj=None):
     try:
         keys = st.secrets.get("GOOGLE_API_KEYS", [])
         if not keys: return "⚠️ خطأ: المفاتيح غير موجودة."
         
         genai.configure(api_key=random.choice(keys))
-        
-        # إعداد بيانات الطالب
         u = st.session_state.user_data
         lang_instruction = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
         
-        system_prompt = f"""
-        أنت الأستاذ السيد البدوي، معلم علوم خبير.
-        الطالب: {u['name']} ({u['stage']} - {u['grade']}).
-        التعليمات: التزم بالمنهج، {lang_instruction}، كن مختصراً ومفيداً.
-        """
+        sys_prompt = f"أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}). التزم بالمنهج. {lang_instruction}"
         
         # محاولة استخدام Flash (يدعم الصور)
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
-            inputs = [system_prompt, user_text]
-            if img_obj:
-                inputs.append(img_obj)
-                inputs.append("قم بحل الصورة.")
-            response = model.generate_content(inputs)
-            return response.text
+            inputs = [sys_prompt, user_text]
+            if img_obj: inputs.extend([img_obj, "حل الصورة"])
+            return model.generate_content(inputs).text
         except:
-            # محاولة بديلة (Gemini Pro) للنصوص فقط
-            if img_obj: return "عذراً، حدث خطأ في تحليل الصورة، لكن يمكنني الرد على النصوص."
+            # محاولة بديلة (Pro)
+            if img_obj: return "عذراً، حدث خطأ مع الصورة."
             model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(f"{system_prompt}\nالسؤال: {user_text}")
-            return response.text
-
+            return model.generate_content(f"{sys_prompt}\n{user_text}").text
     except Exception as e:
-        return f"حدث خطأ في الاتصال: {e}"
-
-# ==========================================
-# 6. الواجهات (UI)
-# ==========================================
+        return f"خطأ اتصال: {e}"
+# 7. الواجهات (UI)
 def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -148,10 +122,7 @@ def login_page():
                     st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
                     st.rerun()
                 elif check_student_code(code):
-                    st.session_state.user_data.update({
-                        "logged_in": True, "role": "Student", "name": name, 
-                        "stage": stage, "grade": grade, "lang": lang
-                    })
+                    st.session_state.user_data.update({"logged_in": True, "role": "Student", "name": name, "stage": stage, "grade": grade, "lang": lang})
                     st.rerun()
                 else:
                     st.error("الكود خطأ")
@@ -165,13 +136,11 @@ def main_app():
 
     st.subheader("💬 اسأل المعلم")
     
-    # رفع صورة
     with st.expander("📸 إرفاق صورة (اختياري)"):
         f = st.file_uploader("اختر صورة", type=['jpg', 'png'])
         img = Image.open(f) if f else None
         if img: st.image(img, width=200)
 
-    # المحادثة
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.write(msg["content"])
 
@@ -185,9 +154,7 @@ def main_app():
                 st.write(resp)
         st.session_state.messages.append({"role": "assistant", "content": resp})
 
-# ==========================================
-# 7. التشغيل
-# ==========================================
+# 8. التشغيل
 if __name__ == "__main__":
     if st.session_state.user_data["logged_in"]:
         main_app()
