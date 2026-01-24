@@ -4,11 +4,7 @@ google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
 gspread
-pandas
-google-generativeai
-edge-tts
-SpeechRecognition
-streamlit-mic-recorder
+google-generativeai>=0.7.2
 Pillow
-PyPDF2
-graphviz
+pandas
+numpy
