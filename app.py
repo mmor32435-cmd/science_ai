@@ -2,21 +2,23 @@ import streamlit as st
 from google.oauth2 import service_account
 import google.generativeai as genai
 import gspread
-import time
-import random
 from PIL import Image
+import random
+import time
 
 # =========================================================
-# 1. الإعدادات والتصميم (Configuration & UI)
+# 1. إعدادات الصفحة (يجب أن تكون في أول سطر)
 # =========================================================
 st.set_page_config(
-    page_title="AI Science Tutor | الأستاذ السيد البدوي",
+    page_title="المعلم العلمي | الأستاذ السيد البدوي",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# تصميم CSS الاحترافي
+# =========================================================
+# 2. التنسيق والتصميم (CSS)
+# =========================================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
@@ -28,235 +30,232 @@ st.markdown("""
     }
     
     .stApp {
-        background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     }
     
-    /* كارت العنوان */
-    .header-box {
-        background: linear-gradient(90deg, #1CB5E0 0%, #000851 100%);
-        padding: 20px;
+    .header-container {
+        background: linear-gradient(90deg, #000428 0%, #004e92 100%);
+        padding: 2rem;
         border-radius: 15px;
         color: white;
         text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        margin-bottom: 20px;
-    }
-    .header-title { font-size: 2.5em; font-weight: bold; margin: 0; }
-    .header-subtitle { font-size: 1.2em; color: #ddd; margin-top: 5px; }
-    
-    /* رسائل الشات */
-    .stChatMessage {
-        background-color: #ffffff;
-        border-radius: 12px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        border: 1px solid #f0f0f0;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
-    /* الأزرار */
     .stButton>button {
-        background-color: #000851;
-        color: white;
-        border-radius: 10px;
         width: 100%;
+        background-color: #004e92;
+        color: white;
+        border-radius: 8px;
         height: 50px;
         font-weight: bold;
     }
     .stButton>button:hover {
-        background-color: #1CB5E0;
+        background-color: #000428;
         color: white;
-        border: 1px solid white;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# عرض العنوان
+# بانر العنوان
 st.markdown("""
-<div class="header-box">
-    <div class="header-title">الأستاذ / السيد البدوي</div>
-    <div class="header-subtitle">Mr. Elsayed Elbadawy - Expert Science Tutor</div>
+<div class="header-container">
+    <h1>الأستاذ / السيد البدوي</h1>
+    <h3>Mr. Elsayed Elbadawy - Expert Science Tutor</h3>
 </div>
 """, unsafe_allow_html=True)
 
-# تحميل الثوابت
-TEACHER_MASTER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN_DEFAULT")
-CONTROL_SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-
 # =========================================================
-# 2. المنطق الخلفي (Backend Logic)
+# 3. تهيئة الجلسة (Session State)
 # =========================================================
-
-# تهيئة بيانات الجلسة
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {
-        "logged_in": False, "role": None, "name": "",
-        "grade": "الصف الأول الإعدادي", "lang": "العربية", "stage": "الإعدادية"
+        "logged_in": False,
+        "role": None,
+        "name": "",
+        "grade": "الصف الأول",
+        "stage": "الإعدادية",
+        "lang": "العربية"
     }
+
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+
+# =========================================================
+# 4. دوال الاتصال (Backend)
+# =========================================================
+TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
+SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
 @st.cache_resource
 def get_gspread_client():
-    if "gcp_service_account" not in st.secrets: return None
+    if "gcp_service_account" not in st.secrets:
+        return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
+        # إصلاح المفتاح الخاص
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
-    except: return None
-
-def get_student_code_from_sheet():
-    client = get_gspread_client()
-    if not client: return None
-    try:
-        sh = client.open(CONTROL_SHEET_NAME)
-        return str(sh.sheet1.acell("B1").value).strip()
-    except: return None
-
-def get_best_available_model(api_key):
-    """البحث عن أفضل نموذج متاح"""
-    try:
-        genai.configure(api_key=api_key)
-        models = genai.list_models()
-        chat_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-        
-        if not chat_models: return 'models/gemini-pro'
-        
-        # 1. البحث عن Flash (للصور والسرعة)
-        for m in chat_models:
-            if 'flash' in m.lower(): return m
-        # 2. البحث عن Pro
-        for m in chat_models:
-            if 'pro' in m.lower(): return m
-            
-        return chat_models[0]
     except:
-        return 'models/gemini-pro'
+        return None
 
-def get_ai_response(user_text, image_data=None):
+def check_student_code(input_code):
+    client = get_gspread_client()
+    if not client:
+        return False
+    try:
+        sh = client.open(SHEET_NAME)
+        real_code = str(sh.sheet1.acell("B1").value).strip()
+        return input_code == real_code
+    except:
+        return False
+
+# =========================================================
+# 5. الذكاء الاصطناعي (AI Engine)
+# =========================================================
+def get_ai_response(user_text, image_obj=None):
     try:
         keys = st.secrets.get("GOOGLE_API_KEYS", [])
-        if not keys: return "⚠️ خطأ: المفاتيح غير موجودة."
+        if not keys:
+            return "⚠️ خطأ: لم يتم العثور على مفاتيح API."
         
-        key = random.choice(keys)
-        model_name = get_best_available_model(key)
+        # إعداد المفتاح
+        genai.configure(api_key=random.choice(keys))
         
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel(model_name)
+        # محاولة استخدام نموذج Flash لأنه يدعم الصور
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # بيانات الطالب
+        # تجهيز تعليمات المعلم (Prompt)
         u = st.session_state.user_data
         lang_instruction = "اشرح باللغة العربية." if "العربية" in u['lang'] else "Explain in English."
         
         system_prompt = f"""
         أنت الأستاذ السيد البدوي، معلم علوم خبير.
-        الطالب في: {u['stage']} - {u['grade']}.
+        تحدث مع الطالب: {u['name']}
+        الصف الدراسي: {u['stage']} - {u['grade']}
         
-        تعليماتك:
+        التعليمات:
         1. التزم بمنهج الطالب.
         2. {lang_instruction}
         3. كن مختصراً ومفيداً.
-        4. لو أرفق الطالب صورة، قم بحلها.
+        4. إذا أرسل الطالب صورة، قم بحلها.
         """
         
-        content = [f"{system_prompt}\n\nالسؤال: {user_text}"]
-        if image_data:
-            content.append(image_data)
-            content[0] += "\n(يوجد صورة مرفقة من الطالب)."
+        # تجهيز المدخلات للنموذج
+        inputs = [system_prompt, user_text]
+        if image_obj:
+            inputs.append(image_obj)
+            inputs.append("قم بحل وشرح محتوى هذه الصورة.")
 
-        response = model.generate_content(content)
+        response = model.generate_content(inputs)
         return response.text
+        
     except Exception as e:
-        return f"حدث خطأ: {e}"
+        # إذا فشل Flash، نحاول استخدام Pro (للنصوص فقط)
+        try:
+            if image_obj: return "عذراً، حدث خطأ أثناء تحليل الصورة."
+            model_pro = genai.GenerativeModel('gemini-pro')
+            response = model_pro.generate_content(user_text)
+            return response.text
+        except:
+            return f"حدث خطأ في الاتصال: {str(e)}"
 
 # =========================================================
-# 3. واجهة المستخدم (UI Functions)
+# 6. واجهات العرض (UI Pages)
 # =========================================================
 
-def show_login_page():
+def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        with st.form("login_form"):
-            st.markdown("### 🔐 تسجيل الدخول")
-            name = st.text_input("الاسم الثلاثي")
-            code = st.text_input("الكود السري", type="password")
+        st.markdown("### 🔐 تسجيل الدخول")
+        with st.form("login"):
+            name = st.text_input("الاسم")
+            code = st.text_input("الكود", type="password")
             
             st.markdown("---")
-            st.markdown("###### ⚙️ إعدادات المنهج")
-            col_a, col_b = st.columns(2)
-            with col_a:
+            c1, c2 = st.columns(2)
+            with c1:
                 stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
                 lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
-            with col_b:
+            with c2:
                 grade = st.selectbox("الصف", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
+                
+            submitted = st.form_submit_button("دخول")
             
-            if st.form_submit_button("دخول"):
-                if code == TEACHER_MASTER_KEY:
+            if submitted:
+                if code == TEACHER_KEY:
                     st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
                     st.rerun()
+                elif check_student_code(code):
+                    st.session_state.user_data.update({
+                        "logged_in": True, "role": "Student", "name": name,
+                        "stage": stage, "grade": grade, "lang": lang
+                    })
+                    st.rerun()
                 else:
-                    db_code = get_student_code_from_sheet()
-                    if db_code and code == db_code:
-                        st.session_state.user_data.update({
-                            "logged_in": True, "role": "Student", "name": name,
-                            "stage": stage, "grade": grade, "lang": lang
-                        })
-                        st.rerun()
-                    else:
-                        st.error("الكود غير صحيح")
+                    st.error("الكود غير صحيح")
 
-def show_main_app():
+def main_app():
+    # القائمة الجانبية
     with st.sidebar:
         u = st.session_state.user_data
-        st.markdown(f"### أهلاً {u['name']}")
+        st.success(f"مرحباً: {u['name']}")
         st.info(f"{u['stage']} | {u['grade']}")
         
-        menu = st.radio("القائمة", ["💬 المساعد الذكي", "📝 اختبارات", "📚 المكتبة"])
+        page = st.radio("التنقل", ["💬 اسأل المعلم", "📝 اختبارات", "⚙️ خروج"])
         
-        if st.button("تسجيل الخروج"):
+        if page == "⚙️ خروج":
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
-    if menu == "💬 المساعد الذكي":
-        st.markdown("#### 🔬 اسأل الأستاذ السيد البدوي")
+    # الصفحة الرئيسية (الشات)
+    if page == "💬 اسأل المعلم":
+        st.subheader("🧬 المساعد العلمي الذكي")
         
-        # رفع صورة
-        uploaded_file = st.file_uploader("📸 ارفع صورة مسألة (اختياري)", type=['png', 'jpg', 'jpeg'])
-        image_data = None
-        if uploaded_file:
-            image_data = Image.open(uploaded_file)
-            st.image(image_data, width=200, caption="الصورة المرفقة")
+        # منطقة رفع الصور
+        with st.expander("📸 إرفاق صورة (اختياري)"):
+            upl_file = st.file_uploader("اختر صورة مسألة", type=['png', 'jpg', 'jpeg'])
+            img = Image.open(upl_file) if upl_file else None
+            if img: st.image(img, width=200)
 
-        # الشات
-        if "messages" not in st.session_state: st.session_state.messages = []
-        
+        # عرض الرسائل السابقة
         for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]): st.write(msg["content"])
-            
-        if prompt := st.chat_input("اكتب سؤالك هنا..."):
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+
+        # مربع الإدخال
+        if prompt := st.chat_input("اكتب سؤالك العلمي هنا..."):
+            # إضافة سؤال المستخدم
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"): st.write(prompt)
+            with st.chat_message("user"):
+                st.write(prompt)
             
+            # معالجة الرد
             with st.chat_message("assistant"):
                 with st.spinner("جاري التفكير..."):
-                    resp = get_ai_response(prompt, image_data)
-                    st.write(resp)
-            st.session_state.messages.append({"role": "assistant", "content": resp})
+                    response_text = get_ai_response(prompt, img)
+                    st.write(response_text)
+            
+            # حفظ الرد
+            st.session_state.messages.append({"role": "assistant", "content": response_text})
 
-    elif menu == "📝 اختبارات":
+    elif page == "📝 اختبارات":
         st.header("🎯 بنك الأسئلة")
         if st.button("أنشئ اختباراً جديداً"):
-            with st.spinner("جاري الإعداد..."):
-                q = get_ai_response("قم بإنشاء 3 أسئلة اختيار من متعدد في منهجي مع الإجابات.")
+            with st.spinner("جاري إعداد الأسئلة..."):
+                q = get_ai_response("اكتب لي 3 أسئلة اختيار من متعدد في منهجي مع الحل.")
                 st.markdown(q)
 
-    elif menu == "📚 المكتبة":
-        st.header("📚 المكتبة الرقمية")
-        st.info("سيتم تفعيل عرض الكتب قريباً.")
-
-# نقطة الانطلاق
+# =========================================================
+# 7. نقطة التشغيل الرئيسية
+# =========================================================
 if __name__ == "__main__":
     if st.session_state.user_data["logged_in"]:
-        show_main_app()
+        main_app()
     else:
-        show_login_page()
+        login_page()
