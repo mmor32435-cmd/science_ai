@@ -27,40 +27,64 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم عالي التباين (نصوص سوداء إجبارية)
+# 2. تصميم عالي التباين (إصلاح الألوان جذرياً)
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
+    /* تعميم الخط */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
-    .stApp { background-color: #f4f7f6; }
     
-    /* إجبار النصوص على اللون الأسود */
-    .stTextInput input, .stTextArea textarea, .stSelectbox div, p, div {
+    /* خلفية التطبيق */
+    .stApp {
+        background-color: #f0f2f6;
+    }
+    
+    /* --- إصلاح ألوان الكتابة (أسود داكن) --- */
+    .stTextInput input, .stTextArea textarea, .stSelectbox div, .stNumberInput input {
+        color: #000000 !important; /* النص أسود */
+        background-color: #ffffff !important; /* الخلفية بيضاء */
+        font-weight: bold !important;
+        border: 1px solid #aaa !important;
+    }
+    
+    /* إصلاح القوائم المنسدلة */
+    div[data-baseweb="select"] > div {
+        background-color: #ffffff !important;
         color: #000000 !important;
     }
     
-    /* خلفية الشات بيضاء والنص أسود */
+    /* إصلاح النصوص داخل الأيقونات والأزرار */
+    .stButton>button {
+        background-color: #004e92 !important;
+        color: #ffffff !important;
+        border-radius: 8px;
+        height: 50px;
+        font-size: 18px !important;
+        font-weight: bold !important;
+    }
+    
+    /* رسائل الشات */
     .stChatMessage {
         background-color: #ffffff !important;
-        border: 1px solid #ddd !important;
+        border: 1px solid #ccc !important;
         color: #000000 !important;
     }
-    
+    div[data-testid="stMarkdownContainer"] p {
+        color: #000000 !important;
+    }
+
+    /* العنوان */
     .header-box {
-        background: linear-gradient(90deg, #16222A 0%, #3A6073 100%);
+        background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
         padding: 2rem; border-radius: 15px; margin-bottom: 2rem; text-align: center;
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-    
-    .stButton>button {
-        background-color: #3A6073; color: #ffffff !important; border-radius: 10px; height: 50px; font-weight: bold;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,7 +104,7 @@ if 'messages' not in st.session_state: st.session_state.messages = []
 if 'book_content' not in st.session_state: st.session_state.book_content = ""
 
 # ==========================================
-# 4. الاتصال والكتب (Drive & Sheets)
+# 4. الاتصال والبيانات
 # ==========================================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -114,10 +138,7 @@ def get_book_text_from_drive(grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        grade_map = {
-            "الرابع": "Grade4", "الخامس": "Grade5", "السادس": "Grade6",
-            "الأول": "Prep1", "الثاني": "Prep2", "الثالث": "Prep3"
-        }
+        grade_map = {"الرابع": "Grade4", "الخامس": "Grade5", "السادس": "Grade6", "الأول": "Prep1", "الثاني": "Prep2", "الثالث": "Prep3"}
         lang_code = "Ar" if "العربية" in lang else "En"
         file_prefix = grade_map.get(grade, "Grade4")
         expected_name = f"{file_prefix}_{lang_code}"
@@ -127,13 +148,12 @@ def get_book_text_from_drive(grade, lang):
         files = results.get('files', [])
         
         if not files: return None
-            
         request = service.files().get_media(fileId=files[0]['id'])
         file_stream = io.BytesIO()
         downloader = MediaIoBaseDownload(file_stream, request)
         done = False
         while done is False: status, done = downloader.next_chunk()
-            
+        
         file_stream.seek(0)
         pdf_reader = PyPDF2.PdfReader(file_stream)
         text = ""
@@ -142,9 +162,8 @@ def get_book_text_from_drive(grade, lang):
     except: return None
 
 # ==========================================
-# 5. الصوت والميكروفون (إصلاحات)
+# 5. الصوت والميكروفون (تم الإصلاح)
 # ==========================================
-
 def clean_text_for_speech(text):
     text = re.sub(r'[\*\#\-\_]', '', text)
     return text
@@ -152,17 +171,14 @@ def clean_text_for_speech(text):
 def speech_to_text(audio_bytes):
     r = sr.Recognizer()
     try:
-        # استخدام BytesIO مباشرة لتجنب مشاكل الملفات المؤقتة
+        # استخدام BytesIO مباشرة مع صيغة wav
         audio_io = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_io) as source:
+            # تم إزالة calibration لأنه يسبب مشاكل
             audio_data = r.record(source)
-            # تجربة التعرف
             text = r.recognize_google(audio_data, language="ar-EG")
             return text
-    except sr.UnknownValueError:
-        return None # الصوت غير مفهوم
-    except Exception as e:
-        return None # خطأ تقني
+    except: return None
 
 async def generate_speech_async(text, voice="ar-EG-ShakirNeural"):
     cleaned = clean_text_for_speech(text)
@@ -179,64 +195,87 @@ def text_to_speech_pro(text):
     except: return None
 
 # ==========================================
-# 6. الذكاء الاصطناعي (نظام التبديل التلقائي)
+# 6. الذكاء الاصطناعي (ديناميكي بالكامل)
 # ==========================================
+
+def get_dynamic_model():
+    """
+    هذه الدالة تطبق طلبك حرفياً:
+    لا تضع اسم موديل ثابت، بل ابحث في القائمة واختر المتاح.
+    """
+    try:
+        # جلب القائمة
+        all_models = genai.list_models()
+        
+        # تصفية النماذج التي تدعم الشات
+        valid_models = []
+        for m in all_models:
+            if 'generateContent' in m.supported_generation_methods:
+                valid_models.append(m.name)
+        
+        if not valid_models:
+            # حالة نادرة جداً: لا يوجد أي موديل متاح
+            return None
+        
+        # التفضيل: نبحث عن Flash أولاً، ثم Pro، ثم أي شيء
+        for m in valid_models:
+            if 'flash' in m.lower(): return m
+        
+        for m in valid_models:
+            if 'pro' in m.lower(): return m
+            
+        # إذا لم نجد المفضلات، نأخذ أول واحد في القائمة أياً كان اسمه
+        return valid_models[0]
+        
+    except Exception as e:
+        return None
+
 def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys: return "⚠️ المفاتيح مفقودة."
     genai.configure(api_key=random.choice(keys))
     
-    u = st.session_state.user_data
+    # 🔥 الخطوة الحاسمة: جلب اسم الموديل المتاح فعلياً 🔥
+    model_name = get_dynamic_model()
+    if not model_name:
+        return "عذراً، لا توجد نماذج ذكاء اصطناعي متاحة حالياً في حسابك."
     
-    # تحميل الكتاب
+    u = st.session_state.user_data
     if not st.session_state.book_content:
         book_text = get_book_text_from_drive(u['grade'], u['lang'])
         if book_text: st.session_state.book_content = book_text
 
-    # التعليمات
     lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
     context = ""
     if st.session_state.book_content:
         context = f"استخدم هذا الكتاب للإجابة:\n{st.session_state.book_content[:30000]}..."
     
-    quiz_instr = "أنشئ سؤالاً واحداً فقط من المنهج." if is_quiz_mode else ""
+    quiz_instr = "أنشئ سؤالاً واحداً فقط." if is_quiz_mode else ""
     
     sys_prompt = f"""
     أنت الأستاذ السيد البدوي.
     {context}
-    تعليمات:
-    1. التزم بالمنهج المصري.
+    1. التزم بالمنهج.
     2. {lang_prompt}
     3. كن مختصراً (نقاط).
     4. {quiz_instr}
-    5. شجع الطالب بكلمات مثل (أحسنت، ممتاز).
     """
     
     inputs = [sys_prompt, user_text]
     if img_obj: inputs.extend([img_obj, "اشرح الصورة."])
 
-    # 🔥🔥 التبديل التلقائي لتجنب خطأ 404 🔥🔥
     try:
-        # المحاولة الأولى: Flash (الأفضل)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(model_name)
         return model.generate_content(inputs).text
-    except Exception:
-        try:
-            # المحاولة الثانية: Pro (القديم المستقر)
-            # نموذج Pro لا يدعم الصور في النسخة القديمة، لذا نعالجه كنص فقط إذا كان هناك صورة
-            model = genai.GenerativeModel('gemini-pro')
-            if img_obj: 
-                return "عذراً، نظام تحليل الصور غير متاح حالياً، لكن يمكنني إجابة سؤالك النصي."
-            return model.generate_content(f"{sys_prompt}\n{user_text}").text
-        except Exception as e:
-            return f"عذراً، حدث خطأ في الاتصال: {e}"
+    except Exception as e:
+        return f"حدث خطأ أثناء الاتصال بالنموذج ({model_name}): {e}"
 
 # ==========================================
-# 7. الواجهات والتشغيل
+# 7. التشغيل والواجهات
 # ==========================================
 def celebrate_success():
     st.balloons()
-    st.toast("🌟 إجابة ممتازة! أحسنت!", icon="🎉")
+    st.toast("🌟 ممتاز!", icon="🎉")
 
 def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -275,11 +314,10 @@ def main_app():
 
     st.subheader("💬 اسأل المعلم")
     
-    # إعدادات الميكروفون: تنسيق WAV ضروري
     c_mic, c_img = st.columns([1, 1])
     with c_mic:
         st.info("🎙️ اضغط للتحدث:")
-        # format='wav' مهم جداً
+        # ضبط الصيغة على wav لحل مشكلة الميكروفون
         audio = mic_recorder(start_prompt="تسجيل ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
     
     with c_img:
@@ -290,9 +328,9 @@ def main_app():
 
     voice_text = None
     if audio:
-        with st.spinner("جاري المعالجة..."):
+        with st.spinner("جاري سماعك..."):
             voice_text = speech_to_text(audio['bytes'])
-            if not voice_text: st.warning("⚠️ الصوت غير واضح، حاول مرة أخرى.")
+            if not voice_text: st.warning("⚠️ الصوت غير واضح.")
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.write(msg["content"])
@@ -305,13 +343,12 @@ def main_app():
         with st.chat_message("user"): st.write(final_q)
         
         with st.chat_message("assistant"):
-            with st.spinner("الأستاذ السيد يفكر..."):
+            with st.spinner("جاري التحضير..."):
                 is_quiz = "اختبار" in final_q or "سؤال" in final_q
                 resp_text = get_ai_response(final_q, img, is_quiz_mode=is_quiz)
                 st.write(resp_text)
                 
-                if any(w in resp_text for w in ["أحسنت", "ممتاز", "رائع", "Excellent"]):
-                    celebrate_success()
+                if any(w in resp_text for w in ["أحسنت", "ممتاز", "رائع"]): celebrate_success()
                 
                 audio_file = text_to_speech_pro(resp_text)
                 if audio_file: st.audio(audio_file, format='audio/mp3')
