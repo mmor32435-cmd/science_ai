@@ -101,6 +101,45 @@ def do_logout():
     # =========================================================
 # 3. واجهات التطبيق
 # =========================================================
+import google.generativeai as genai
+import random
+
+# =========================================================
+# دالة التعامل مع الذكاء الاصطناعي
+# =========================================================
+def get_ai_response(user_prompt):
+    try:
+        # جلب المفاتيح من ملف الأسرار
+        keys = st.secrets.get("GOOGLE_API_KEYS", [])
+        if not keys:
+            return "عذراً، لم يتم العثور على مفاتيح Gemini API في الإعدادات."
+        
+        # اختيار مفتاح عشوائي لتوزيع الحمل
+        selected_key = random.choice(keys)
+        genai.configure(api_key=selected_key)
+        
+        # إعداد النموذج
+        model = genai.GenerativeModel('gemini-pro')
+        
+        # توجيه المعلم (System Prompt)
+        # هنا نخبر الذكاء الاصطناعي كيف يتصرف
+        role_instruction = """
+        أنت معلم علوم خبير ومرح (فيزياء، كيمياء، أحياء).
+        مهمتك هي شرح المفاهيم العلمية للطلاب بوضوح وباللغة العربية.
+        استخدم أمثلة من الواقع، وبسط المعلومات المعقدة.
+        إذا كان السؤال خارج نطاق العلوم، اعتذر بلطف وأخبر الطالب أنك متخصص في العلوم فقط.
+        """
+        
+        full_prompt = f"{role_instruction}\n\nسؤال الطالب: {user_prompt}"
+        
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        return f"حدث خطأ أثناء الاتصال بالذكاء الاصطناعي: {str(e)}"
+
+# =========================================================
+# 3. واجهات التطبيق
+# =========================================================
 def show_login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -133,20 +172,36 @@ def show_main_app():
 
     if menu == "المحادثة":
         st.header("🤖 المحادثة الذكية")
+        st.caption("اسألني في الفيزياء، الكيمياء، أو الأحياء...")
+        
+        # تهيئة سجل المحادثة
         if "messages" not in st.session_state:
             st.session_state.messages = []
+
+        # عرض الرسائل القديمة
         for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]): st.write(msg["content"])
-            
-        if prompt := st.chat_input("سؤالك..."):
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+        
+        # استقبال السؤال الجديد
+        if prompt := st.chat_input("اكتب سؤالك العلمي هنا..."):
+            # 1. عرض سؤال المستخدم
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"): st.write(prompt)
-            with st.chat_message("assistant"): st.write("أهلاً بك! النظام يعمل.")
-            st.session_state.messages.append({"role": "assistant", "content": "أهلاً بك! النظام يعمل."})
+            with st.chat_message("user"):
+                st.write(prompt)
+            
+            # 2. التفكير والحصول على الإجابة من Gemini
+            with st.chat_message("assistant"):
+                with st.spinner("جاري تحليل السؤال واستحضار المعلومات العلمية... 🧬"):
+                    response_text = get_ai_response(prompt)
+                    st.write(response_text)
+            
+            # 3. حفظ الإجابة في السجل
+            st.session_state.messages.append({"role": "assistant", "content": response_text})
             
     elif menu == "المكتبة":
         st.header("📚 المكتبة")
-        st.info("قريباً...")
+        st.info("سيتم ربط ملفات PDF هنا قريباً.")
 
 if __name__ == "__main__":
     if st.session_state.logged_in:
