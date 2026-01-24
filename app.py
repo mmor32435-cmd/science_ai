@@ -10,7 +10,7 @@ import asyncio
 import edge_tts
 import tempfile
 import os
-import re # مكتبة للتعامل مع النصوص وإزالة الرموز
+import re
 
 # ==========================================
 # 1. إعدادات الصفحة
@@ -23,66 +23,70 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (إصلاح ألوان الكتابة)
+# 2. تصميم عالي التباين (إصلاح الألوان)
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
-    html, body, [class*="css"] {
-        font-family: 'Cairo', sans-serif;
+    /* 1. تعميم الخط والاتجاه واللون الأسود */
+    html, body, [class*="css"], div, p, span, h1, h2, h3 {
+        font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
     
-    /* خلفية زرقاء فاتحة مريحة للعين */
+    /* 2. خلفية التطبيق */
     .stApp {
-        background-color: #f0f8ff;
+        background-color: #f4f6f9;
     }
     
-    /* صندوق العنوان */
+    /* 3. إصلاح جذري لألوان الشات (أسود على خلفية فاتحة) */
+    .stChatMessage {
+        background-color: #ffffff !important;
+        border: 1px solid #d1d1d1 !important;
+        border-radius: 12px !important;
+        padding: 15px !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important;
+    }
+    
+    /* إجبار النص داخل الشات أن يكون أسود */
+    div[data-testid="stMarkdownContainer"] p {
+        color: #000000 !important;
+        font-size: 18px !important;
+        line-height: 1.6 !important;
+    }
+    
+    /* 4. إصلاح ألوان حقول الإدخال */
+    .stTextInput input, .stTextArea textarea {
+        color: #000000 !important;
+        background-color: #ffffff !important;
+        border: 1px solid #004e92 !important;
+    }
+    
+    /* 5. صندوق العنوان */
     .header-box {
-        background: linear-gradient(90deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+        background: linear-gradient(90deg, #141E30 0%, #243B55 100%);
         padding: 2rem;
         border-radius: 15px;
-        color: white;
-        text-align: center;
         margin-bottom: 2rem;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        text-align: center;
     }
-    
-    /* إصلاح جذري لمشكلة اختفاء الكتابة */
-    /* نجبر الحقول أن تكون بيضاء والنص أسود */
-    .stTextInput input {
-        color: #000000 !important;
-        background-color: #ffffff !important;
-        border: 1px solid #ccc;
-    }
-    .stSelectbox div[data-baseweb="select"] > div {
-        color: #000000 !important;
-        background-color: #ffffff !important;
-    }
-    
-    /* الأزرار */
+    .header-box h1, .header-box h3 { color: #ffffff !important; }
+
+    /* 6. الأزرار */
     .stButton>button {
-        background-color: #2c5364;
-        color: white !important;
-        border-radius: 8px;
+        background-color: #004e92;
+        color: #ffffff !important;
+        border-radius: 10px;
         height: 50px;
-        width: 100%;
         font-size: 18px;
         font-weight: bold;
-    }
-    
-    /* رسائل الشات */
-    .stChatMessage {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        color: #000000;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# بانر العنوان
 st.markdown("""
 <div class="header-box">
     <h1>الأستاذ / السيد البدوي</h1>
@@ -127,29 +131,25 @@ def check_student_code(input_code):
     except: return False
 
 # ==========================================
-# 5. معالجة الصوت والذكاء (The Brain)
+# 5. الصوت والذكاء (تم إصلاح الميكروفون)
 # ==========================================
 
-# 🧹 دالة تنظيف النص من الرموز (لحل مشكلة نجمة نجمة)
 def clean_text_for_speech(text):
-    # إزالة النجوم والهاشتاج والشرطات
-    clean = re.sub(r'[\*\#\-\_]', '', text)
-    # إزالة المسافات الزائدة
-    clean = re.sub(r'\s+', ' ', clean).strip()
-    return clean
+    # إزالة الرموز المزعجة عند القراءة
+    text = re.sub(r'[\*\#\-\_]', '', text)
+    return text
 
-# 🎤 دالة الميكروفون (محسنة)
 def speech_to_text(audio_bytes):
     r = sr.Recognizer()
     try:
-        # حفظ كملف WAV مؤقت
+        # حفظ الملف
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_file.write(audio_bytes)
             tmp_filename = tmp_file.name
         
         with sr.AudioFile(tmp_filename) as source:
-            # تقليل الضوضاء
-            r.adjust_for_ambient_noise(source, duration=0.5)
+            # ⛔ تم إزالة (adjust_for_ambient_noise) لأنها كانت تحذف الصوت القصير
+            # قراءة الصوت مباشرة
             audio_data = r.record(source)
             text = r.recognize_google(audio_data, language="ar-EG")
         
@@ -158,9 +158,7 @@ def speech_to_text(audio_bytes):
     except:
         return None
 
-# 🔊 دالة تحويل النص لصوت (بصوت شاكر - رجل مصري)
 async def generate_speech_async(text, voice="ar-EG-ShakirNeural"):
-    # تنظيف النص قبل النطق
     cleaned_text = clean_text_for_speech(text)
     communicate = edge_tts.Communicate(cleaned_text, voice)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
@@ -171,11 +169,9 @@ def text_to_speech_pro(text):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        file_path = loop.run_until_complete(generate_speech_async(text))
-        return file_path
+        return loop.run_until_complete(generate_speech_async(text))
     except: return None
 
-# 🧠 الذكاء الاصطناعي
 def get_best_model():
     try:
         models = genai.list_models()
@@ -195,14 +191,12 @@ def get_ai_response(user_text, img_obj=None):
         u = st.session_state.user_data
         lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
         
-        # تعليمات المعلم (الرد المختصر)
         sys_prompt = f"""
         أنت الأستاذ السيد البدوي. الطالب: {u['name']} ({u['stage']}-{u['grade']}).
         1. التزم بالمنهج.
         2. {lang_prompt}
-        3. ⛔ الرد يجب أن يكون مختصراً جداً ومركزاً (Concise Summary).
-        4. ✅ استخدم نقاط (Bullet points).
-        5. تجنب المقدمات الطويلة.
+        3. كن مختصراً ومفيداً (Brief Summary).
+        4. استخدم نقاط (Bullet points).
         """
         
         model_name = get_best_model()
@@ -251,10 +245,11 @@ def main_app():
 
     st.subheader("💬 اسأل المعلم (تحدث أو اكتب)")
     
+    # منطقة الميكروفون والصور
     c_mic, c_img = st.columns([1, 1])
     with c_mic:
-        st.info("🎙️ اضغط للتحدث:")
-        audio = mic_recorder(start_prompt="بدء التسجيل ⏺️", stop_prompt="إنهاء ⏹️", key='recorder')
+        st.info("🎙️ اضغط للتحدث، واضغط مرة أخرى للإرسال:")
+        audio = mic_recorder(start_prompt="بدء التسجيل ⏺️", stop_prompt="إرسال ⏹️", key='recorder')
     
     with c_img:
         with st.expander("📸 إرفاق صورة"):
@@ -268,11 +263,14 @@ def main_app():
         with st.spinner("جاري معالجة الصوت..."):
             voice_text = speech_to_text(audio['bytes'])
             if not voice_text:
-                st.warning("⚠️ الصوت غير واضح، يرجى المحاولة مرة أخرى.")
+                st.warning("⚠️ الصوت غير واضح.")
 
+    # عرض الرسائل القديمة (تم حل مشكلة الألوان هنا)
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.write(msg["content"])
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
+    # الإدخال النصي
     text_input = st.chat_input("اكتب سؤالك...")
     final_q = text_input if text_input else voice_text
 
@@ -285,7 +283,6 @@ def main_app():
                 resp_text = get_ai_response(final_q, img)
                 st.write(resp_text)
                 
-                # الصوت (النظيف)
                 audio_file = text_to_speech_pro(resp_text)
                 if audio_file:
                     st.audio(audio_file, format='audio/mp3')
