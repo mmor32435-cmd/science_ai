@@ -16,105 +16,54 @@ import re
 import io
 import PyPDF2
 
-# 1. إعدادات الصفحة
-st.set_page_config(
-    page_title="المعلم العلمي | السيد البدوي",
-    page_icon="🧬",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ==========================================
+# 1. إعدادات الصفحة والتصميم
+# ==========================================
+st.set_page_config(page_title="المعلم العلمي | السيد البدوي", page_icon="🧬", layout="wide", initial_sidebar_state="expanded")
 
-# 2. تصميم احترافي ونظيف (بدون مربعات داخلية)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+    html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
+    .stApp { background: linear-gradient(180deg, #f0f4f8 0%, #d9e2ec 100%); }
     
-    html, body, [class*="css"] {
-        font-family: 'Cairo', sans-serif !important;
-        direction: rtl;
-        text-align: right;
-    }
-
-    .stApp {
-        background: linear-gradient(180deg, #f0f4f8 0%, #d9e2ec 100%);
-    }
-
-    /* إصلاح القوائم المنسدلة - إزالة الحدود الداخلية */
-    div[data-baseweb="select"] > div {
+    /* تصميم الحقول */
+    div[data-baseweb="select"] > div, .stTextInput input {
         background-color: #ffffff !important;
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
-        color: #000000 !important;
-    }
-    div[data-baseweb="select"] span {
-        color: #000000 !important;
-    }
-    ul[data-baseweb="menu"] {
-        background-color: #ffffff !important;
-    }
-    li[data-baseweb="option"] {
         color: #000000 !important;
         font-weight: bold !important;
     }
-
-    /* حقول الكتابة */
-    .stTextInput input {
-        background-color: #ffffff !important;
-        color: #000000 !important;
-        border: 2px solid #004e92 !important;
-        border-radius: 8px !important;
-    }
-
-    /* النصوص */
-    h1, h2, h3, h4, h5, p, label {
-        color: #000000 !important;
-    }
-
-    /* الأزرار */
+    div[data-baseweb="select"] span { color: #000000 !important; }
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
+    li[data-baseweb="option"] { color: #000000 !important; }
+    
+    /* النصوص والأزرار */
+    h1, h2, h3, h4, h5, p, label { color: #000000 !important; }
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
-        color: #ffffff !important;
-        border: none;
-        border-radius: 10px;
-        height: 55px;
-        width: 100%;
-        font-size: 20px !important;
-        font-weight: bold !important;
+        color: #ffffff !important; border: none; border-radius: 10px; height: 55px; width: 100%; font-size: 20px !important;
     }
-
-    /* العنوان */
+    
+    /* العنوان والرسائل */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-
-    /* الشات */
-    .stChatMessage {
-        background-color: #ffffff !important;
-        border: 1px solid #d1d1d1 !important;
-        border-radius: 12px !important;
-    }
+    .stChatMessage { background-color: #ffffff !important; border: 1px solid #d1d1d1 !important; border-radius: 12px !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="header-box">
-    <h1>الأستاذ / السيد البدوي</h1>
-    <h3>المنصة التعليمية الذكية (ابتدائي - إعدادي - ثانوي)</h3>
-</div>
-""", unsafe_allow_html=True)
-# 3. إدارة الجلسة (تم تجميعها لتفادي الخطأ)
-if 'user_data' not in st.session_state:
-    st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""}
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'book_content' not in st.session_state:
-    st.session_state.book_content = ""
+st.markdown("""<div class="header-box"><h1>الأستاذ / السيد البدوي</h1><h3>المنصة التعليمية الذكية (ابتدائي - إعدادي - ثانوي)</h3></div>""", unsafe_allow_html=True)
+
+# ==========================================
+# 3. إدارة الجلسة والاتصال
+# ==========================================
+if 'user_data' not in st.session_state: st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": ""}
+if 'messages' not in st.session_state: st.session_state.messages = []
+if 'book_content' not in st.session_state: st.session_state.book_content = ""
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -124,8 +73,7 @@ def get_credentials():
     if "gcp_service_account" not in st.secrets: return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        if "private_key" in creds_dict: creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
     except: return None
@@ -143,46 +91,74 @@ def check_student_code(input_code):
         return str(input_code).strip() == real_code
     except: return False
 
+# ---------------------------------------------------------
+# 🔥 دالة جلب الكتب المحدثة (تدعم تعدد الكتب للثانوي) 🔥
+# ---------------------------------------------------------
 @st.cache_resource
 def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        file_prefix = ""
+        lang_code = "Ar" if "العربية" in lang else "En"
+        search_query = ""
+        
+        # 1. منطق المرحلة الثانوية
         if "الثانوية" in stage:
             mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
-            file_prefix = mapping.get(grade, "Sec1")
+            prefix = mapping.get(grade, "Sec1")
+            
+            if prefix == "Sec1":
+                # الصف الأول: كتاب واحد (علوم متكاملة)
+                search_query = f"name contains '{prefix}_Integrated_{lang_code}'"
+            else:
+                # الصف الثاني والثالث: كتب متعددة (فيزياء، كيمياء، أحياء)
+                # سنبحث عن أي ملف يبدأ بـ Sec2 أو Sec3 ويخص اللغة
+                search_query = f"name contains '{prefix}_' and name contains '_{lang_code}'"
+        
+        # 2. منطق الإعدادي والابتدائي (كتاب واحد)
         elif "الإعدادية" in stage:
             mapping = {"الأول": "Prep1", "الثاني": "Prep2", "الثالث": "Prep3"}
-            file_prefix = mapping.get(grade, "Prep1")
-        else: 
+            prefix = mapping.get(grade, "Prep1")
+            search_query = f"name contains '{prefix}_{lang_code}'"
+        else:
             mapping = {"الرابع": "Grade4", "الخامس": "Grade5", "السادس": "Grade6"}
-            file_prefix = mapping.get(grade, "Grade4")
-            
-        lang_code = "Ar" if "العربية" in lang else "En"
-        expected_name = f"{file_prefix}_{lang_code}"
-        
+            prefix = mapping.get(grade, "Grade4")
+            search_query = f"name contains '{prefix}_{lang_code}'"
+
+        # تنفيذ البحث
         service = build('drive', 'v3', credentials=creds)
-        results = service.files().list(q=f"name contains '{expected_name}' and mimeType='application/pdf'", fields="files(id, name)").execute()
+        # البحث عن كل الملفات المطابقة بصيغة PDF
+        query = f"{search_query} and mimeType='application/pdf'"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
         files = results.get('files', [])
         
         if not files: return None
         
-        request = service.files().get_media(fileId=files[0]['id'])
-        file_stream = io.BytesIO()
-        downloader = MediaIoBaseDownload(file_stream, request)
-        done = False
-        while done is False: status, done = downloader.next_chunk()
-        file_stream.seek(0)
-        pdf_reader = PyPDF2.PdfReader(file_stream)
-        text = ""
-        for page in pdf_reader.pages[:60]: text += page.extract_text() + "\n"
-        return text
+        full_text = ""
+        # قراءة كل الملفات التي وجدناها (لدمج الفيزياء والكيمياء والأحياء معاً)
+        for file in files:
+            try:
+                request = service.files().get_media(fileId=file['id'])
+                file_stream = io.BytesIO()
+                downloader = MediaIoBaseDownload(file_stream, request)
+                done = False
+                while done is False: status, done = downloader.next_chunk()
+                
+                file_stream.seek(0)
+                pdf_reader = PyPDF2.PdfReader(file_stream)
+                # نأخذ جزءاً من كل كتاب (مثلاً أول 40 صفحة لتوفير الذاكرة)
+                for page in pdf_reader.pages[:40]: 
+                    full_text += page.extract_text() + "\n"
+                full_text += "\n--- نهاية الكتاب ---\n"
+            except: continue
+            
+        return full_text if full_text else None
     except: return None
-      # 4. الصوت والميكروفون
-def clean_text_for_speech(text):
-    text = re.sub(r'[\*\#\-\_]', '', text)
-    return text
+
+# ==========================================
+# 4. الصوت والميكروفون
+# ==========================================
+def clean_text_for_speech(text): return re.sub(r'[\*\#\-\_]', '', text)
 
 def speech_to_text(audio_bytes):
     r = sr.Recognizer()
@@ -190,8 +166,7 @@ def speech_to_text(audio_bytes):
         audio_io = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_io) as source:
             audio_data = r.record(source)
-            text = r.recognize_google(audio_data, language="ar-EG")
-            return text
+            return r.recognize_google(audio_data, language="ar-EG")
     except: return None
 
 async def generate_speech_async(text, voice="ar-EG-ShakirNeural"):
@@ -208,7 +183,9 @@ def text_to_speech_pro(text):
         return loop.run_until_complete(generate_speech_async(text))
     except: return None
 
+# ==========================================
 # 5. الذكاء الاصطناعي
+# ==========================================
 def get_dynamic_model():
     try:
         all_models = genai.list_models()
@@ -235,7 +212,7 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
 
     context = ""
     if st.session_state.book_content:
-        context = f"استخدم هذا الكتاب:\n{st.session_state.book_content[:30000]}..."
+        context = f"اعتمد في إجابتك على المعلومات التالية من كتب الطالب:\n{st.session_state.book_content[:40000]}..."
     
     quiz_instr = "أنشئ سؤالاً واحداً فقط." if is_quiz_mode else ""
     lang_prompt = "اشرح بالعربية." if "العربية" in u['lang'] else "Explain in English."
@@ -243,7 +220,7 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
     sys_prompt = f"""
     أنت الأستاذ السيد البدوي.
     {context}
-    1. التزم بالمنهج.
+    1. التزم بالمنهج المصري والكتب المرفقة.
     2. {lang_prompt}
     3. كن مختصراً (نقاط).
     4. {quiz_instr}
@@ -256,14 +233,17 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
         model = genai.GenerativeModel(model_name)
         return model.generate_content(inputs).text
     except Exception as e: return f"خطأ: {e}"
-# 6. الواجهات
+
+# ==========================================
+# 6. الواجهات والتشغيل
+# ==========================================
 def celebrate_success():
     st.balloons()
     st.toast("🌟 ممتاز! أحسنت!", icon="🎉")
 
 def login_page():
-    st.markdown("### 🔐 تسجيل الدخول")
     with st.container():
+        st.markdown("### 🔐 تسجيل الدخول")
         with st.form("login"):
             name = st.text_input("الاسم الثلاثي")
             code = st.text_input("الكود السري", type="password")
@@ -275,9 +255,9 @@ def login_page():
                 stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
                 lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
             with col2:
+                # الصفوف تشمل الجميع
                 grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
             
-            st.write("")
             submit = st.form_submit_button("🚀 بدء التعلم")
             
             if submit:
