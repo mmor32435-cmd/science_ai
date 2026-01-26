@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة
+# 2. تصميم الواجهة (نظيف وواضح)
 # ==========================================
 st.markdown("""
 <style>
@@ -40,7 +40,7 @@ st.markdown("""
     }
     .stApp { background-color: #f8f9fa; }
 
-    /* قوائم منسدلة نظيفة */
+    /* إصلاح القوائم */
     div[data-baseweb="select"] * {
         background-color: transparent !important;
         border: none !important;
@@ -53,11 +53,9 @@ st.markdown("""
     }
     ul[data-baseweb="menu"] {
         background-color: #ffffff !important;
-        border: 1px solid #ccc !important;
     }
     li[data-baseweb="option"] {
         color: #000000 !important;
-        background-color: #ffffff !important;
     }
     li[data-baseweb="option"]:hover {
         background-color: #e3f2fd !important;
@@ -106,7 +104,7 @@ st.markdown("""
 st.markdown("""
 <div class="header-box">
     <h1>الأستاذ / السيد البدوي</h1>
-    <h3>المنصة التعليمية الذكية للعلوم (Science Only)</h3>
+    <h3>المنصة التعليمية الذكية</h3>
 </div>
 """, unsafe_allow_html=True)
 
@@ -124,7 +122,7 @@ TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
 # ==========================================
-# 4. الاتصال
+# 4. الاتصال والبيانات
 # ==========================================
 @st.cache_resource
 def get_credentials():
@@ -155,6 +153,7 @@ def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
+        # نظام التسمية الدقيق
         file_prefix = ""
         if "الثانوية" in stage:
             mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
@@ -167,6 +166,7 @@ def get_book_text_from_drive(stage, grade, lang):
             file_prefix = mapping.get(grade, "Grade4")
             
         lang_code = "Ar" if "العربية" in lang else "En"
+        # البحث عن الملفات التي تحتوي على الاسم
         search_query = f"name contains '{file_prefix}_' and name contains '_{lang_code}'"
         
         service = build('drive', 'v3', credentials=creds)
@@ -176,6 +176,7 @@ def get_book_text_from_drive(stage, grade, lang):
         if not files: return None
         
         full_text = ""
+        # ندمج محتوى كل الكتب التي نجدها (مثلاً فيزياء وكيمياء لنفس الصف)
         for file in files:
             try:
                 request = service.files().get_media(fileId=file['id'])
@@ -186,8 +187,9 @@ def get_book_text_from_drive(stage, grade, lang):
                 
                 file_stream.seek(0)
                 with pdfplumber.open(file_stream) as pdf:
+                    # قراءة عدد صفحات أكبر للتأكد من تغطية المنهج
                     for i, page in enumerate(pdf.pages):
-                        if i > 80: break
+                        if i > 150: break # حد أقصى للصفحات
                         text = page.extract_text()
                         if text: full_text += text + "\n"
             except: continue
@@ -227,7 +229,7 @@ def text_to_speech_pro(text, lang_code):
     except: return None
 
 # ==========================================
-# 6. الذكاء الاصطناعي (Logic)
+# 6. الذكاء الاصطناعي (Strict Mode)
 # ==========================================
 def get_dynamic_model():
     try:
@@ -250,56 +252,62 @@ def get_ai_response(user_text, img_obj=None):
     if not model_name: return "عذراً، لا توجد نماذج متاحة."
     
     u = st.session_state.user_data
+    
+    # محاولة تحميل الكتاب إذا لم يكن موجوداً
     if not st.session_state.book_content:
         st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
+
+    # 🛑 فحص حاسم: هل الكتاب موجود؟
+    if not st.session_state.book_content:
+        # إذا لم نجد الكتاب، نرفض العمل كمعلم علوم لمنع الأخطاء
+        return f"عذراً يا {u['name']}، لم أتمكن من العثور على كتاب منهج ({u['grade']} - {u['lang']}) في قاعدة البيانات. يرجى إبلاغ المعلم لرفع الكتاب."
 
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
     
-    context = ""
-    if st.session_state.book_content:
-        context = f"اعتمد حصراً على هذا الكتاب:\n{st.session_state.book_content[:50000]}..."
+    # سياق الكتاب (كبير جداً الآن)
+    context = f"هذا هو المرجع الوحيد لك:\n{st.session_state.book_content[:60000]}..."
 
-    # --- منطق الاختبار الجديد ---
+    # --- منطق الاختبار الصارم ---
     if st.session_state.quiz_active:
-        # مرحلة التصحيح
         sys_prompt = f"""
-        أنت معلم علوم فقط (Science Teacher).
+        أنت مصحح اختبارات صارم.
         السؤال السابق: "{st.session_state.last_question}"
         إجابة الطالب: "{user_text}"
+        المرجع: استخدم النص المرفق فقط.
         
         المطلوب:
-        1. صحح الإجابة علمياً (Science/Physics/Chemistry/Biology Only).
+        1. صحح الإجابة علمياً.
         2. اعط درجة من 10.
-        3. اشرح الإجابة الصحيحة باختصار شديد.
-        4. هل تريد سؤالاً آخر؟
+        3. وضح الإجابة الصحيحة من الكتاب.
+        4. اسأل الطالب: هل تريد سؤالاً آخر؟
         """
         st.session_state.quiz_active = False 
     else:
-        # مرحلة السؤال
         is_quiz_request = "اختبار" in user_text or "quiz" in user_text.lower() or "سؤال" in user_text
         
         if is_quiz_request:
             sys_prompt = f"""
-            أنت معلم علوم فقط (Science/Physics/Chemistry/Biology).
-            ⛔ ممنوع طرح أسئلة في اللغة العربية أو النحو أو التاريخ.
+            أنت واضع اختبارات ملتزم بالمنهج 100%.
             {context}
             
-            المطلوب:
-            1. أنشئ سؤالاً واحداً في مادة العلوم (أو الفيزياء/الكيمياء/الأحياء حسب صف الطالب).
-            2. نوع السؤال: {random.choice(['اختيار من متعدد', 'مصطلح علمي', 'علل'])}.
-            3. لا تذكر الإجابة.
-            4. انتظر رد الطالب.
+            تعليمات صارمة:
+            1. ابحث في النص المرفق عن معلومة محددة.
+            2. صغ سؤالاً واحداً حول هذه المعلومة (اختيار من متعدد أو مقالي).
+            3. ⛔ ممنوع طرح أسئلة خارج هذا النص المرفق نهائياً.
+            4. لا تذكر الإجابة.
             """
             st.session_state.quiz_active = True 
         else:
-            # سؤال عادي
             sys_prompt = f"""
-            أنت الأستاذ السيد البدوي (معلم علوم).
+            أنت معلم خاص.
             {context}
-            1. التزم بمنهج العلوم المصري.
-            2. {lang_prompt}
-            3. كن مختصراً.
+            
+            تعليمات صارمة جداً:
+            1. إجابتك يجب أن تكون مستخرجة من النص المرفق فقط.
+            2. إذا لم تجد المعلومة في النص، قل: "هذه المعلومة ليست في كتابك المدرسي المرفق".
+            3. {lang_prompt}
+            4. كن مختصراً.
             """
 
     inputs = [sys_prompt, user_text]
@@ -354,10 +362,16 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
+        # مؤشر حالة الكتاب
+        if st.session_state.book_content:
+            st.success("✅ الكتاب تم تحميله")
+        else:
+            st.error("❌ الكتاب غير موجود")
+
         if st.button("📝 ابدأ اختبار"):
-             st.session_state.messages.append({"role": "user", "content": "أريد اختباراً في العلوم."})
-             with st.spinner("جاري إعداد السؤال..."):
-                 resp = get_ai_response("أريد اختباراً في العلوم.")
+             st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
+             with st.spinner("جاري البحث في الكتاب..."):
+                 resp = get_ai_response("أريد اختباراً.")
                  st.session_state.messages.append({"role": "assistant", "content": resp})
                  st.rerun()
 
@@ -394,7 +408,7 @@ def main_app():
         with st.chat_message("user"): st.write(final_q)
         
         with st.chat_message("assistant"):
-            with st.spinner("المعلم يكتب..."):
+            with st.spinner("المعلم يراجع الكتاب..."):
                 resp = get_ai_response(final_q, img)
                 st.write(resp)
                 
