@@ -14,3 +14,6 @@ edge-tts
 pdfplumber
 pdf2image
 pytesseract
+pdf2image==1.17.0
+pytesseract==0.3.13
+Pillow==10.4.0
