@@ -15,9 +15,13 @@ import os
 import re
 import io
 import pdfplumber
-import time  # ✅ مهم
+import time
+import traceback
+import json
 
+# =========================
 # 1) إعدادات الصفحة
+# =========================
 st.set_page_config(
     page_title="المعلم العلمي | السيد البدوي",
     page_icon="🧬",
@@ -25,24 +29,38 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# =========================
 # 2) تصميم الواجهة
+# =========================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
     .stApp { background-color: #f8f9fa; }
-    div[data-baseweb="select"] * { background-color: transparent !important; border: none !important; color: #000000 !important; }
-    div[data-baseweb="select"] > div { background-color: #ffffff !important; border: 2px solid #004e92 !important; border-radius: 8px !important; }
+
+    div[data-baseweb="select"] * {
+        background-color: transparent !important;
+        border: none !important;
+        color: #000000 !important;
+    }
+    div[data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        border: 2px solid #004e92 !important;
+        border-radius: 8px !important;
+    }
     ul[data-baseweb="menu"] { background-color: #ffffff !important; }
     li[data-baseweb="option"] { color: #000000 !important; }
     li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
+
     .stTextInput input, .stTextArea textarea {
         background-color: #ffffff !important;
         color: #000000 !important;
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
     }
+
     h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
+
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -53,12 +71,14 @@ st.markdown("""
         font-size: 20px !important;
         font-weight: bold !important;
     }
+
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
         padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
+
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
@@ -74,7 +94,9 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# =========================
 # 3) إدارة الجلسة
+# =========================
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية (علوم)"}
 if 'messages' not in st.session_state:
@@ -82,20 +104,39 @@ if 'messages' not in st.session_state:
 if 'book_data' not in st.session_state:
     st.session_state.book_data = {"path": None, "text": None, "name": None}
 if 'quiz_state' not in st.session_state:
-    # quiz_state: "off" | "asking" | "waiting_answer" | "correcting"
-    st.session_state.quiz_state = "off"
+    st.session_state.quiz_state = "off"  # off | asking | waiting_answer | correcting
 if 'quiz_last_question' not in st.session_state:
     st.session_state.quiz_last_question = ""
 if 'gemini_file_name' not in st.session_state:
-    st.session_state.gemini_file_name = None  # لعدم الرفع المتكرر
+    st.session_state.gemini_file_name = None
 if 'gemini_model_name' not in st.session_state:
     st.session_state.gemini_model_name = None
+
+# تشخيص
+if 'debug_enabled' not in st.session_state:
+    st.session_state.debug_enabled = True
+if 'debug_log' not in st.session_state:
+    st.session_state.debug_log = []  # قائمة رسائل
+
+def dbg(event, data=None):
+    """سجل تشخيصي يظهر في الشريط الجانبي."""
+    if not st.session_state.debug_enabled:
+        return
+    rec = {"t": time.strftime("%H:%M:%S"), "event": event}
+    if data is not None:
+        rec["data"] = data
+    st.session_state.debug_log.append(rec)
+    # اجعل السجل لا يكبر بلا حدود
+    st.session_state.debug_log = st.session_state.debug_log[-200:]
+
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
+# =========================
 # 4) الاتصال والبيانات
+# =========================
 @st.cache_resource
 def get_credentials():
     if "gcp_service_account" not in st.secrets:
@@ -106,7 +147,8 @@ def get_credentials():
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    except:
+    except Exception as e:
+        dbg("creds_error", str(e))
         return None
 
 def get_gspread_client():
@@ -121,13 +163,11 @@ def check_student_code(input_code):
         sh = client.open(SHEET_NAME)
         real_code = str(sh.sheet1.acell("B1").value).strip()
         return str(input_code).strip() == real_code
-    except:
+    except Exception as e:
+        dbg("check_student_code_error", str(e))
         return False
 
 def load_book_smartly(stage, grade, lang):
-    """تحميل PDF من Drive + استخراج نص مختصر كخطة بديلة.
-       ملاحظة: Streamlit Cloud مناسب لاستخدام tempdir.
-    """
     creds = get_credentials()
     if not creds:
         return None
@@ -161,6 +201,7 @@ def load_book_smartly(stage, grade, lang):
                 break
 
         if not matched_file:
+            dbg("book_not_found", {"stage": stage, "grade": grade, "lang": lang, "tokens": target_tokens, "files": [x["name"] for x in all_files]})
             return None
 
         request = service.files().get_media(fileId=matched_file['id'])
@@ -172,24 +213,30 @@ def load_book_smartly(stage, grade, lang):
             while done is False:
                 status, done = downloader.next_chunk()
 
-        # استخراج نص محدود كـ fallback (تجنّب إرسال نص ضخم يسبب 400)
+        dbg("book_downloaded", {"name": matched_file["name"], "path": file_path, "size": os.path.getsize(file_path)})
+
+        # استخراج نص محدود للفallback
         text_content = ""
         try:
             with pdfplumber.open(file_path) as pdf:
                 for i, page in enumerate(pdf.pages):
-                    if i > 40:  # أقل من السابق لتقليل النص
+                    if i > 40:
                         break
                     extracted = page.extract_text()
                     if extracted:
                         text_content += extracted + "\n"
-        except:
-            pass
+        except Exception as e:
+            dbg("pdf_extract_error", str(e))
 
+        dbg("book_text_stats", {"chars": len(text_content)})
         return {"path": file_path, "text": text_content, "name": matched_file['name']}
-    except:
+    except Exception as e:
+        dbg("load_book_error", str(e))
         return None
 
+# =========================
 # 5) الصوت
+# =========================
 def clean_text_for_speech(text):
     return re.sub(r'[\*\#\-\_]', '', text)
 
@@ -201,7 +248,8 @@ def speech_to_text(audio_bytes, lang_ui):
             audio_data = r.record(source)
             code = "en-US" if "English" in lang_ui else "ar-EG"
             return r.recognize_google(audio_data, language=code)
-    except:
+    except Exception as e:
+        dbg("stt_error", str(e))
         return None
 
 async def generate_speech_async(text, lang_ui):
@@ -217,33 +265,16 @@ def text_to_speech_pro(text, lang_ui):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         return loop.run_until_complete(generate_speech_async(text, lang_ui))
-    except:
+    except Exception as e:
+        dbg("tts_error", str(e))
         return None
 
-# 6) Gemini helpers
+# =========================
+# 6) Gemini helpers (تشخيصية)
+# =========================
 def pick_model():
-    """اختر موديل يشتغل ويدعم generateContent. خزّنه في session لتثبيت الاختيار."""
-    if st.session_state.gemini_model_name:
-        return st.session_state.gemini_model_name
-
-    try:
-        all_models = genai.list_models()
-        valid = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
-        # الأفضلية لـ flash
-        for m in valid:
-            if "flash" in m.lower():
-                st.session_state.gemini_model_name = m
-                return m
-        for m in valid:
-            if "pro" in m.lower():
-                st.session_state.gemini_model_name = m
-                return m
-        if valid:
-            st.session_state.gemini_model_name = valid[0]
-            return valid[0]
-    except:
-        pass
-    return None
+    """ثابت لتقليل المفاجآت أثناء التشخيص."""
+    return "models/gemini-1.5-flash"
 
 def ensure_book_loaded():
     u = st.session_state.user_data
@@ -254,46 +285,51 @@ def ensure_book_loaded():
     if not data:
         return False
     st.session_state.book_data = data
-    # عند تغيير الكتاب: صفّر ملف Gemini المرفوع
     st.session_state.gemini_file_name = None
     return True
 
 def ensure_gemini_file_uploaded():
-    """يرفع PDF مرة واحدة فقط ويعيد file object."""
+    """يرفع PDF مرة واحدة. لا يرجع الملف إلا إذا حالته صالحة."""
     book = st.session_state.book_data
     if not book.get("path") or not os.path.exists(book["path"]):
+        dbg("gemini_file_missing_local", {"path": book.get("path")})
         return None
 
     try:
-        if not st.session_state.gemini_file_name:
-            uploaded = genai.upload_file(path=book["path"], display_name=book.get("name") or "book.pdf")
-            # انتظر المعالجة
-            for _ in range(30):
-                f = genai.get_file(uploaded.name)
-                if f.state.name != "PROCESSING":
-                    break
-                time.sleep(1)
+        # استعادة ملف سابق
+        if st.session_state.gemini_file_name:
+            f = genai.get_file(st.session_state.gemini_file_name)
+            state = getattr(f, "state", None)
+            dbg("gemini_get_file", {"name": f.name, "state": getattr(state, "name", None)})
+            if state and state.name in ("FAILED",):
+                st.session_state.gemini_file_name = None
+                return None
+            if state and state.name == "PROCESSING":
+                return None
+            return f
+
+        # رفع جديد
+        dbg("gemini_upload_start", {"display_name": book.get("name"), "path": book.get("path"), "size": os.path.getsize(book.get("path"))})
+        uploaded = genai.upload_file(path=book["path"], display_name=book.get("name") or "book.pdf")
+
+        # انتظر
+        for i in range(40):
             f = genai.get_file(uploaded.name)
-            if f.state.name == "PROCESSING":
-                # لو طولت جدًا، استخدم fallback النصي بدل ما نكمل ونتسبب في 400
+            state = getattr(f, "state", None)
+            dbg("gemini_processing_poll", {"i": i, "file": f.name, "state": getattr(state, "name", None)})
+            if not state:
+                break
+            if state.name == "PROCESSING":
+                time.sleep(1)
+                continue
+            if state.name == "FAILED":
                 return None
             st.session_state.gemini_file_name = f.name
             return f
 
-        return genai.get_file(st.session_state.gemini_file_name)
-    except:
         return None
-
-def pil_to_gemini_image_part(img: Image.Image):
-    """تحويل صورة PIL إلى bytes part لتفادي invalid argument."""
-    if img is None:
-        return None
-    try:
-        buf = io.BytesIO()
-        # PNG آمن
-        img.save(buf, format="PNG")
-        return {"mime_type": "image/png", "data": buf.getvalue()}
-    except:
+    except Exception as e:
+        dbg("gemini_upload_error", {"err": str(e), "trace": traceback.format_exc()})
         return None
 
 def build_system_prompt(is_english: bool):
@@ -314,117 +350,91 @@ def get_ai_response(user_text, img_obj=None):
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys:
         return "⚠️ المفاتيح مفقودة."
-    genai.configure(api_key=random.choice(keys))
+
+    chosen_key = random.choice(keys)
+    genai.configure(api_key=chosen_key)
+    dbg("gemini_key_chosen", {"last4": chosen_key[-4:] if isinstance(chosen_key, str) else "?"})
 
     if not ensure_book_loaded():
         return "⚠️ لم يتم العثور على الكتاب."
 
     model_name = pick_model()
-    if not model_name:
-        return "⚠️ لا توجد موديلات Gemini متاحة."
-
     u = st.session_state.user_data
     is_english = "English" in u["lang"]
     sys_prompt = build_system_prompt(is_english)
 
-    # جهّز أجزاء الإدخال
-    file_part = ensure_gemini_file_uploaded()  # قد يرجع None → fallback نصي
-    image_part = pil_to_gemini_image_part(img_obj)
-
-    # منطق الاختبار: سؤال ثم تصحيح
-    # quiz_state:
-    # - off: محادثة عادية
-    # - asking: نولّد سؤال
-    # - waiting_answer: ننتظر إجابة الطالب
-    # - correcting: نصحح إجابة الطالب
+    # منطق الاختبار
     quiz_state = st.session_state.quiz_state
-
     if quiz_state == "asking":
-        if is_english:
-            user_text = (
-                "Create ONE short quiz question from the textbook for my grade. "
-                "Return only the question, no solution."
-            )
-        else:
-            user_text = "كوّن سؤال اختبار واحد قصير من المنهج المناسب لصفّي. اكتب السؤال فقط بدون الحل."
-
+        user_text = (
+            "Create ONE short quiz question from the textbook for my grade. Return only the question, no solution."
+            if is_english else
+            "كوّن سؤال اختبار واحد قصير من المنهج المناسب لصفّي. اكتب السؤال فقط بدون الحل."
+        )
     elif quiz_state == "correcting":
         q = st.session_state.quiz_last_question.strip()
         a = user_text.strip()
-        if is_english:
-            user_text = (
-                f"Grade the student's answer based on the textbook.\n"
-                f"Question: {q}\n"
-                f"Student answer: {a}\n"
-                f"Give a score out of 10 + 1-2 lines feedback."
-            )
-        else:
-            user_text = (
-                f"صحح إجابة الطالب بالرجوع للكتاب.\n"
-                f"السؤال: {q}\n"
-                f"إجابة الطالب: {a}\n"
-                f"أعط درجة من 10 مع تعليق مختصر (سطرين)."
-            )
+        user_text = (
+            f"Grade the student's answer based on the textbook.\nQuestion: {q}\nStudent answer: {a}\nGive a score out of 10 + 1-2 lines feedback."
+            if is_english else
+            f"صحح إجابة الطالب بالرجوع للكتاب.\nالسؤال: {q}\nإجابة الطالب: {a}\nأعط درجة من 10 مع تعليق مختصر (سطرين)."
+        )
 
-    # بناء inputs لتفادي 400:
-    # - دائماً نضع sys_prompt أولاً
-    # - ثم file_part (إن وجد)
-    # - ثم الصورة (إن وجدت)
-    # - ثم نص المستخدم
-    inputs = [sys_prompt]
+    file_part = ensure_gemini_file_uploaded()
+    # أثناء التشخيص: لا نخلط الصورة مع الملف (أكثر سبب 400)
+    img_obj = None
 
+    # بناء inputs بشكلين فقط
     if file_part is not None:
-        inputs.append(file_part)
+        inputs = [sys_prompt, file_part, user_text]
+        dbg("inputs_mode", {"mode": "pdf_file", "sys_len": len(sys_prompt), "user_len": len(user_text)})
+        st.sidebar.write("DEBUG MODEL:", model_name)
+        try:
+            st.sidebar.write("DEBUG FILE:", getattr(file_part, "name", None))
+            st.sidebar.write("DEBUG FILE STATE:", getattr(getattr(file_part, "state", None), "name", None))
+        except:
+            pass
     else:
-        # fallback نصي قصير جداً (تجنّب 400 بسبب طول السياق)
         txt = st.session_state.book_data.get("text") or ""
-        context = txt[:12000]  # أقل
-        if context.strip():
-            inputs.append(f"Textbook excerpt (may be incomplete):\n{context}")
+        context = txt[:12000] if txt else ""
+        sys2 = sys_prompt + ("\n\nمرجع نصي مقتطع من الكتاب:\n" + context if context.strip() else "")
+        inputs = [sys2, user_text]
+        dbg("inputs_mode", {"mode": "text_fallback", "sys_len": len(sys2), "user_len": len(user_text), "ctx_len": len(context)})
+        st.sidebar.write("DEBUG MODEL:", model_name)
+        st.sidebar.write("DEBUG MODE:", "TEXT_FALLBACK (no file)")
 
-    if image_part is not None:
-        inputs.append(image_part)
-
-    inputs.append(user_text)
-
+    # تنفيذ
     try:
         model = genai.GenerativeModel(model_name)
-        resp = model.generate_content(inputs).text.strip()
+        dbg("generate_start", {"model": model_name})
 
-        # تحديث حالة الاختبار بعد الرد
+        resp_obj = model.generate_content(inputs)
+        resp_text = (resp_obj.text or "").strip()
+
+        dbg("generate_ok", {"resp_len": len(resp_text)})
+
+        # تحديث حالة الاختبار
         if quiz_state == "asking":
-            st.session_state.quiz_last_question = resp
+            st.session_state.quiz_last_question = resp_text
             st.session_state.quiz_state = "waiting_answer"
         elif quiz_state == "correcting":
             st.session_state.quiz_last_question = ""
             st.session_state.quiz_state = "off"
 
-        return resp
+        return resp_text if resp_text else "⚠️ لم يصل نص في الاستجابة."
 
     except Exception as e:
-        # رسالة أوضح + اقتراح fallback لو 400
-        msg = str(e)
-        if "400" in msg or "invalid argument" in msg.lower():
-            # حاول fallback بدون صورة إن كانت سببًا
-            if image_part is not None:
-                try:
-                    inputs_no_img = [x for x in inputs if x is not image_part]
-                    model = genai.GenerativeModel(model_name)
-                    resp = model.generate_content(inputs_no_img).text.strip()
-                    # تحديث حالة الاختبار بنفس المنطق
-                    if quiz_state == "asking":
-                        st.session_state.quiz_last_question = resp
-                        st.session_state.quiz_state = "waiting_answer"
-                    elif quiz_state == "correcting":
-                        st.session_state.quiz_last_question = ""
-                        st.session_state.quiz_state = "off"
-                    return resp
-                except:
-                    pass
-            return "⚠️ خطأ 400: يوجد مُدخل غير صالح (قد تكون صورة/ملف/نص طويل). جرّب بدون صورة أو أعد المحاولة."
+        err = str(e)
+        dbg("generate_error", {"err": err, "trace": traceback.format_exc()})
+
+        # عرض جزء من التفاصيل للمستخدم + احتفظ بالباقي في debug
+        if "400" in err or "invalid argument" in err.lower():
+            return "⚠️ خطأ 400 (Invalid argument). افتح DEBUG من الشريط الجانبي وانسخ السجل."
         return f"خطأ تقني: {e}"
 
+# =========================
 # 7) الواجهات
+# =========================
 def celebrate_success():
     st.balloons()
     st.toast("أحسنت!", icon="🎉")
@@ -458,6 +468,7 @@ def login_page():
                     st.session_state.messages = []
                     st.session_state.quiz_state = "off"
                     st.session_state.quiz_last_question = ""
+                    st.session_state.debug_log = []
                     st.rerun()
                 else:
                     st.error("❌ الكود غير صحيح")
@@ -473,7 +484,18 @@ def main_app():
 
         st.write("---")
 
-        # زر بدء اختبار: يولد سؤال ثم ينتظر إجابة ثم تصحيح
+        # DEBUG controls
+        st.session_state.debug_enabled = st.checkbox("DEBUG", value=True)
+        if st.button("مسح سجل DEBUG"):
+            st.session_state.debug_log = []
+            st.rerun()
+
+        # إظهار السجل
+        with st.expander("سجل DEBUG (انسخه عند الخطأ)"):
+            st.code(json.dumps(st.session_state.debug_log, ensure_ascii=False, indent=2))
+
+        st.write("---")
+
         if st.button("📝 ابدأ اختبار"):
             st.session_state.quiz_state = "asking"
             st.session_state.quiz_last_question = ""
@@ -483,7 +505,6 @@ def main_app():
                 st.session_state.messages.append({"role": "assistant", "content": resp})
             st.rerun()
 
-        # مؤشر حالة الاختبار
         if st.session_state.quiz_state == "waiting_answer" and st.session_state.quiz_last_question:
             st.info("وضع الاختبار: اكتب/قل إجابتك على السؤال الأخير وسيتم تصحيحها.")
 
@@ -499,11 +520,12 @@ def main_app():
         st.info("🎙️ الميكروفون:")
         audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
     with col2:
-        with st.expander("📸 صورة"):
+        with st.expander("📸 صورة (موقوفة في وضع التشخيص)"):
             f = st.file_uploader("رفع", type=['jpg', 'png'])
             img = Image.open(f) if f else None
             if img:
                 st.image(img, width=150)
+                st.caption("ملاحظة: الصورة لا تُرسل إلى Gemini في النسخة التشخيصية لتقليل خطأ 400.")
 
     voice_text = None
     if audio:
@@ -518,7 +540,6 @@ def main_app():
     final_q = text_input if text_input else voice_text
 
     if final_q:
-        # لو نحن في انتظار إجابة اختبار → ننتقل للتصحيح
         if st.session_state.quiz_state == "waiting_answer":
             st.session_state.quiz_state = "correcting"
 
@@ -528,10 +549,10 @@ def main_app():
 
         with st.chat_message("assistant"):
             with st.spinner("المعلم يفكر..."):
-                resp = get_ai_response(final_q, img)
+                resp = get_ai_response(final_q, img_obj=None)
                 st.write(resp)
 
-                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت", "Excellent", "9/10", "10/10"]):
+                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت", "Excellent"]):
                     celebrate_success()
 
                 aud = text_to_speech_pro(resp, st.session_state.user_data['lang'])
