@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (نظيف وعالي التباين)
+# 2. تصميم الواجهة (عالي الوضوح)
 # ==========================================
 st.markdown("""
 <style>
@@ -89,17 +89,29 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="header-box"><h1>الأستاذ / السيد البدوي</h1><h3>المنصة التعليمية الذكية</h3></div>""", unsafe_allow_html=True)
+st.markdown("""
+<div class="header-box">
+    <h1>الأستاذ / السيد البدوي</h1>
+    <h3>المنصة التعليمية الذكية</h3>
+</div>
+""", unsafe_allow_html=True)
 
 # ==========================================
-# 3. إدارة الجلسة
+# 3. إدارة الجلسة (تهيئة آمنة جداً)
 # ==========================================
-if 'user_data' not in st.session_state: st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
-if 'messages' not in st.session_state: st.session_state.messages = []
-# تخزين نوع الكتاب: إما ملف (للموديلات الحديثة) أو نص (للقديمة)
-if 'book_data' not in st.session_state: st.session_state.book_data = {"type": None, "content": None} 
-if 'quiz_active' not in st.session_state: st.session_state.quiz_active = False
-if 'last_question' not in st.session_state: st.session_state.last_question = ""
+if 'user_data' not in st.session_state: 
+    st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
+if 'messages' not in st.session_state: 
+    st.session_state.messages = []
+
+# 🔥 الإصلاح هنا: التأكد من وجود book_data كقاموس دائماً
+if 'book_data' not in st.session_state: 
+    st.session_state.book_data = {"type": None, "content": None, "path": None, "text": None, "name": None}
+
+if 'quiz_active' not in st.session_state: 
+    st.session_state.quiz_active = False
+if 'last_question' not in st.session_state: 
+    st.session_state.last_question = ""
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -113,7 +125,8 @@ def get_credentials():
     if "gcp_service_account" not in st.secrets: return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict: creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
     except: return None
@@ -132,19 +145,12 @@ def check_student_code(input_code):
     except: return False
 
 # ---------------------------------------------------------
-# دالة تحميل الكتاب (ذكية وهجينة)
+# دالة تحميل الكتاب (الهجينة)
 # ---------------------------------------------------------
 def load_book_smartly(stage, grade, lang):
-    """
-    تحاول هذه الدالة تحميل الكتاب.
-    وتعيد كائناً يحتوي على مسار الملف (للاستخدام مع Flash)
-    ونص الملف (للاستخدام مع Pro كاحتياطي).
-    """
     creds = get_credentials()
     if not creds: return None
-    
     try:
-        # 1. تحديد الاسم
         target_tokens = []
         if "الثانوية" in stage:
             if "الأول" in grade: target_tokens.append("Sec1")
@@ -169,22 +175,22 @@ def load_book_smartly(stage, grade, lang):
         
         matched_file = None
         for f in all_files:
-            if all(token in f['name'] for token in target_tokens):
+            if all(token.lower() in f['name'].lower() for token in target_tokens):
                 matched_file = f
                 break
         
         if not matched_file: return None
         
-        # 2. تنزيل الملف
+        # تنزيل الملف
         request = service.files().get_media(fileId=matched_file['id'])
-        file_path = f"/tmp/{matched_file['name']}" # حفظ مؤقت
+        file_path = f"/tmp/{matched_file['name']}"
         file_stream = io.BytesIO()
         with open(file_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while done is False: status, done = downloader.next_chunk()
         
-        # 3. قراءة النص احتياطياً (Fallback Text)
+        # قراءة النص احتياطياً
         text_content = ""
         try:
             with open(file_path, "rb") as f:
@@ -235,25 +241,16 @@ def text_to_speech_pro(text, lang_code):
 # 6. الذكاء الاصطناعي (الهجين)
 # ==========================================
 def get_working_model():
-    """
-    تبحث عن موديل شغال في الحساب.
-    تعيد: (اسم الموديل, هل يدعم الملفات؟)
-    """
     try:
         all_models = genai.list_models()
         valid_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
         
-        # 1. البحث عن Flash (يدعم ملفات)
         for m in valid_models:
             if 'flash' in m.lower(): return m, True
-            
-        # 2. البحث عن Pro 1.5 (يدعم ملفات)
         for m in valid_models:
             if 'pro' in m.lower() and '1.5' in m.lower(): return m, True
-            
-        # 3. أي موديل آخر (غالباً لا يدعم ملفات مباشرة)
-        if valid_models: return valid_models[0], False
         
+        if valid_models: return valid_models[0], False
         return None, False
     except: return None, False
 
@@ -264,8 +261,8 @@ def get_ai_response(user_text, img_obj=None):
     
     u = st.session_state.user_data
     
-    # تحميل الكتاب عند الحاجة
-    if not st.session_state.book_data["content"]:
+    # تحميل الكتاب بأمان (باستخدام .get)
+    if not st.session_state.book_data.get("name"):
         with st.spinner("جاري جلب الكتاب..."):
             data = load_book_smartly(u['stage'], u['grade'], u['lang'])
             if data:
@@ -273,25 +270,20 @@ def get_ai_response(user_text, img_obj=None):
             else:
                 return "⚠️ لم يتم العثور على الكتاب."
 
-    # تحديد الموديل
     model_name, supports_files = get_working_model()
     if not model_name: return "عذراً، لا توجد موديلات متاحة."
 
-    # تجهيز المدخلات
     book_info = st.session_state.book_data
     inputs = []
     
-    # التعليمات
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
     quiz_instr = "أنشئ سؤالاً واحداً فقط." if st.session_state.quiz_active else ""
     
-    # السيناريو 1: الموديل يدعم الملفات (Flash/Pro 1.5)
-    if supports_files and os.path.exists(book_info['path']):
-        # رفع الملف لـ Gemini
+    # السيناريو 1: ملفات
+    if supports_files and book_info.get('path') and os.path.exists(book_info['path']):
         try:
             gemini_file = genai.upload_file(path=book_info['path'], display_name=book_info['name'])
-            # انتظار المعالجة
             while gemini_file.state.name == "PROCESSING":
                 time.sleep(1)
                 gemini_file = genai.get_file(gemini_file.name)
@@ -306,17 +298,16 @@ def get_ai_response(user_text, img_obj=None):
             """
             inputs = [sys_prompt, gemini_file, user_text]
         except:
-            # فشل الرفع، نعود للنص
             supports_files = False
 
-    # السيناريو 2: الموديل قديم أو فشل الرفع (نستخدم النص المستخرج)
+    # السيناريو 2: نص
     if not supports_files:
-        context = book_info['text'][:40000] if book_info['text'] else "لا يوجد نص."
+        txt = book_info.get('text', "")
+        context = txt[:40000] if txt else "لا يوجد نص."
         sys_prompt = f"""
         أنت الأستاذ السيد البدوي.
         المرجع النصي:
         {context}
-        
         1. أجب من النص أعلاه فقط.
         2. {lang_prompt}
         3. كن مختصراً.
@@ -329,22 +320,19 @@ def get_ai_response(user_text, img_obj=None):
     try:
         model = genai.GenerativeModel(model_name)
         
-        # إدارة حالة الاختبار
         if st.session_state.quiz_active:
-            # إذا كنا في وضع الاختبار، نعدل البرومبت ليصحح
             if st.session_state.last_question:
-                 # تصحيح
                  prompt_correction = f"""
-                 أنت مصحح. سألت الطالب: "{st.session_state.last_question}"
-                 أجاب: "{user_text}"
+                 أنت مصحح. سألت: "{st.session_state.last_question}"
+                 أجاب الطالب: "{user_text}"
                  صحح الإجابة من المرجع واعط درجة.
                  """
-                 inputs[-1] = prompt_correction # استبدال السؤال بتعليمات التصحيح
+                 # استبدال آخر مدخل (السؤال) بطلب التصحيح
+                 inputs[-1] = prompt_correction
                  st.session_state.quiz_active = False
                  st.session_state.last_question = ""
             else:
-                 # طرح سؤال جديد
-                 st.session_state.last_question = "PENDING" # علامة مؤقتة
+                 st.session_state.last_question = "PENDING"
 
         response = model.generate_content(inputs)
         resp_text = response.text
@@ -384,7 +372,7 @@ def login_page():
                     st.rerun()
                 elif check_student_code(code):
                     st.session_state.user_data.update({"logged_in": True, "role": "Student", "name": name, "stage": stage, "grade": grade, "lang": lang})
-                    st.session_state.book_data = {"type": None, "content": None} # تصفير
+                    st.session_state.book_data = {"type": None, "content": None, "path": None, "text": None, "name": None} # تصفير
                     st.rerun()
                 else:
                     st.error("❌ الكود غير صحيح")
@@ -394,14 +382,15 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
-        if st.session_state.book_data["content"] or st.session_state.book_data.get("path"):
+        # استخدام .get لتجنب الخطأ
+        if st.session_state.book_data.get("name"):
             st.success("✅ الكتاب جاهز")
         else:
             st.warning("⚠️ سيتم تحميل الكتاب عند أول سؤال...")
             
         if st.button("📝 ابدأ اختبار"):
              st.session_state.quiz_active = True
-             st.session_state.last_question = "" # تصفير السؤال السابق
+             st.session_state.last_question = ""
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
              
              with st.spinner("جاري إعداد السؤال..."):
@@ -419,43 +408,4 @@ def main_app():
     col1, col2 = st.columns(2)
     with col1:
         st.info("🎙️ الميكروفون:")
-        audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
-    with col2:
-        with st.expander("📸 صورة"):
-            f = st.file_uploader("رفع", type=['jpg', 'png'])
-            img = Image.open(f) if f else None
-            if img: st.image(img, width=150)
-
-    voice_text = None
-    if audio:
-        with st.spinner("جاري السماع..."):
-            voice_text = speech_to_text(audio['bytes'], st.session_state.user_data['lang'])
-
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.write(msg["content"])
-
-    text_input = st.chat_input("اكتب إجابتك أو سؤالك هنا...")
-    final_q = text_input if text_input else voice_text
-
-    if final_q:
-        st.session_state.messages.append({"role": "user", "content": final_q})
-        with st.chat_message("user"): st.write(final_q)
-        
-        with st.chat_message("assistant"):
-            with st.spinner("المعلم يفكر..."):
-                resp = get_ai_response(final_q, img)
-                st.write(resp)
-                
-                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت"]): 
-                    celebrate_success()
-                
-                aud = text_to_speech_pro(resp, st.session_state.user_data['lang'])
-                if aud: st.audio(aud, format='audio/mp3')
-        
-        st.session_state.messages.append({"role": "assistant", "content": resp})
-
-if __name__ == "__main__":
-    if st.session_state.user_data["logged_in"]:
-        main_app()
-    else:
-        login_page()
+        audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال 
