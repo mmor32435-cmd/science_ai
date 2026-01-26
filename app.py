@@ -154,7 +154,7 @@ def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        # نظام التسمية الدقيق
+        # نظام التسمية
         file_prefix = ""
         if "الثانوية" in stage:
             mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
@@ -168,13 +168,14 @@ def get_book_text_from_drive(stage, grade, lang):
             
         lang_code = "Ar" if "العربية" in lang else "En"
         
-        # 🔥 التعديل الذكي: البحث عن الاسم بغض النظر عن الامتداد المكرر
-        search_query = f"name contains '{file_prefix}_' and name contains '_{lang_code}'"
+        # 🔥 التعديل الجذري: البحث المرن (Fuzzy Search)
+        # نبحث عن أي ملف يحتوي اسمه على الرمز واللغة، بغض النظر عن الامتداد
+        # مثال: سيبحث عن "Prep1" و "Ar" في الاسم
         
         service = build('drive', 'v3', credentials=creds)
         
-        # البحث في المجلد المحدد
-        query = f"'{FOLDER_ID}' in parents and {search_query} and mimeType='application/pdf'"
+        # استعلام يبحث عن الملفات التي تحتوي على الرمز واللغة
+        query = f"'{FOLDER_ID}' in parents and name contains '{file_prefix}' and name contains '{lang_code}' and mimeType='application/pdf'"
         
         results = service.files().list(q=query, fields="files(id, name)").execute()
         files = results.get('files', [])
