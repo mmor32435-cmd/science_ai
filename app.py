@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (نظيف وواضح)
+# 2. تصميم الواجهة
 # ==========================================
 st.markdown("""
 <style>
@@ -51,15 +51,9 @@ st.markdown("""
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
     }
-    ul[data-baseweb="menu"] {
-        background-color: #ffffff !important;
-    }
-    li[data-baseweb="option"] {
-        color: #000000 !important;
-    }
-    li[data-baseweb="option"]:hover {
-        background-color: #e3f2fd !important;
-    }
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
+    li[data-baseweb="option"] { color: #000000 !important; }
+    li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
 
     /* حقول الكتابة */
     .stTextInput input, .stTextArea textarea {
@@ -69,10 +63,8 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    /* النصوص */
+    /* النصوص والأزرار */
     h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
-
-    /* الأزرار */
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -84,15 +76,13 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* العنوان */
+    /* العنوان والشات */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
         padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-
-    /* الشات */
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
@@ -101,12 +91,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="header-box">
-    <h1>الأستاذ / السيد البدوي</h1>
-    <h3>المنصة التعليمية الذكية</h3>
-</div>
-""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>الأستاذ / السيد البدوي</h1><h3>المنصة التعليمية الذكية</h3></div>""", unsafe_allow_html=True)
 
 # ==========================================
 # 3. إدارة الجلسة
@@ -120,6 +105,7 @@ if 'last_question' not in st.session_state: st.session_state.last_question = ""
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
+FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 # ==========================================
 # 4. الاتصال والبيانات
@@ -170,13 +156,16 @@ def get_book_text_from_drive(stage, grade, lang):
         search_query = f"name contains '{file_prefix}_' and name contains '_{lang_code}'"
         
         service = build('drive', 'v3', credentials=creds)
-        results = service.files().list(q=f"{search_query} and mimeType='application/pdf'", fields="files(id, name)").execute()
+        
+        # البحث داخل المجلد المحدد فقط
+        query = f"'{FOLDER_ID}' in parents and {search_query} and mimeType='application/pdf'"
+        
+        results = service.files().list(q=query, fields="files(id, name)").execute()
         files = results.get('files', [])
         
         if not files: return None
         
         full_text = ""
-        # ندمج محتوى كل الكتب التي نجدها (مثلاً فيزياء وكيمياء لنفس الصف)
         for file in files:
             try:
                 request = service.files().get_media(fileId=file['id'])
@@ -187,9 +176,8 @@ def get_book_text_from_drive(stage, grade, lang):
                 
                 file_stream.seek(0)
                 with pdfplumber.open(file_stream) as pdf:
-                    # قراءة عدد صفحات أكبر للتأكد من تغطية المنهج
                     for i, page in enumerate(pdf.pages):
-                        if i > 150: break # حد أقصى للصفحات
+                        if i > 150: break 
                         text = page.extract_text()
                         if text: full_text += text + "\n"
             except: continue
@@ -229,7 +217,7 @@ def text_to_speech_pro(text, lang_code):
     except: return None
 
 # ==========================================
-# 6. الذكاء الاصطناعي (Strict Mode)
+# 6. الذكاء الاصطناعي (Strict)
 # ==========================================
 def get_dynamic_model():
     try:
@@ -252,62 +240,41 @@ def get_ai_response(user_text, img_obj=None):
     if not model_name: return "عذراً، لا توجد نماذج متاحة."
     
     u = st.session_state.user_data
-    
-    # محاولة تحميل الكتاب إذا لم يكن موجوداً
     if not st.session_state.book_content:
         st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
 
-    # 🛑 فحص حاسم: هل الكتاب موجود؟
+    # 🛑 فحص وجود الكتاب
     if not st.session_state.book_content:
-        # إذا لم نجد الكتاب، نرفض العمل كمعلم علوم لمنع الأخطاء
-        return f"عذراً يا {u['name']}، لم أتمكن من العثور على كتاب منهج ({u['grade']} - {u['lang']}) في قاعدة البيانات. يرجى إبلاغ المعلم لرفع الكتاب."
+        return f"⚠️ عذراً يا {u['name']}، لم أتمكن من العثور على كتاب ({u['grade']} - {u['lang']}) في المجلد. يرجى مراجعة القائمة الجانبية (زر التشخيص)."
 
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
     
-    # سياق الكتاب (كبير جداً الآن)
     context = f"هذا هو المرجع الوحيد لك:\n{st.session_state.book_content[:60000]}..."
 
-    # --- منطق الاختبار الصارم ---
     if st.session_state.quiz_active:
         sys_prompt = f"""
-        أنت مصحح اختبارات صارم.
+        أنت مصحح اختبارات.
         السؤال السابق: "{st.session_state.last_question}"
         إجابة الطالب: "{user_text}"
-        المرجع: استخدم النص المرفق فقط.
-        
-        المطلوب:
-        1. صحح الإجابة علمياً.
-        2. اعط درجة من 10.
-        3. وضح الإجابة الصحيحة من الكتاب.
-        4. اسأل الطالب: هل تريد سؤالاً آخر؟
+        المرجع: النص المرفق فقط.
+        المطلوب: 1. صحح الإجابة. 2. اعط درجة من 10. 3. وضح الإجابة من الكتاب. 4. هل تريد سؤالاً آخر؟
         """
         st.session_state.quiz_active = False 
     else:
         is_quiz_request = "اختبار" in user_text or "quiz" in user_text.lower() or "سؤال" in user_text
-        
         if is_quiz_request:
             sys_prompt = f"""
-            أنت واضع اختبارات ملتزم بالمنهج 100%.
+            أنت واضع اختبارات ملتزم بالمنهج.
             {context}
-            
-            تعليمات صارمة:
-            1. ابحث في النص المرفق عن معلومة محددة.
-            2. صغ سؤالاً واحداً حول هذه المعلومة (اختيار من متعدد أو مقالي).
-            3. ⛔ ممنوع طرح أسئلة خارج هذا النص المرفق نهائياً.
-            4. لا تذكر الإجابة.
+            المطلوب: 1. صغ سؤالاً واحداً حول معلومة في النص المرفق. 2. لا تذكر الإجابة. 3. انتظر رد الطالب.
             """
             st.session_state.quiz_active = True 
         else:
             sys_prompt = f"""
             أنت معلم خاص.
             {context}
-            
-            تعليمات صارمة جداً:
-            1. إجابتك يجب أن تكون مستخرجة من النص المرفق فقط.
-            2. إذا لم تجد المعلومة في النص، قل: "هذه المعلومة ليست في كتابك المدرسي المرفق".
-            3. {lang_prompt}
-            4. كن مختصراً.
+            تعليمات: 1. أجب من النص المرفق فقط. 2. {lang_prompt} 3. كن مختصراً.
             """
 
     inputs = [sys_prompt, user_text]
@@ -316,10 +283,7 @@ def get_ai_response(user_text, img_obj=None):
     try:
         model = genai.GenerativeModel(model_name)
         response_text = model.generate_content(inputs).text
-        
-        if st.session_state.quiz_active:
-            st.session_state.last_question = response_text
-            
+        if st.session_state.quiz_active: st.session_state.last_question = response_text
         return response_text
     except Exception as e: return f"خطأ: {e}"
 
@@ -362,12 +326,32 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
-        # مؤشر حالة الكتاب
+        # --- مؤشر الحالة ---
         if st.session_state.book_content:
-            st.success("✅ الكتاب تم تحميله")
+            st.success("✅ الكتاب متصل")
         else:
             st.error("❌ الكتاب غير موجود")
-
+            
+        # --- أداة التشخيص (لحل مشكلتك) ---
+        with st.expander("🛠️ لماذا الكتاب غير موجود؟"):
+            creds = get_credentials()
+            if creds:
+                try:
+                    service = build('drive', 'v3', credentials=creds)
+                    # عرض الملفات الموجودة في المجلد
+                    fid = FOLDER_ID
+                    res = service.files().list(q=f"'{fid}' in parents", fields="files(id, name)").execute()
+                    files = res.get('files', [])
+                    
+                    st.write(f"📁 المجلد يحتوي على {len(files)} ملف:")
+                    for f in files:
+                        st.code(f['name']) # هذا سيرينا الأسماء الحقيقية
+                    
+                    if not files:
+                        st.warning("المجلد فارغ! تأكد من رفع الملفات.")
+                except Exception as e:
+                    st.error(f"خطأ: {e}")
+            
         if st.button("📝 ابدأ اختبار"):
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
              with st.spinner("جاري البحث في الكتاب..."):
