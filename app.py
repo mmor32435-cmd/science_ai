@@ -14,7 +14,7 @@ import tempfile
 import os
 import re
 import io
-import pdfplumber  # المكتبة الجديدة القوية
+import pdfplumber
 
 # ==========================================
 # 1. إعدادات الصفحة
@@ -27,66 +27,129 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم احترافي
+# 2. تصميم الواجهة (إصلاح جذري للكلمات المختفية)
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
+    /* 1. الخط والاتجاه */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
-    .stApp { background-color: #f7f9fc; }
+
+    /* 2. الخلفية العامة */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+
+    /* 3. إصلاح القوائم المنسدلة (الحل النهائي) */
+    /* إزالة أي حدود أو خلفيات للعناصر الداخلية */
+    div[data-baseweb="select"] * {
+        background-color: transparent !important;
+        border: none !important;
+        color: #000000 !important; /* نص أسود إجباري */
+    }
     
-    /* تنسيق الحقول */
-    .stTextInput input, .stSelectbox div {
+    /* تنسيق الحاوية الرئيسية للقائمة فقط */
+    div[data-baseweb="select"] > div {
         background-color: #ffffff !important;
         border: 2px solid #004e92 !important;
-        color: #000000 !important;
-        font-weight: bold !important;
+        border-radius: 8px !important;
     }
     
-    /* الأزرار */
+    /* القائمة المنسدلة نفسها عند الفتح */
+    ul[data-baseweb="menu"] {
+        background-color: #ffffff !important;
+        border: 1px solid #ccc !important;
+    }
+    li[data-baseweb="option"] {
+        color: #000000 !important;
+        background-color: #ffffff !important;
+    }
+    li[data-baseweb="option"]:hover {
+        background-color: #e3f2fd !important;
+    }
+
+    /* 4. حقول الكتابة */
+    .stTextInput input, .stTextArea textarea {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border: 2px solid #004e92 !important;
+        border-radius: 8px !important;
+    }
+
+    /* 5. العناوين والنصوص */
+    h1, h2, h3, h4, h5, p, label, span {
+        color: #000000 !important;
+    }
+
+    /* 6. الأزرار */
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
-        color: #ffffff !important; border: none; height: 50px; font-size: 18px !important;
+        color: #ffffff !important;
+        border: none;
+        border-radius: 10px;
+        height: 55px;
+        width: 100%;
+        font-size: 20px !important;
+        font-weight: bold !important;
     }
-    
+
+    /* 7. العنوان العلوي */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
-        padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
+        padding: 2rem;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-    
+
+    /* 8. فقاعات الشات */
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
-        color: #000000 !important;
+        border-radius: 12px !important;
     }
-    p, div, label { color: #000000 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="header-box"><h1>الأستاذ / السيد البدوي</h1><h3>المنصة التعليمية الذكية</h3></div>""", unsafe_allow_html=True)
+st.markdown("""
+<div class="header-box">
+    <h1>الأستاذ / السيد البدوي</h1>
+    <h3>المنصة التعليمية الذكية</h3>
+</div>
+""", unsafe_allow_html=True)
 
 # ==========================================
-# 3. إدارة الجلسة
+# 3. إدارة الجلسة (إضافة وضع الاختبار)
 # ==========================================
-if 'user_data' not in st.session_state: st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
+if 'user_data' not in st.session_state:
+    st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
 if 'messages' not in st.session_state: st.session_state.messages = []
 if 'book_content' not in st.session_state: st.session_state.book_content = ""
+
+# متغيرات الاختبار الجديد
+if 'quiz_active' not in st.session_state: st.session_state.quiz_active = False
+if 'last_question' not in st.session_state: st.session_state.last_question = ""
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
+# ==========================================
+# 4. الاتصال والبيانات
+# ==========================================
 @st.cache_resource
 def get_credentials():
     if "gcp_service_account" not in st.secrets: return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict: creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
     except: return None
@@ -104,15 +167,11 @@ def check_student_code(input_code):
         return str(input_code).strip() == real_code
     except: return False
 
-# ---------------------------------------------------------
-# 🔥 دالة قراءة الكتب (باستخدام pdfplumber القوي)
-# ---------------------------------------------------------
 @st.cache_resource
 def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        # تحديد اسم الملف
         file_prefix = ""
         if "الثانوية" in stage:
             mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
@@ -125,7 +184,6 @@ def get_book_text_from_drive(stage, grade, lang):
             file_prefix = mapping.get(grade, "Grade4")
             
         lang_code = "Ar" if "العربية" in lang else "En"
-        # البحث عن أي ملف يحتوي على الاسم (لتفادي أخطاء التسمية البسيطة)
         search_query = f"name contains '{file_prefix}_' and name contains '_{lang_code}'"
         
         service = build('drive', 'v3', credentials=creds)
@@ -144,11 +202,9 @@ def get_book_text_from_drive(stage, grade, lang):
                 while done is False: status, done = downloader.next_chunk()
                 
                 file_stream.seek(0)
-                # 🔥 استخدام pdfplumber بدلاً من PyPDF2 لدقة أعلى
                 with pdfplumber.open(file_stream) as pdf:
-                    # قراءة أول 100 صفحة (كمية كافية جداً)
                     for i, page in enumerate(pdf.pages):
-                        if i > 100: break
+                        if i > 80: break # قراءة كافية
                         text = page.extract_text()
                         if text: full_text += text + "\n"
             except: continue
@@ -157,7 +213,7 @@ def get_book_text_from_drive(stage, grade, lang):
     except: return None
 
 # ==========================================
-# 4. الصوت والميكروفون
+# 5. الصوت
 # ==========================================
 def clean_text_for_speech(text):
     return re.sub(r'[\*\#\-\_]', '', text)
@@ -188,7 +244,7 @@ def text_to_speech_pro(text, lang_code):
     except: return None
 
 # ==========================================
-# 5. الذكاء الاصطناعي (منطق مرن)
+# 6. الذكاء الاصطناعي (Logic)
 # ==========================================
 def get_dynamic_model():
     try:
@@ -202,7 +258,7 @@ def get_dynamic_model():
         return valid_models[0]
     except: return None
 
-def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
+def get_ai_response(user_text, img_obj=None):
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys: return "⚠️ المفاتيح مفقودة."
     genai.configure(api_key=random.choice(keys))
@@ -219,38 +275,68 @@ def get_ai_response(user_text, img_obj=None, is_quiz_mode=False):
     
     context = ""
     if st.session_state.book_content:
-        # زيادة حجم السياق
-        context = f"استعن بهذا النص من كتاب الوزارة:\n{st.session_state.book_content[:50000]}..."
-    
-    quiz_instr = "أنشئ سؤالاً واحداً فقط وانتظر الإجابة." if is_quiz_mode else ""
+        context = f"اعتمد على هذا المنهج:\n{st.session_state.book_content[:50000]}..."
 
-    # تخفيف القيود قليلاً (Flexible Curriculum)
-    sys_prompt = f"""
-    أنت معلم علوم خبير (السيد البدوي).
-    {context}
-    
-    التعليمات:
-    1. حاول الإجابة من النص أعلاه قدر الإمكان.
-    2. إذا لم تجد المعلومة حرفياً في النص ولكنها من صلب المنهج العام (علوم/فيزياء/كيمياء)، أجب عليها باختصار ولا تقل "غير موجود".
-    3. {lang_prompt}
-    4. كن مختصراً جداً.
-    5. {quiz_instr}
-    """
-    
+    # --- منطق الاختبار الجديد ---
+    if st.session_state.quiz_active:
+        # نحن الآن في مرحلة "التصحيح"
+        sys_prompt = f"""
+        أنت معلم ومصحح.
+        السؤال الذي طرحته للطالب سابقاً كان: "{st.session_state.last_question}"
+        إجابة الطالب الحالية هي: "{user_text}"
+        
+        المهام المطلوبة منك الآن:
+        1. صحح الإجابة بناءً على المنهج.
+        2. اعط الطالب درجة من 10 (مثلاً: الدرجة: 8/10).
+        3. اشرح الإجابة الصحيحة باختصار.
+        4. شجعه إذا كانت الدرجة عالية.
+        5. اسأله: "هل تريد سؤالاً آخر؟"
+        """
+        # إنهاء وضع الاختبار بعد التصحيح
+        st.session_state.quiz_active = False 
+    else:
+        # فحص هل يطلب الطالب اختباراً جديداً؟
+        is_quiz_request = "اختبار" in user_text or "quiz" in user_text.lower() or "سؤال" in user_text
+        
+        if is_quiz_request:
+            sys_prompt = f"""
+            أنت معلم تضع اختباراً.
+            {context}
+            1. أنشئ سؤالاً واحداً فقط من المنهج (نوع السؤال: {random.choice(['اختيار من متعدد', 'سؤال مقالي قصير', 'أكمل الفراغ'])}).
+            2. لا تذكر الإجابة.
+            3. انتظر رد الطالب.
+            """
+            st.session_state.quiz_active = True # تفعيل وضع الاختبار للرد القادم
+        else:
+            # سؤال عادي
+            sys_prompt = f"""
+            أنت الأستاذ السيد البدوي.
+            {context}
+            1. التزم بالمنهج.
+            2. {lang_prompt}
+            3. كن مختصراً (نقاط).
+            """
+
     inputs = [sys_prompt, user_text]
     if img_obj: inputs.extend([img_obj, "اشرح الصورة."])
 
     try:
         model = genai.GenerativeModel(model_name)
-        return model.generate_content(inputs).text
+        response_text = model.generate_content(inputs).text
+        
+        # حفظ السؤال إذا كنا في وضع الاختبار لكي نستخدمه في التصحيح لاحقاً
+        if st.session_state.quiz_active:
+            st.session_state.last_question = response_text
+            
+        return response_text
     except Exception as e: return f"خطأ: {e}"
 
 # ==========================================
-# 6. الواجهات والتشغيل
+# 7. الواجهات والتشغيل
 # ==========================================
 def celebrate_success():
     st.balloons()
-    st.toast("🌟 Excellent! / ممتاز!", icon="🎉")
+    st.toast("🌟 أحسنت يا بطل!", icon="🎉")
 
 def login_page():
     with st.container():
@@ -283,8 +369,17 @@ def main_app():
     with st.sidebar:
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
-        if st.button("📝 Quiz / اختبار"):
-             st.session_state.messages.append({"role": "user", "content": "اختبرني / Quiz me"})
+        
+        # زر لبدء الاختبار يدوياً
+        if st.button("📝 ابدأ اختبار"):
+             # محاكاة طلب الطالب للاختبار
+             st.session_state.messages.append({"role": "user", "content": "أريد اختباراً متنوعاً."})
+             # إجبار الرد ليكون سؤالاً
+             with st.spinner("جاري إعداد السؤال..."):
+                 resp = get_ai_response("أريد اختباراً متنوعاً.")
+                 st.session_state.messages.append({"role": "assistant", "content": resp})
+                 st.rerun()
+
         st.write("---")
         if st.button("🚪 خروج"):
             st.session_state.user_data["logged_in"] = False
@@ -294,23 +389,23 @@ def main_app():
     
     col1, col2 = st.columns(2)
     with col1:
-        st.info("🎙️ Mic:")
-        audio = mic_recorder(start_prompt="Record ⏺️", stop_prompt="Send ⏹️", key='recorder', format='wav')
+        st.info("🎙️ الميكروفون:")
+        audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
     with col2:
-        with st.expander("📸 Image"):
-            f = st.file_uploader("Upload", type=['jpg', 'png'])
+        with st.expander("📸 صورة"):
+            f = st.file_uploader("رفع", type=['jpg', 'png'])
             img = Image.open(f) if f else None
             if img: st.image(img, width=150)
 
     voice_text = None
     if audio:
-        with st.spinner("Listening..."):
+        with st.spinner("جاري السماع..."):
             voice_text = speech_to_text(audio['bytes'], st.session_state.user_data['lang'])
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.write(msg["content"])
 
-    text_input = st.chat_input("Type here...")
+    text_input = st.chat_input("اكتب إجابتك أو سؤالك هنا...")
     final_q = text_input if text_input else voice_text
 
     if final_q:
@@ -318,12 +413,12 @@ def main_app():
         with st.chat_message("user"): st.write(final_q)
         
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                is_quiz = "اختبار" in final_q or "quiz" in final_q.lower()
-                resp = get_ai_response(final_q, img, is_quiz)
+            with st.spinner("المعلم يكتب..."):
+                resp = get_ai_response(final_q, img)
                 st.write(resp)
                 
-                if any(x in resp.lower() for x in ["أحسنت", "ممتاز", "correct", "good"]): 
+                # إذا كانت النتيجة ممتازة (10/10 أو ممتاز) نحتفل
+                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت"]): 
                     celebrate_success()
                 
                 aud = text_to_speech_pro(resp, st.session_state.user_data['lang'])
