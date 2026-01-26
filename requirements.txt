@@ -12,3 +12,5 @@ SpeechRecognition
 streamlit-mic-recorder
 edge-tts
 pdfplumber
+pdf2image
+pytesseract
