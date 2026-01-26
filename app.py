@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (نظيف وواضح)
+# 2. تصميم الواجهة (عالي الوضوح)
 # ==========================================
 st.markdown("""
 <style>
@@ -51,15 +51,9 @@ st.markdown("""
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
     }
-    ul[data-baseweb="menu"] {
-        background-color: #ffffff !important;
-    }
-    li[data-baseweb="option"] {
-        color: #000000 !important;
-    }
-    li[data-baseweb="option"]:hover {
-        background-color: #e3f2fd !important;
-    }
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
+    li[data-baseweb="option"] { color: #000000 !important; }
+    li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
 
     /* حقول الكتابة */
     .stTextInput input, .stTextArea textarea {
@@ -69,10 +63,8 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    /* النصوص */
+    /* النصوص والأزرار */
     h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
-
-    /* الأزرار */
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -84,15 +76,13 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* العنوان */
+    /* العنوان والشات */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
         padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-
-    /* الشات */
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
@@ -149,41 +139,55 @@ def check_student_code(input_code):
         return str(input_code).strip() == real_code
     except: return False
 
+# ---------------------------------------------------------
+# 🔥 دالة قراءة الكتب (تم تعديلها لتقبل pdf.pdf)
+# ---------------------------------------------------------
 @st.cache_resource
 def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        # نظام التسمية
-        file_prefix = ""
+        # 1. تحديد كلمات البحث (Keywords) بدلاً من الاسم الكامل
+        target_tokens = []
+        
+        # كود المرحلة
         if "الثانوية" in stage:
             mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
-            file_prefix = mapping.get(grade, "Sec1")
+            target_tokens.append(mapping.get(grade, "Sec1"))
         elif "الإعدادية" in stage:
             mapping = {"الأول": "Prep1", "الثاني": "Prep2", "الثالث": "Prep3"}
-            file_prefix = mapping.get(grade, "Prep1")
+            target_tokens.append(mapping.get(grade, "Prep1"))
         else:
             mapping = {"الرابع": "Grade4", "الخامس": "Grade5", "السادس": "Grade6"}
-            file_prefix = mapping.get(grade, "Grade4")
+            target_tokens.append(mapping.get(grade, "Grade4"))
             
+        # كود اللغة
         lang_code = "Ar" if "العربية" in lang else "En"
+        target_tokens.append(lang_code)
         
-        # 🔥 التعديل الجذري: البحث المرن (Fuzzy Search)
-        # نبحث عن أي ملف يحتوي اسمه على الرمز واللغة، بغض النظر عن الامتداد
-        # مثال: سيبحث عن "Prep1" و "Ar" في الاسم
-        
+        # 2. جلب كل الملفات من المجلد
         service = build('drive', 'v3', credentials=creds)
-        
-        # استعلام يبحث عن الملفات التي تحتوي على الرمز واللغة
-        query = f"'{FOLDER_ID}' in parents and name contains '{file_prefix}' and name contains '{lang_code}' and mimeType='application/pdf'"
-        
+        # نطلب كل ملفات PDF في المجلد
+        query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
         results = service.files().list(q=query, fields="files(id, name)").execute()
-        files = results.get('files', [])
+        all_files = results.get('files', [])
         
-        if not files: return None
+        if not all_files: return None
         
+        # 3. الفلترة الذكية (Python Filtering)
+        # سنقبل الملف إذا احتوى اسمه على (الصف) و (اللغة) معاً
+        matched_files = []
+        for f in all_files:
+            fname = f['name']
+            # هل يحتوي الاسم على كل الكلمات المطلوبة؟ (مثلاً Sec3 و Ar)
+            if all(token in fname for token in target_tokens):
+                matched_files.append(f)
+        
+        if not matched_files: return None
+        
+        # 4. قراءة النصوص من الملفات المطابقة
         full_text = ""
-        for file in files:
+        for file in matched_files:
             try:
                 request = service.files().get_media(fileId=file['id'])
                 file_stream = io.BytesIO()
@@ -193,6 +197,7 @@ def get_book_text_from_drive(stage, grade, lang):
                 
                 file_stream.seek(0)
                 with pdfplumber.open(file_stream) as pdf:
+                    # قراءة محتوى كبير لضمان تغطية المنهج
                     for i, page in enumerate(pdf.pages):
                         if i > 150: break 
                         text = page.extract_text()
@@ -257,17 +262,20 @@ def get_ai_response(user_text, img_obj=None):
     if not model_name: return "عذراً، لا توجد نماذج متاحة."
     
     u = st.session_state.user_data
+    
+    # تحميل الكتاب عند الحاجة
     if not st.session_state.book_content:
         st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
 
-    # 🛑 فحص وجود الكتاب
+    # 🛑 فحص صارم للكتاب
     if not st.session_state.book_content:
-        return f"⚠️ عذراً يا {u['name']}، لم أتمكن من العثور على كتاب ({u['grade']} - {u['lang']}) في المجلد. يرجى مراجعة القائمة الجانبية (زر التشخيص)."
+        # رسالة خطأ واضحة في حال عدم التطابق
+        return f"⚠️ لم أتمكن من العثور على كتاب منهج ({u['grade']} - {u['lang']}). تأكد من رفع الملفات وتسميتها بشكل صحيح في جوجل درايف (مثال: Prep1_Ar)."
 
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
     
-    context = f"هذا هو المرجع الوحيد لك:\n{st.session_state.book_content[:60000]}..."
+    context = f"هذا هو المرجع الوحيد لك (محتوى الكتب):\n{st.session_state.book_content[:60000]}..."
 
     if st.session_state.quiz_active:
         sys_prompt = f"""
@@ -343,12 +351,14 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
+        # مؤشر الحالة
         if st.session_state.book_content:
-            st.success("✅ الكتاب متصل")
+            st.success("✅ المنهج متصل")
         else:
-            st.error("❌ الكتاب غير موجود")
+            st.warning("⚠️ جاري البحث عن الكتاب...")
             
-        with st.expander("🛠️ لماذا الكتاب غير موجود؟"):
+        # أداة التشخيص (احتفظنا بها للتأكد)
+        with st.expander("ملفات المنهج"):
             creds = get_credentials()
             if creds:
                 try:
@@ -356,9 +366,8 @@ def main_app():
                     fid = FOLDER_ID
                     res = service.files().list(q=f"'{fid}' in parents", fields="files(id, name)").execute()
                     files = res.get('files', [])
-                    st.write(f"📁 المجلد يحتوي على {len(files)} ملف:")
-                    for f in files: st.code(f['name'])
-                except Exception as e: st.error(f"خطأ: {e}")
+                    st.write(f"عدد الملفات: {len(files)}")
+                except: pass
             
         if st.button("📝 ابدأ اختبار"):
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
