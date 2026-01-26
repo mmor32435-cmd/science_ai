@@ -27,40 +27,30 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (إصلاح جذري للكلمات المختفية)
+# 2. تصميم الواجهة
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     
-    /* 1. الخط والاتجاه */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif !important;
         direction: rtl;
         text-align: right;
     }
+    .stApp { background-color: #f8f9fa; }
 
-    /* 2. الخلفية العامة */
-    .stApp {
-        background-color: #f8f9fa;
-    }
-
-    /* 3. إصلاح القوائم المنسدلة (الحل النهائي) */
-    /* إزالة أي حدود أو خلفيات للعناصر الداخلية */
+    /* قوائم منسدلة نظيفة */
     div[data-baseweb="select"] * {
         background-color: transparent !important;
         border: none !important;
-        color: #000000 !important; /* نص أسود إجباري */
+        color: #000000 !important;
     }
-    
-    /* تنسيق الحاوية الرئيسية للقائمة فقط */
     div[data-baseweb="select"] > div {
         background-color: #ffffff !important;
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
     }
-    
-    /* القائمة المنسدلة نفسها عند الفتح */
     ul[data-baseweb="menu"] {
         background-color: #ffffff !important;
         border: 1px solid #ccc !important;
@@ -73,7 +63,7 @@ st.markdown("""
         background-color: #e3f2fd !important;
     }
 
-    /* 4. حقول الكتابة */
+    /* حقول الكتابة */
     .stTextInput input, .stTextArea textarea {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -81,12 +71,10 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    /* 5. العناوين والنصوص */
-    h1, h2, h3, h4, h5, p, label, span {
-        color: #000000 !important;
-    }
+    /* النصوص */
+    h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
 
-    /* 6. الأزرار */
+    /* الأزرار */
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -98,18 +86,15 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* 7. العنوان العلوي */
+    /* العنوان */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        text-align: center;
-        margin-bottom: 2rem;
+        padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
 
-    /* 8. فقاعات الشات */
+    /* الشات */
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
@@ -121,19 +106,17 @@ st.markdown("""
 st.markdown("""
 <div class="header-box">
     <h1>الأستاذ / السيد البدوي</h1>
-    <h3>المنصة التعليمية الذكية</h3>
+    <h3>المنصة التعليمية الذكية للعلوم (Science Only)</h3>
 </div>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. إدارة الجلسة (إضافة وضع الاختبار)
+# 3. إدارة الجلسة
 # ==========================================
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
 if 'messages' not in st.session_state: st.session_state.messages = []
 if 'book_content' not in st.session_state: st.session_state.book_content = ""
-
-# متغيرات الاختبار الجديد
 if 'quiz_active' not in st.session_state: st.session_state.quiz_active = False
 if 'last_question' not in st.session_state: st.session_state.last_question = ""
 
@@ -141,7 +124,7 @@ TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 
 # ==========================================
-# 4. الاتصال والبيانات
+# 4. الاتصال
 # ==========================================
 @st.cache_resource
 def get_credentials():
@@ -204,7 +187,7 @@ def get_book_text_from_drive(stage, grade, lang):
                 file_stream.seek(0)
                 with pdfplumber.open(file_stream) as pdf:
                     for i, page in enumerate(pdf.pages):
-                        if i > 80: break # قراءة كافية
+                        if i > 80: break
                         text = page.extract_text()
                         if text: full_text += text + "\n"
             except: continue
@@ -275,56 +258,57 @@ def get_ai_response(user_text, img_obj=None):
     
     context = ""
     if st.session_state.book_content:
-        context = f"اعتمد على هذا المنهج:\n{st.session_state.book_content[:50000]}..."
+        context = f"اعتمد حصراً على هذا الكتاب:\n{st.session_state.book_content[:50000]}..."
 
     # --- منطق الاختبار الجديد ---
     if st.session_state.quiz_active:
-        # نحن الآن في مرحلة "التصحيح"
+        # مرحلة التصحيح
         sys_prompt = f"""
-        أنت معلم ومصحح.
-        السؤال الذي طرحته للطالب سابقاً كان: "{st.session_state.last_question}"
-        إجابة الطالب الحالية هي: "{user_text}"
+        أنت معلم علوم فقط (Science Teacher).
+        السؤال السابق: "{st.session_state.last_question}"
+        إجابة الطالب: "{user_text}"
         
-        المهام المطلوبة منك الآن:
-        1. صحح الإجابة بناءً على المنهج.
-        2. اعط الطالب درجة من 10 (مثلاً: الدرجة: 8/10).
-        3. اشرح الإجابة الصحيحة باختصار.
-        4. شجعه إذا كانت الدرجة عالية.
-        5. اسأله: "هل تريد سؤالاً آخر؟"
+        المطلوب:
+        1. صحح الإجابة علمياً (Science/Physics/Chemistry/Biology Only).
+        2. اعط درجة من 10.
+        3. اشرح الإجابة الصحيحة باختصار شديد.
+        4. هل تريد سؤالاً آخر؟
         """
-        # إنهاء وضع الاختبار بعد التصحيح
         st.session_state.quiz_active = False 
     else:
-        # فحص هل يطلب الطالب اختباراً جديداً؟
+        # مرحلة السؤال
         is_quiz_request = "اختبار" in user_text or "quiz" in user_text.lower() or "سؤال" in user_text
         
         if is_quiz_request:
             sys_prompt = f"""
-            أنت معلم تضع اختباراً.
+            أنت معلم علوم فقط (Science/Physics/Chemistry/Biology).
+            ⛔ ممنوع طرح أسئلة في اللغة العربية أو النحو أو التاريخ.
             {context}
-            1. أنشئ سؤالاً واحداً فقط من المنهج (نوع السؤال: {random.choice(['اختيار من متعدد', 'سؤال مقالي قصير', 'أكمل الفراغ'])}).
-            2. لا تذكر الإجابة.
-            3. انتظر رد الطالب.
+            
+            المطلوب:
+            1. أنشئ سؤالاً واحداً في مادة العلوم (أو الفيزياء/الكيمياء/الأحياء حسب صف الطالب).
+            2. نوع السؤال: {random.choice(['اختيار من متعدد', 'مصطلح علمي', 'علل'])}.
+            3. لا تذكر الإجابة.
+            4. انتظر رد الطالب.
             """
-            st.session_state.quiz_active = True # تفعيل وضع الاختبار للرد القادم
+            st.session_state.quiz_active = True 
         else:
             # سؤال عادي
             sys_prompt = f"""
-            أنت الأستاذ السيد البدوي.
+            أنت الأستاذ السيد البدوي (معلم علوم).
             {context}
-            1. التزم بالمنهج.
+            1. التزم بمنهج العلوم المصري.
             2. {lang_prompt}
-            3. كن مختصراً (نقاط).
+            3. كن مختصراً.
             """
 
     inputs = [sys_prompt, user_text]
-    if img_obj: inputs.extend([img_obj, "اشرح الصورة."])
+    if img_obj: inputs.extend([img_obj, "اشرح الصورة علمياً."])
 
     try:
         model = genai.GenerativeModel(model_name)
         response_text = model.generate_content(inputs).text
         
-        # حفظ السؤال إذا كنا في وضع الاختبار لكي نستخدمه في التصحيح لاحقاً
         if st.session_state.quiz_active:
             st.session_state.last_question = response_text
             
@@ -370,13 +354,10 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
-        # زر لبدء الاختبار يدوياً
         if st.button("📝 ابدأ اختبار"):
-             # محاكاة طلب الطالب للاختبار
-             st.session_state.messages.append({"role": "user", "content": "أريد اختباراً متنوعاً."})
-             # إجبار الرد ليكون سؤالاً
+             st.session_state.messages.append({"role": "user", "content": "أريد اختباراً في العلوم."})
              with st.spinner("جاري إعداد السؤال..."):
-                 resp = get_ai_response("أريد اختباراً متنوعاً.")
+                 resp = get_ai_response("أريد اختباراً في العلوم.")
                  st.session_state.messages.append({"role": "assistant", "content": resp})
                  st.rerun()
 
@@ -417,7 +398,6 @@ def main_app():
                 resp = get_ai_response(final_q, img)
                 st.write(resp)
                 
-                # إذا كانت النتيجة ممتازة (10/10 أو ممتاز) نحتفل
                 if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت"]): 
                     celebrate_success()
                 
