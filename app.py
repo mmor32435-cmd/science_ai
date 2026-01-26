@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة
+# 2. تصميم الواجهة (نظيف وواضح)
 # ==========================================
 st.markdown("""
 <style>
@@ -51,9 +51,15 @@ st.markdown("""
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
     }
-    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
-    li[data-baseweb="option"] { color: #000000 !important; }
-    li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
+    ul[data-baseweb="menu"] {
+        background-color: #ffffff !important;
+    }
+    li[data-baseweb="option"] {
+        color: #000000 !important;
+    }
+    li[data-baseweb="option"]:hover {
+        background-color: #e3f2fd !important;
+    }
 
     /* حقول الكتابة */
     .stTextInput input, .stTextArea textarea {
@@ -63,8 +69,10 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    /* النصوص والأزرار */
+    /* النصوص */
     h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
+
+    /* الأزرار */
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -76,13 +84,15 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* العنوان والشات */
+    /* العنوان */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
         padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
+
+    /* الشات */
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
@@ -91,7 +101,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="header-box"><h1>الأستاذ / السيد البدوي</h1><h3>المنصة التعليمية الذكية</h3></div>""", unsafe_allow_html=True)
+st.markdown("""
+<div class="header-box">
+    <h1>الأستاذ / السيد البدوي</h1>
+    <h3>المنصة التعليمية الذكية</h3>
+</div>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 3. إدارة الجلسة
@@ -152,12 +167,13 @@ def get_book_text_from_drive(stage, grade, lang):
             file_prefix = mapping.get(grade, "Grade4")
             
         lang_code = "Ar" if "العربية" in lang else "En"
-        # البحث عن الملفات التي تحتوي على الاسم
+        
+        # 🔥 التعديل الذكي: البحث عن الاسم بغض النظر عن الامتداد المكرر
         search_query = f"name contains '{file_prefix}_' and name contains '_{lang_code}'"
         
         service = build('drive', 'v3', credentials=creds)
         
-        # البحث داخل المجلد المحدد فقط
+        # البحث في المجلد المحدد
         query = f"'{FOLDER_ID}' in parents and {search_query} and mimeType='application/pdf'"
         
         results = service.files().list(q=query, fields="files(id, name)").execute()
@@ -326,31 +342,22 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
-        # --- مؤشر الحالة ---
         if st.session_state.book_content:
             st.success("✅ الكتاب متصل")
         else:
             st.error("❌ الكتاب غير موجود")
             
-        # --- أداة التشخيص (لحل مشكلتك) ---
         with st.expander("🛠️ لماذا الكتاب غير موجود؟"):
             creds = get_credentials()
             if creds:
                 try:
                     service = build('drive', 'v3', credentials=creds)
-                    # عرض الملفات الموجودة في المجلد
                     fid = FOLDER_ID
                     res = service.files().list(q=f"'{fid}' in parents", fields="files(id, name)").execute()
                     files = res.get('files', [])
-                    
                     st.write(f"📁 المجلد يحتوي على {len(files)} ملف:")
-                    for f in files:
-                        st.code(f['name']) # هذا سيرينا الأسماء الحقيقية
-                    
-                    if not files:
-                        st.warning("المجلد فارغ! تأكد من رفع الملفات.")
-                except Exception as e:
-                    st.error(f"خطأ: {e}")
+                    for f in files: st.code(f['name'])
+                except Exception as e: st.error(f"خطأ: {e}")
             
         if st.button("📝 ابدأ اختبار"):
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
