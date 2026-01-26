@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (نظيف وواضح)
+# 2. تصميم الواجهة (عالي الوضوح)
 # ==========================================
 st.markdown("""
 <style>
@@ -40,53 +40,36 @@ st.markdown("""
     }
     .stApp { background-color: #f8f9fa; }
 
-    /* إصلاح القوائم */
-    div[data-baseweb="select"] * {
-        background-color: transparent !important;
-        border: none !important;
-        color: #000000 !important;
-    }
     div[data-baseweb="select"] > div {
         background-color: #ffffff !important;
         border: 2px solid #004e92 !important;
-        border-radius: 8px !important;
+        color: #000000 !important;
     }
-    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
-    li[data-baseweb="option"] { color: #000000 !important; }
-    li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
-
-    /* حقول الكتابة */
     .stTextInput input, .stTextArea textarea {
         background-color: #ffffff !important;
         color: #000000 !important;
         border: 2px solid #004e92 !important;
-        border-radius: 8px !important;
     }
-
-    /* النصوص والأزرار */
-    h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
+    h1, h2, h3, h4, h5, p, label, span, div { color: #000000 !important; }
+    
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
         border: none;
-        border-radius: 10px;
         height: 55px;
         width: 100%;
-        font-size: 20px !important;
-        font-weight: bold !important;
+        font-weight: bold;
     }
 
-    /* العنوان والشات */
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
         padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
+    
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
-        border-radius: 12px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -107,6 +90,7 @@ if 'messages' not in st.session_state: st.session_state.messages = []
 if 'book_content' not in st.session_state: st.session_state.book_content = ""
 if 'quiz_active' not in st.session_state: st.session_state.quiz_active = False
 if 'last_question' not in st.session_state: st.session_state.last_question = ""
+if 'debug_info' not in st.session_state: st.session_state.debug_info = []
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
@@ -140,19 +124,18 @@ def check_student_code(input_code):
     except: return False
 
 # ---------------------------------------------------------
-# 🔥 دالة قراءة الكتب (تم إصلاح منطق البحث)
+# 🔥 دالة قراءة الكتب (تم إضافة تشخيص دقيق للأخطاء)
 # ---------------------------------------------------------
 @st.cache_resource
 def get_book_text_from_drive(stage, grade, lang):
+    st.session_state.debug_info = [] # تصفير السجل
     creds = get_credentials()
     if not creds: return None
     try:
-        # 1. تحديد الرموز (Tokens) بدقة
+        # 1. تحديد كلمات البحث
         target_tokens = []
         
-        # كود المرحلة والصف
         if "الثانوية" in stage:
-            # الصفوف: الأول، الثاني، الثالث
             if "الأول" in grade: target_tokens.append("Sec1")
             elif "الثاني" in grade: target_tokens.append("Sec2")
             elif "الثالث" in grade: target_tokens.append("Sec3")
@@ -160,14 +143,16 @@ def get_book_text_from_drive(stage, grade, lang):
             if "الأول" in grade: target_tokens.append("Prep1")
             elif "الثاني" in grade: target_tokens.append("Prep2")
             elif "الثالث" in grade: target_tokens.append("Prep3")
-        else: # ابتدائي
+        else:
             if "الرابع" in grade: target_tokens.append("Grade4")
             elif "الخامس" in grade: target_tokens.append("Grade5")
             elif "السادس" in grade: target_tokens.append("Grade6")
             
-        # كود اللغة
         lang_code = "Ar" if "العربية" in lang else "En"
         target_tokens.append(lang_code)
+        
+        # تسجيل ما نبحث عنه
+        st.session_state.debug_info.append(f"🔍 أبحث عن ملف يحتوي على: {target_tokens}")
         
         # 2. جلب كل الملفات
         service = build('drive', 'v3', credentials=creds)
@@ -175,25 +160,23 @@ def get_book_text_from_drive(stage, grade, lang):
         results = service.files().list(q=query, fields="files(id, name)").execute()
         all_files = results.get('files', [])
         
-        if not all_files: return None
+        if not all_files:
+            st.session_state.debug_info.append("❌ المجلد فارغ تماماً!")
+            return None
         
-        # 3. الفلترة الذكية (Case Insensitive)
+        # 3. الفلترة
         matched_files = []
         for f in all_files:
-            fname = f['name'].lower() # تحويل الاسم لحروف صغيرة للمقارنة
-            
-            # هل كل الكلمات المطلوبة موجودة في الاسم؟
-            # مثلا: هل 'sec3' و 'ar' موجودين في 'Sec3_Bio_Ar.pdf'؟ نعم.
-            is_match = True
-            for token in target_tokens:
-                if token.lower() not in fname:
-                    is_match = False
-                    break
-            
-            if is_match:
+            fname = f['name']
+            # فحص مرن جداً (Case Insensitive)
+            if all(token.lower() in fname.lower() for token in target_tokens):
                 matched_files.append(f)
         
-        if not matched_files: return None
+        if not matched_files:
+            st.session_state.debug_info.append("❌ لم أجد أي ملف يطابق الاسم المطلوب.")
+            return None
+        
+        st.session_state.debug_info.append(f"✅ وجدت {len(matched_files)} ملفات مطابقة: {[f['name'] for f in matched_files]}")
         
         # 4. قراءة النصوص
         full_text = ""
@@ -211,10 +194,18 @@ def get_book_text_from_drive(stage, grade, lang):
                         if i > 150: break 
                         text = page.extract_text()
                         if text: full_text += text + "\n"
-            except: continue
+            except Exception as e:
+                st.session_state.debug_info.append(f"⚠️ فشل قراءة الملف {file['name']}: {e}")
+                continue
             
-        return full_text if full_text else None
-    except: return None
+        if not full_text:
+            st.session_state.debug_info.append("⚠️ تم فتح الملفات ولكنها فارغة من النصوص (ربما صور ممسوحة؟)")
+            return None
+            
+        return full_text
+    except Exception as e:
+        st.session_state.debug_info.append(f"❌ خطأ غير متوقع: {e}")
+        return None
 
 # ==========================================
 # 5. الصوت
@@ -271,17 +262,20 @@ def get_ai_response(user_text, img_obj=None):
     if not model_name: return "عذراً، لا توجد نماذج متاحة."
     
     u = st.session_state.user_data
+    
+    # محاولة التحميل
     if not st.session_state.book_content:
         st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
 
-    # 🛑 فحص وجود الكتاب
+    # 🛑 إذا فشل التحميل، نعرض رسالة الخطأ من سجل التشخيص
     if not st.session_state.book_content:
-        return f"⚠️ عذراً يا {u['name']}، لم أتمكن من العثور على كتاب منهجك في المجلد. تأكد من أن اسم الملف في جوجل درايف يحتوي على (Sec3 و Ar) مثلاً."
+        debug_msg = "\n".join(st.session_state.debug_info) if st.session_state.debug_info else ""
+        return f"⚠️ عذراً يا {u['name']}، لم أتمكن من قراءة الكتاب. \n\n🔍 **تقرير الخطأ:**\n{debug_msg}"
 
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
     
-    context = f"هذا هو المرجع الوحيد لك (محتوى الكتب):\n{st.session_state.book_content[:60000]}..."
+    context = f"هذا هو المرجع الوحيد لك:\n{st.session_state.book_content[:60000]}..."
 
     if st.session_state.quiz_active:
         sys_prompt = f"""
@@ -337,7 +331,6 @@ def login_page():
                 stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
                 lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
             with col2:
-                # القائمة تحتوي على كل الخيارات
                 grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
             
             submit = st.form_submit_button("🚀 بدء التعلم")
@@ -361,19 +354,12 @@ def main_app():
         if st.session_state.book_content:
             st.success("✅ الكتاب متصل")
         else:
-            st.warning("⚠️ جاري البحث عن الكتاب...")
-            
-        with st.expander("🛠️ لماذا الكتاب غير موجود؟"):
-            creds = get_credentials()
-            if creds:
-                try:
-                    service = build('drive', 'v3', credentials=creds)
-                    fid = FOLDER_ID
-                    res = service.files().list(q=f"'{fid}' in parents", fields="files(id, name)").execute()
-                    files = res.get('files', [])
-                    st.write(f"📁 المجلد يحتوي على {len(files)} ملف:")
-                    for f in files: st.code(f['name'])
-                except Exception as e: st.error(f"خطأ: {e}")
+            st.warning("⚠️ جاري البحث...")
+            # عرض تفاصيل البحث لمساعدتك في فهم المشكلة
+            if st.session_state.debug_info:
+                with st.expander("📝 سجل البحث عن الكتاب"):
+                    for info in st.session_state.debug_info:
+                        st.text(info)
             
         if st.button("📝 ابدأ اختبار"):
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
