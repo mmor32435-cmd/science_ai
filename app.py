@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. تصميم الواجهة (عالي الوضوح)
+# 2. تصميم الواجهة (نظيف وواضح)
 # ==========================================
 st.markdown("""
 <style>
@@ -140,52 +140,62 @@ def check_student_code(input_code):
     except: return False
 
 # ---------------------------------------------------------
-# 🔥 دالة قراءة الكتب (تم تعديلها لتقبل pdf.pdf)
+# 🔥 دالة قراءة الكتب (تم إصلاح منطق البحث)
 # ---------------------------------------------------------
 @st.cache_resource
 def get_book_text_from_drive(stage, grade, lang):
     creds = get_credentials()
     if not creds: return None
     try:
-        # 1. تحديد كلمات البحث (Keywords) بدلاً من الاسم الكامل
+        # 1. تحديد الرموز (Tokens) بدقة
         target_tokens = []
         
-        # كود المرحلة
+        # كود المرحلة والصف
         if "الثانوية" in stage:
-            mapping = {"الأول": "Sec1", "الثاني": "Sec2", "الثالث": "Sec3"}
-            target_tokens.append(mapping.get(grade, "Sec1"))
+            # الصفوف: الأول، الثاني، الثالث
+            if "الأول" in grade: target_tokens.append("Sec1")
+            elif "الثاني" in grade: target_tokens.append("Sec2")
+            elif "الثالث" in grade: target_tokens.append("Sec3")
         elif "الإعدادية" in stage:
-            mapping = {"الأول": "Prep1", "الثاني": "Prep2", "الثالث": "Prep3"}
-            target_tokens.append(mapping.get(grade, "Prep1"))
-        else:
-            mapping = {"الرابع": "Grade4", "الخامس": "Grade5", "السادس": "Grade6"}
-            target_tokens.append(mapping.get(grade, "Grade4"))
+            if "الأول" in grade: target_tokens.append("Prep1")
+            elif "الثاني" in grade: target_tokens.append("Prep2")
+            elif "الثالث" in grade: target_tokens.append("Prep3")
+        else: # ابتدائي
+            if "الرابع" in grade: target_tokens.append("Grade4")
+            elif "الخامس" in grade: target_tokens.append("Grade5")
+            elif "السادس" in grade: target_tokens.append("Grade6")
             
         # كود اللغة
         lang_code = "Ar" if "العربية" in lang else "En"
         target_tokens.append(lang_code)
         
-        # 2. جلب كل الملفات من المجلد
+        # 2. جلب كل الملفات
         service = build('drive', 'v3', credentials=creds)
-        # نطلب كل ملفات PDF في المجلد
         query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
         results = service.files().list(q=query, fields="files(id, name)").execute()
         all_files = results.get('files', [])
         
         if not all_files: return None
         
-        # 3. الفلترة الذكية (Python Filtering)
-        # سنقبل الملف إذا احتوى اسمه على (الصف) و (اللغة) معاً
+        # 3. الفلترة الذكية (Case Insensitive)
         matched_files = []
         for f in all_files:
-            fname = f['name']
-            # هل يحتوي الاسم على كل الكلمات المطلوبة؟ (مثلاً Sec3 و Ar)
-            if all(token in fname for token in target_tokens):
+            fname = f['name'].lower() # تحويل الاسم لحروف صغيرة للمقارنة
+            
+            # هل كل الكلمات المطلوبة موجودة في الاسم؟
+            # مثلا: هل 'sec3' و 'ar' موجودين في 'Sec3_Bio_Ar.pdf'؟ نعم.
+            is_match = True
+            for token in target_tokens:
+                if token.lower() not in fname:
+                    is_match = False
+                    break
+            
+            if is_match:
                 matched_files.append(f)
         
         if not matched_files: return None
         
-        # 4. قراءة النصوص من الملفات المطابقة
+        # 4. قراءة النصوص
         full_text = ""
         for file in matched_files:
             try:
@@ -197,7 +207,6 @@ def get_book_text_from_drive(stage, grade, lang):
                 
                 file_stream.seek(0)
                 with pdfplumber.open(file_stream) as pdf:
-                    # قراءة محتوى كبير لضمان تغطية المنهج
                     for i, page in enumerate(pdf.pages):
                         if i > 150: break 
                         text = page.extract_text()
@@ -262,15 +271,12 @@ def get_ai_response(user_text, img_obj=None):
     if not model_name: return "عذراً، لا توجد نماذج متاحة."
     
     u = st.session_state.user_data
-    
-    # تحميل الكتاب عند الحاجة
     if not st.session_state.book_content:
         st.session_state.book_content = get_book_text_from_drive(u['stage'], u['grade'], u['lang'])
 
-    # 🛑 فحص صارم للكتاب
+    # 🛑 فحص وجود الكتاب
     if not st.session_state.book_content:
-        # رسالة خطأ واضحة في حال عدم التطابق
-        return f"⚠️ لم أتمكن من العثور على كتاب منهج ({u['grade']} - {u['lang']}). تأكد من رفع الملفات وتسميتها بشكل صحيح في جوجل درايف (مثال: Prep1_Ar)."
+        return f"⚠️ عذراً يا {u['name']}، لم أتمكن من العثور على كتاب منهجك في المجلد. تأكد من أن اسم الملف في جوجل درايف يحتوي على (Sec3 و Ar) مثلاً."
 
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
@@ -331,6 +337,7 @@ def login_page():
                 stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
                 lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
             with col2:
+                # القائمة تحتوي على كل الخيارات
                 grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
             
             submit = st.form_submit_button("🚀 بدء التعلم")
@@ -351,14 +358,12 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
-        # مؤشر الحالة
         if st.session_state.book_content:
-            st.success("✅ المنهج متصل")
+            st.success("✅ الكتاب متصل")
         else:
             st.warning("⚠️ جاري البحث عن الكتاب...")
             
-        # أداة التشخيص (احتفظنا بها للتأكد)
-        with st.expander("ملفات المنهج"):
+        with st.expander("🛠️ لماذا الكتاب غير موجود؟"):
             creds = get_credentials()
             if creds:
                 try:
@@ -366,8 +371,9 @@ def main_app():
                     fid = FOLDER_ID
                     res = service.files().list(q=f"'{fid}' in parents", fields="files(id, name)").execute()
                     files = res.get('files', [])
-                    st.write(f"عدد الملفات: {len(files)}")
-                except: pass
+                    st.write(f"📁 المجلد يحتوي على {len(files)} ملف:")
+                    for f in files: st.code(f['name'])
+                except Exception as e: st.error(f"خطأ: {e}")
             
         if st.button("📝 ابدأ اختبار"):
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
