@@ -15,8 +15,9 @@ import os
 import re
 import io
 import pdfplumber
+import time  # ✅ مهم
 
-# 1. إعدادات الصفحة
+# 1) إعدادات الصفحة
 st.set_page_config(
     page_title="المعلم العلمي | السيد البدوي",
     page_icon="🧬",
@@ -24,41 +25,24 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. تصميم الواجهة (عالي الوضوح)
+# 2) تصميم الواجهة
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Cairo', sans-serif !important;
-        direction: rtl;
-        text-align: right;
-    }
+    html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
     .stApp { background-color: #f8f9fa; }
-
-    div[data-baseweb="select"] * {
-        background-color: transparent !important;
-        border: none !important;
-        color: #000000 !important;
-    }
-    div[data-baseweb="select"] > div {
-        background-color: #ffffff !important;
-        border: 2px solid #004e92 !important;
-        border-radius: 8px !important;
-    }
+    div[data-baseweb="select"] * { background-color: transparent !important; border: none !important; color: #000000 !important; }
+    div[data-baseweb="select"] > div { background-color: #ffffff !important; border: 2px solid #004e92 !important; border-radius: 8px !important; }
     ul[data-baseweb="menu"] { background-color: #ffffff !important; }
     li[data-baseweb="option"] { color: #000000 !important; }
     li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
-
     .stTextInput input, .stTextArea textarea {
         background-color: #ffffff !important;
         color: #000000 !important;
         border: 2px solid #004e92 !important;
         border-radius: 8px !important;
     }
-
     h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
-
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -69,14 +53,12 @@ st.markdown("""
         font-size: 20px !important;
         font-weight: bold !important;
     }
-
     .header-box {
         background: linear-gradient(90deg, #000428 0%, #004e92 100%);
         padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-
     .stChatMessage {
         background-color: #ffffff !important;
         border: 1px solid #d1d1d1 !important;
@@ -92,32 +74,40 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# 3. إدارة الجلسة
-if 'user_data' not in st.session_state: 
-    st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
-if 'messages' not in st.session_state: 
+# 3) إدارة الجلسة
+if 'user_data' not in st.session_state:
+    st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية (علوم)"}
+if 'messages' not in st.session_state:
     st.session_state.messages = []
-if 'book_data' not in st.session_state: 
-    st.session_state.book_data = {"type": None, "content": None, "path": None, "text": None, "name": None}
-if 'quiz_active' not in st.session_state: 
-    st.session_state.quiz_active = False
-if 'last_question' not in st.session_state: 
-    st.session_state.last_question = ""
+if 'book_data' not in st.session_state:
+    st.session_state.book_data = {"path": None, "text": None, "name": None}
+if 'quiz_state' not in st.session_state:
+    # quiz_state: "off" | "asking" | "waiting_answer" | "correcting"
+    st.session_state.quiz_state = "off"
+if 'quiz_last_question' not in st.session_state:
+    st.session_state.quiz_last_question = ""
+if 'gemini_file_name' not in st.session_state:
+    st.session_state.gemini_file_name = None  # لعدم الرفع المتكرر
+if 'gemini_model_name' not in st.session_state:
+    st.session_state.gemini_model_name = None
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
-# 4. الاتصال والبيانات
+
+# 4) الاتصال والبيانات
 @st.cache_resource
 def get_credentials():
-    if "gcp_service_account" not in st.secrets: return None
+    if "gcp_service_account" not in st.secrets:
+        return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    except: return None
+    except:
+        return None
 
 def get_gspread_client():
     creds = get_credentials()
@@ -125,16 +115,22 @@ def get_gspread_client():
 
 def check_student_code(input_code):
     client = get_gspread_client()
-    if not client: return False
+    if not client:
+        return False
     try:
         sh = client.open(SHEET_NAME)
         real_code = str(sh.sheet1.acell("B1").value).strip()
         return str(input_code).strip() == real_code
-    except: return False
+    except:
+        return False
 
 def load_book_smartly(stage, grade, lang):
+    """تحميل PDF من Drive + استخراج نص مختصر كخطة بديلة.
+       ملاحظة: Streamlit Cloud مناسب لاستخدام tempdir.
+    """
     creds = get_credentials()
-    if not creds: return None
+    if not creds:
+        return None
     try:
         target_tokens = []
         if "الثانوية" in stage:
@@ -149,136 +145,289 @@ def load_book_smartly(stage, grade, lang):
             if "الرابع" in grade: target_tokens.append("Grade4")
             elif "الخامس" in grade: target_tokens.append("Grade5")
             elif "السادس" in grade: target_tokens.append("Grade6")
-            
+
         lang_code = "Ar" if "العربية" in lang else "En"
         target_tokens.append(lang_code)
-        
+
         service = build('drive', 'v3', credentials=creds)
         query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
         results = service.files().list(q=query, fields="files(id, name)").execute()
         all_files = results.get('files', [])
-        
+
         matched_file = None
         for f in all_files:
             if all(token.lower() in f['name'].lower() for token in target_tokens):
                 matched_file = f
                 break
-        
-        if not matched_file: return None
-        
+
+        if not matched_file:
+            return None
+
         request = service.files().get_media(fileId=matched_file['id'])
-        file_path = f"/tmp/{matched_file['name']}"
+        file_path = os.path.join(tempfile.gettempdir(), matched_file['name'])
+
         with open(file_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
-            while done is False: status, done = downloader.next_chunk()
-        
+            while done is False:
+                status, done = downloader.next_chunk()
+
+        # استخراج نص محدود كـ fallback (تجنّب إرسال نص ضخم يسبب 400)
         text_content = ""
         try:
             with pdfplumber.open(file_path) as pdf:
                 for i, page in enumerate(pdf.pages):
-                    if i > 80: break
+                    if i > 40:  # أقل من السابق لتقليل النص
+                        break
                     extracted = page.extract_text()
-                    if extracted: text_content += extracted + "\n"
-        except: pass
+                    if extracted:
+                        text_content += extracted + "\n"
+        except:
+            pass
 
         return {"path": file_path, "text": text_content, "name": matched_file['name']}
-    except: return None
-       # 5. الصوت
-def clean_text_for_speech(text): return re.sub(r'[\*\#\-\_]', '', text)
+    except:
+        return None
 
-def speech_to_text(audio_bytes, lang_code):
+# 5) الصوت
+def clean_text_for_speech(text):
+    return re.sub(r'[\*\#\-\_]', '', text)
+
+def speech_to_text(audio_bytes, lang_ui):
     r = sr.Recognizer()
     try:
         audio_io = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_io) as source:
             audio_data = r.record(source)
-            code = "en-US" if "English" in lang_code else "ar-EG"
+            code = "en-US" if "English" in lang_ui else "ar-EG"
             return r.recognize_google(audio_data, language=code)
-    except: return None
+    except:
+        return None
 
-async def generate_speech_async(text, lang_code):
+async def generate_speech_async(text, lang_ui):
     cleaned = clean_text_for_speech(text)
-    voice = "en-US-ChristopherNeural" if "English" in lang_code else "ar-EG-ShakirNeural"
+    voice = "en-US-ChristopherNeural" if "English" in lang_ui else "ar-EG-ShakirNeural"
     communicate = edge_tts.Communicate(cleaned, voice)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         await communicate.save(tmp_file.name)
         return tmp_file.name
 
-def text_to_speech_pro(text, lang_code):
+def text_to_speech_pro(text, lang_ui):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        return loop.run_until_complete(generate_speech_async(text, lang_code))
-    except: return None
+        return loop.run_until_complete(generate_speech_async(text, lang_ui))
+    except:
+        return None
 
-# 6. الذكاء الاصطناعي
-def get_working_model():
+# 6) Gemini helpers
+def pick_model():
+    """اختر موديل يشتغل ويدعم generateContent. خزّنه في session لتثبيت الاختيار."""
+    if st.session_state.gemini_model_name:
+        return st.session_state.gemini_model_name
+
     try:
         all_models = genai.list_models()
-        valid_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
-        for m in valid_models:
-            if 'flash' in m.lower(): return m, True
-        for m in valid_models:
-            if 'pro' in m.lower() and '1.5' in m.lower(): return m, True
-        if valid_models: return valid_models[0], False
-        return None, False
-    except: return None, False
+        valid = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
+        # الأفضلية لـ flash
+        for m in valid:
+            if "flash" in m.lower():
+                st.session_state.gemini_model_name = m
+                return m
+        for m in valid:
+            if "pro" in m.lower():
+                st.session_state.gemini_model_name = m
+                return m
+        if valid:
+            st.session_state.gemini_model_name = valid[0]
+            return valid[0]
+    except:
+        pass
+    return None
+
+def ensure_book_loaded():
+    u = st.session_state.user_data
+    if st.session_state.book_data.get("name"):
+        return True
+
+    data = load_book_smartly(u['stage'], u['grade'], u['lang'])
+    if not data:
+        return False
+    st.session_state.book_data = data
+    # عند تغيير الكتاب: صفّر ملف Gemini المرفوع
+    st.session_state.gemini_file_name = None
+    return True
+
+def ensure_gemini_file_uploaded():
+    """يرفع PDF مرة واحدة فقط ويعيد file object."""
+    book = st.session_state.book_data
+    if not book.get("path") or not os.path.exists(book["path"]):
+        return None
+
+    try:
+        if not st.session_state.gemini_file_name:
+            uploaded = genai.upload_file(path=book["path"], display_name=book.get("name") or "book.pdf")
+            # انتظر المعالجة
+            for _ in range(30):
+                f = genai.get_file(uploaded.name)
+                if f.state.name != "PROCESSING":
+                    break
+                time.sleep(1)
+            f = genai.get_file(uploaded.name)
+            if f.state.name == "PROCESSING":
+                # لو طولت جدًا، استخدم fallback النصي بدل ما نكمل ونتسبب في 400
+                return None
+            st.session_state.gemini_file_name = f.name
+            return f
+
+        return genai.get_file(st.session_state.gemini_file_name)
+    except:
+        return None
+
+def pil_to_gemini_image_part(img: Image.Image):
+    """تحويل صورة PIL إلى bytes part لتفادي invalid argument."""
+    if img is None:
+        return None
+    try:
+        buf = io.BytesIO()
+        # PNG آمن
+        img.save(buf, format="PNG")
+        return {"mime_type": "image/png", "data": buf.getvalue()}
+    except:
+        return None
+
+def build_system_prompt(is_english: bool):
+    if is_english:
+        return (
+            "You are Mr. El-Sayed El-Badawy, a science teacher. "
+            "Use ONLY the provided textbook (PDF) as reference. "
+            "Be concise. If the answer is not in the book, say you can't find it in the textbook."
+        )
+    else:
+        return (
+            "أنت الأستاذ السيد البدوي (معلم العلوم). "
+            "استخدم فقط الكتاب المرفق كمرجع. "
+            "كن مختصراً. إذا لم تجد الإجابة في الكتاب فقل: غير موجود في الكتاب."
+        )
 
 def get_ai_response(user_text, img_obj=None):
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
-    if not keys: return "⚠️ المفاتيح مفقودة."
+    if not keys:
+        return "⚠️ المفاتيح مفقودة."
     genai.configure(api_key=random.choice(keys))
-    
+
+    if not ensure_book_loaded():
+        return "⚠️ لم يتم العثور على الكتاب."
+
+    model_name = pick_model()
+    if not model_name:
+        return "⚠️ لا توجد موديلات Gemini متاحة."
+
     u = st.session_state.user_data
-    if not st.session_state.book_data.get("name"):
-        with st.spinner("جاري جلب الكتاب..."):
-            data = load_book_smartly(u['stage'], u['grade'], u['lang'])
-            if data: st.session_state.book_data = data
-            else: return "⚠️ لم يتم العثور على الكتاب."
+    is_english = "English" in u["lang"]
+    sys_prompt = build_system_prompt(is_english)
 
-    model_name, supports_files = get_working_model()
-    if not model_name: return "عذراً، لا توجد موديلات متاحة."
+    # جهّز أجزاء الإدخال
+    file_part = ensure_gemini_file_uploaded()  # قد يرجع None → fallback نصي
+    image_part = pil_to_gemini_image_part(img_obj)
 
-    book_info = st.session_state.book_data
-    inputs = []
-    
-    is_english = "English" in u['lang']
-    lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
-    quiz_instr = "أنشئ سؤالاً واحداً فقط." if st.session_state.quiz_active else ""
-    
-    if supports_files and book_info.get('path') and os.path.exists(book_info['path']):
-        try:
-            gemini_file = genai.upload_file(path=book_info['path'], display_name=book_info['name'])
-            while gemini_file.state.name == "PROCESSING": time.sleep(1); gemini_file = genai.get_file(gemini_file.name)
-            sys_prompt = f"أنت الأستاذ السيد البدوي. المرجع: الملف المرفق. 1. التزم بالمنهج. 2. {lang_prompt} 3. كن مختصراً. 4. {quiz_instr}"
-            inputs = [sys_prompt, gemini_file, user_text]
-        except: supports_files = False
+    # منطق الاختبار: سؤال ثم تصحيح
+    # quiz_state:
+    # - off: محادثة عادية
+    # - asking: نولّد سؤال
+    # - waiting_answer: ننتظر إجابة الطالب
+    # - correcting: نصحح إجابة الطالب
+    quiz_state = st.session_state.quiz_state
 
-    if not supports_files:
-        txt = book_info.get('text', "")
-        context = txt[:40000] if txt else "لا يوجد نص."
-        sys_prompt = f"أنت الأستاذ السيد البدوي. المرجع النصي:\n{context}\n1. أجب من النص فقط. 2. {lang_prompt} 3. كن مختصراً. 4. {quiz_instr}"
-        inputs = [sys_prompt, user_text]
+    if quiz_state == "asking":
+        if is_english:
+            user_text = (
+                "Create ONE short quiz question from the textbook for my grade. "
+                "Return only the question, no solution."
+            )
+        else:
+            user_text = "كوّن سؤال اختبار واحد قصير من المنهج المناسب لصفّي. اكتب السؤال فقط بدون الحل."
 
-    if img_obj: inputs.append(img_obj)
+    elif quiz_state == "correcting":
+        q = st.session_state.quiz_last_question.strip()
+        a = user_text.strip()
+        if is_english:
+            user_text = (
+                f"Grade the student's answer based on the textbook.\n"
+                f"Question: {q}\n"
+                f"Student answer: {a}\n"
+                f"Give a score out of 10 + 1-2 lines feedback."
+            )
+        else:
+            user_text = (
+                f"صحح إجابة الطالب بالرجوع للكتاب.\n"
+                f"السؤال: {q}\n"
+                f"إجابة الطالب: {a}\n"
+                f"أعط درجة من 10 مع تعليق مختصر (سطرين)."
+            )
+
+    # بناء inputs لتفادي 400:
+    # - دائماً نضع sys_prompt أولاً
+    # - ثم file_part (إن وجد)
+    # - ثم الصورة (إن وجدت)
+    # - ثم نص المستخدم
+    inputs = [sys_prompt]
+
+    if file_part is not None:
+        inputs.append(file_part)
+    else:
+        # fallback نصي قصير جداً (تجنّب 400 بسبب طول السياق)
+        txt = st.session_state.book_data.get("text") or ""
+        context = txt[:12000]  # أقل
+        if context.strip():
+            inputs.append(f"Textbook excerpt (may be incomplete):\n{context}")
+
+    if image_part is not None:
+        inputs.append(image_part)
+
+    inputs.append(user_text)
 
     try:
         model = genai.GenerativeModel(model_name)
-        if st.session_state.quiz_active:
-            if st.session_state.last_question:
-                 inputs[-1] = f"أنت مصحح. سألت: '{st.session_state.last_question}' أجاب الطالب: '{user_text}' صحح الإجابة من المرجع واعط درجة."
-                 st.session_state.quiz_active = False; st.session_state.last_question = ""
-            else: st.session_state.last_question = "PENDING"
+        resp = model.generate_content(inputs).text.strip()
 
-        resp = model.generate_content(inputs).text
-        if st.session_state.last_question == "PENDING": st.session_state.last_question = resp
+        # تحديث حالة الاختبار بعد الرد
+        if quiz_state == "asking":
+            st.session_state.quiz_last_question = resp
+            st.session_state.quiz_state = "waiting_answer"
+        elif quiz_state == "correcting":
+            st.session_state.quiz_last_question = ""
+            st.session_state.quiz_state = "off"
+
         return resp
-    except Exception as e: return f"خطأ تقني: {e}"
-# 7. الواجهات
+
+    except Exception as e:
+        # رسالة أوضح + اقتراح fallback لو 400
+        msg = str(e)
+        if "400" in msg or "invalid argument" in msg.lower():
+            # حاول fallback بدون صورة إن كانت سببًا
+            if image_part is not None:
+                try:
+                    inputs_no_img = [x for x in inputs if x is not image_part]
+                    model = genai.GenerativeModel(model_name)
+                    resp = model.generate_content(inputs_no_img).text.strip()
+                    # تحديث حالة الاختبار بنفس المنطق
+                    if quiz_state == "asking":
+                        st.session_state.quiz_last_question = resp
+                        st.session_state.quiz_state = "waiting_answer"
+                    elif quiz_state == "correcting":
+                        st.session_state.quiz_last_question = ""
+                        st.session_state.quiz_state = "off"
+                    return resp
+                except:
+                    pass
+            return "⚠️ خطأ 400: يوجد مُدخل غير صالح (قد تكون صورة/ملف/نص طويل). جرّب بدون صورة أو أعد المحاولة."
+        return f"خطأ تقني: {e}"
+
+# 7) الواجهات
 def celebrate_success():
     st.balloons()
-    st.toast("🌟 أحسنت!", icon="🎉")
+    st.toast("أحسنت!", icon="🎉")
 
 def login_page():
     with st.container():
@@ -293,39 +442,58 @@ def login_page():
                 lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
             with col2:
                 grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
-            
+
             submit = st.form_submit_button("🚀 بدء التعلم")
             if submit:
                 if code == TEACHER_KEY:
                     st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
                     st.rerun()
                 elif check_student_code(code):
-                    st.session_state.user_data.update({"logged_in": True, "role": "Student", "name": name, "stage": stage, "grade": grade, "lang": lang})
-                    st.session_state.book_data = {"type": None, "content": None, "path": None, "text": None, "name": None}
+                    st.session_state.user_data.update({
+                        "logged_in": True, "role": "Student", "name": name,
+                        "stage": stage, "grade": grade, "lang": lang
+                    })
+                    st.session_state.book_data = {"path": None, "text": None, "name": None}
+                    st.session_state.gemini_file_name = None
+                    st.session_state.messages = []
+                    st.session_state.quiz_state = "off"
+                    st.session_state.quiz_last_question = ""
                     st.rerun()
-                else: st.error("❌ الكود غير صحيح")
+                else:
+                    st.error("❌ الكود غير صحيح")
 
 def main_app():
     with st.sidebar:
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
-        st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
-        if st.session_state.book_data.get("name"): st.success("✅ الكتاب جاهز")
-        else: st.warning("⚠️ سيتم تحميل الكتاب...")
-            
+        st.info(f"{st.session_state.user_data.get('grade','')} | {st.session_state.user_data.get('lang','')}")
+        if st.session_state.book_data.get("name"):
+            st.success("✅ الكتاب جاهز")
+        else:
+            st.warning("⚠️ سيتم تحميل الكتاب...")
+
+        st.write("---")
+
+        # زر بدء اختبار: يولد سؤال ثم ينتظر إجابة ثم تصحيح
         if st.button("📝 ابدأ اختبار"):
-             st.session_state.quiz_active = True
-             st.session_state.last_question = ""
-             st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
-             with st.spinner("جاري إعداد السؤال..."):
-                 resp = get_ai_response("أريد اختباراً.")
-                 st.session_state.messages.append({"role": "assistant", "content": resp})
-                 st.rerun()
+            st.session_state.quiz_state = "asking"
+            st.session_state.quiz_last_question = ""
+            st.session_state.messages.append({"role": "user", "content": "ابدأ اختبار"})
+            with st.spinner("جاري إعداد السؤال..."):
+                resp = get_ai_response("ابدأ اختبار")
+                st.session_state.messages.append({"role": "assistant", "content": resp})
+            st.rerun()
+
+        # مؤشر حالة الاختبار
+        if st.session_state.quiz_state == "waiting_answer" and st.session_state.quiz_last_question:
+            st.info("وضع الاختبار: اكتب/قل إجابتك على السؤال الأخير وسيتم تصحيحها.")
+
         st.write("---")
         if st.button("🚪 خروج"):
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
     st.subheader("💬 اسأل المعلم")
+
     col1, col2 = st.columns(2)
     with col1:
         st.info("🎙️ الميكروفون:")
@@ -334,7 +502,8 @@ def main_app():
         with st.expander("📸 صورة"):
             f = st.file_uploader("رفع", type=['jpg', 'png'])
             img = Image.open(f) if f else None
-            if img: st.image(img, width=150)
+            if img:
+                st.image(img, width=150)
 
     voice_text = None
     if audio:
@@ -342,21 +511,37 @@ def main_app():
             voice_text = speech_to_text(audio['bytes'], st.session_state.user_data['lang'])
 
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.write(msg["content"])
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
     text_input = st.chat_input("اكتب إجابتك أو سؤالك هنا...")
     final_q = text_input if text_input else voice_text
 
     if final_q:
+        # لو نحن في انتظار إجابة اختبار → ننتقل للتصحيح
+        if st.session_state.quiz_state == "waiting_answer":
+            st.session_state.quiz_state = "correcting"
+
         st.session_state.messages.append({"role": "user", "content": final_q})
-        with st.chat_message("user"): st.write(final_q)
+        with st.chat_message("user"):
+            st.write(final_q)
+
         with st.chat_message("assistant"):
             with st.spinner("المعلم يفكر..."):
                 resp = get_ai_response(final_q, img)
                 st.write(resp)
-                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت"]): celebrate_success()
+
+                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت", "Excellent", "9/10", "10/10"]):
+                    celebrate_success()
+
                 aud = text_to_speech_pro(resp, st.session_state.user_data['lang'])
-                if aud: st.audio(aud, format='audio/mp3')
+                if aud:
+                    st.audio(aud, format='audio/mp3')
+                    try:
+                        os.remove(aud)
+                    except:
+                        pass
+
         st.session_state.messages.append({"role": "assistant", "content": resp})
 
 if __name__ == "__main__":
