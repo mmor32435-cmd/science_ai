@@ -14,9 +14,10 @@ import tempfile
 import os
 import re
 import io
+import pdfplumber
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم
+# 1. إعدادات الصفحة
 # ==========================================
 st.set_page_config(
     page_title="المعلم العلمي | السيد البدوي",
@@ -25,18 +26,66 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==========================================
+# 2. تصميم الواجهة (نظيف وعالي التباين)
+# ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
+    
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif !important;
+        direction: rtl;
+        text-align: right;
+    }
     .stApp { background-color: #f8f9fa; }
-    div[data-baseweb="select"] > div { background-color: #ffffff !important; border: 2px solid #004e92 !important; }
-    .stTextInput input, .stTextArea textarea { background-color: #ffffff !important; border: 2px solid #004e92 !important; color: #000000 !important; }
-    h1, h2, h3, p, label, span, div { color: #000000 !important; }
-    .stButton>button { background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important; color: #ffffff !important; border: none; height: 50px; width: 100%; font-weight: bold; }
-    .header-box { background: linear-gradient(90deg, #000428 0%, #004e92 100%); padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem; }
+
+    div[data-baseweb="select"] * {
+        background-color: transparent !important;
+        border: none !important;
+        color: #000000 !important;
+    }
+    div[data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        border: 2px solid #004e92 !important;
+        border-radius: 8px !important;
+    }
+    ul[data-baseweb="menu"] { background-color: #ffffff !important; }
+    li[data-baseweb="option"] { color: #000000 !important; }
+    li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
+
+    .stTextInput input, .stTextArea textarea {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border: 2px solid #004e92 !important;
+        border-radius: 8px !important;
+    }
+
+    h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
+
+    .stButton>button {
+        background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
+        color: #ffffff !important;
+        border: none;
+        border-radius: 10px;
+        height: 55px;
+        width: 100%;
+        font-size: 20px !important;
+        font-weight: bold !important;
+    }
+
+    .header-box {
+        background: linear-gradient(90deg, #000428 0%, #004e92 100%);
+        padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
     .header-box h1, .header-box h3 { color: #ffffff !important; }
-    .stChatMessage { background-color: #ffffff !important; border: 1px solid #d1d1d1 !important; }
+
+    .stChatMessage {
+        background-color: #ffffff !important;
+        border: 1px solid #d1d1d1 !important;
+        border-radius: 12px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -47,8 +96,8 @@ st.markdown("""<div class="header-box"><h1>الأستاذ / السيد البد�
 # ==========================================
 if 'user_data' not in st.session_state: st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية"}
 if 'messages' not in st.session_state: st.session_state.messages = []
-# هنا التغيير: سنخزن "مرجع الملف" في Gemini وليس النص
-if 'gemini_file' not in st.session_state: st.session_state.gemini_file = None
+# تخزين نوع الكتاب: إما ملف (للموديلات الحديثة) أو نص (للقديمة)
+if 'book_data' not in st.session_state: st.session_state.book_data = {"type": None, "content": None} 
 if 'quiz_active' not in st.session_state: st.session_state.quiz_active = False
 if 'last_question' not in st.session_state: st.session_state.last_question = ""
 
@@ -83,13 +132,19 @@ def check_student_code(input_code):
     except: return False
 
 # ---------------------------------------------------------
-# 🔥 دالة رفع الكتاب إلى Gemini (الحل الجذري للصور)
+# دالة تحميل الكتاب (ذكية وهجينة)
 # ---------------------------------------------------------
-def upload_book_to_gemini(stage, grade, lang):
+def load_book_smartly(stage, grade, lang):
+    """
+    تحاول هذه الدالة تحميل الكتاب.
+    وتعيد كائناً يحتوي على مسار الملف (للاستخدام مع Flash)
+    ونص الملف (للاستخدام مع Pro كاحتياطي).
+    """
     creds = get_credentials()
     if not creds: return None
+    
     try:
-        # 1. البحث عن الملف في Drive
+        # 1. تحديد الاسم
         target_tokens = []
         if "الثانوية" in stage:
             if "الأول" in grade: target_tokens.append("Sec1")
@@ -112,39 +167,38 @@ def upload_book_to_gemini(stage, grade, lang):
         results = service.files().list(q=query, fields="files(id, name)").execute()
         all_files = results.get('files', [])
         
-        # الفلترة
         matched_file = None
         for f in all_files:
-            fname = f['name']
-            if all(token in fname for token in target_tokens):
+            if all(token in f['name'] for token in target_tokens):
                 matched_file = f
-                break # نأخذ أول ملف مطابق
+                break
         
         if not matched_file: return None
         
-        # 2. تحميل الملف مؤقتاً
+        # 2. تنزيل الملف
         request = service.files().get_media(fileId=matched_file['id'])
-        file_path = f"/tmp/{matched_file['name']}"
+        file_path = f"/tmp/{matched_file['name']}" # حفظ مؤقت
+        file_stream = io.BytesIO()
         with open(file_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while done is False: status, done = downloader.next_chunk()
-            
-        # 3. رفعه إلى Gemini
-        keys = st.secrets.get("GOOGLE_API_KEYS", [])
-        genai.configure(api_key=random.choice(keys))
         
-        uploaded_file = genai.upload_file(path=file_path, display_name=matched_file['name'])
-        
-        # انتظار المعالجة
-        while uploaded_file.state.name == "PROCESSING":
-            time.sleep(2)
-            uploaded_file = genai.get_file(uploaded_file.name)
-            
-        return uploaded_file
+        # 3. قراءة النص احتياطياً (Fallback Text)
+        text_content = ""
+        try:
+            with open(file_path, "rb") as f:
+                with pdfplumber.open(f) as pdf:
+                    for i, page in enumerate(pdf.pages):
+                        if i > 80: break
+                        extracted = page.extract_text()
+                        if extracted: text_content += extracted + "\n"
+        except: pass
+
+        return {"path": file_path, "text": text_content, "name": matched_file['name']}
 
     except Exception as e:
-        print(f"Error uploading to Gemini: {e}")
+        print(f"Error: {e}")
         return None
 
 # ==========================================
@@ -178,8 +232,31 @@ def text_to_speech_pro(text, lang_code):
     except: return None
 
 # ==========================================
-# 6. الذكاء الاصطناعي (مع الكتاب المرفق)
+# 6. الذكاء الاصطناعي (الهجين)
 # ==========================================
+def get_working_model():
+    """
+    تبحث عن موديل شغال في الحساب.
+    تعيد: (اسم الموديل, هل يدعم الملفات؟)
+    """
+    try:
+        all_models = genai.list_models()
+        valid_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
+        
+        # 1. البحث عن Flash (يدعم ملفات)
+        for m in valid_models:
+            if 'flash' in m.lower(): return m, True
+            
+        # 2. البحث عن Pro 1.5 (يدعم ملفات)
+        for m in valid_models:
+            if 'pro' in m.lower() and '1.5' in m.lower(): return m, True
+            
+        # 3. أي موديل آخر (غالباً لا يدعم ملفات مباشرة)
+        if valid_models: return valid_models[0], False
+        
+        return None, False
+    except: return None, False
+
 def get_ai_response(user_text, img_obj=None):
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys: return "⚠️ المفاتيح مفقودة."
@@ -187,57 +264,103 @@ def get_ai_response(user_text, img_obj=None):
     
     u = st.session_state.user_data
     
-    # رفع الكتاب لـ Gemini إذا لم يكن موجوداً
-    if not st.session_state.gemini_file:
-        with st.spinner("جاري قراءة الكتاب (قد يستغرق دقيقة لأول مرة)..."):
-            st.session_state.gemini_file = upload_book_to_gemini(u['stage'], u['grade'], u['lang'])
+    # تحميل الكتاب عند الحاجة
+    if not st.session_state.book_data["content"]:
+        with st.spinner("جاري جلب الكتاب..."):
+            data = load_book_smartly(u['stage'], u['grade'], u['lang'])
+            if data:
+                st.session_state.book_data = data
+            else:
+                return "⚠️ لم يتم العثور على الكتاب."
 
-    if not st.session_state.gemini_file:
-        return f"⚠️ عذراً يا {u['name']}، لم أتمكن من العثور على كتاب المنهج في جوجل درايف."
+    # تحديد الموديل
+    model_name, supports_files = get_working_model()
+    if not model_name: return "عذراً، لا توجد موديلات متاحة."
 
+    # تجهيز المدخلات
+    book_info = st.session_state.book_data
+    inputs = []
+    
+    # التعليمات
     is_english = "English" in u['lang']
     lang_prompt = "Speak ONLY in English." if is_english else "تحدث بالعربية."
-
-    if st.session_state.quiz_active:
-        sys_prompt = f"""
-        أنت مصحح اختبارات. السؤال السابق: "{st.session_state.last_question}". إجابة الطالب: "{user_text}".
-        المرجع: الكتاب المرفق.
-        1. صحح الإجابة. 2. اعط درجة من 10. 3. اشرح من الكتاب. 4. هل تريد سؤالاً آخر؟
-        """
-        st.session_state.quiz_active = False 
-    else:
-        is_quiz_request = "اختبار" in user_text or "quiz" in user_text.lower() or "سؤال" in user_text
-        if is_quiz_request:
-            sys_prompt = f"""
-            أنت واضع اختبارات. استخدم الكتاب المرفق.
-            1. صغ سؤالاً واحداً عن معلومة موجودة في الكتاب. 2. لا تذكر الإجابة. 3. انتظر الرد.
-            """
-            st.session_state.quiz_active = True 
-        else:
-            sys_prompt = f"""
-            أنت معلم خاص. المرجع الوحيد هو الكتاب المرفق.
-            1. أجب من الكتاب فقط. 2. {lang_prompt} 3. كن مختصراً.
-            """
-
-    # إعداد النموذج (Flash يدعم الملفات الكبيرة)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    quiz_instr = "أنشئ سؤالاً واحداً فقط." if st.session_state.quiz_active else ""
     
-    inputs = [sys_prompt, st.session_state.gemini_file, user_text]
+    # السيناريو 1: الموديل يدعم الملفات (Flash/Pro 1.5)
+    if supports_files and os.path.exists(book_info['path']):
+        # رفع الملف لـ Gemini
+        try:
+            gemini_file = genai.upload_file(path=book_info['path'], display_name=book_info['name'])
+            # انتظار المعالجة
+            while gemini_file.state.name == "PROCESSING":
+                time.sleep(1)
+                gemini_file = genai.get_file(gemini_file.name)
+            
+            sys_prompt = f"""
+            أنت الأستاذ السيد البدوي.
+            المرجع: الملف المرفق.
+            1. التزم بالمنهج في الملف.
+            2. {lang_prompt}
+            3. كن مختصراً.
+            4. {quiz_instr}
+            """
+            inputs = [sys_prompt, gemini_file, user_text]
+        except:
+            # فشل الرفع، نعود للنص
+            supports_files = False
+
+    # السيناريو 2: الموديل قديم أو فشل الرفع (نستخدم النص المستخرج)
+    if not supports_files:
+        context = book_info['text'][:40000] if book_info['text'] else "لا يوجد نص."
+        sys_prompt = f"""
+        أنت الأستاذ السيد البدوي.
+        المرجع النصي:
+        {context}
+        
+        1. أجب من النص أعلاه فقط.
+        2. {lang_prompt}
+        3. كن مختصراً.
+        4. {quiz_instr}
+        """
+        inputs = [sys_prompt, user_text]
+
     if img_obj: inputs.append(img_obj)
 
     try:
+        model = genai.GenerativeModel(model_name)
+        
+        # إدارة حالة الاختبار
+        if st.session_state.quiz_active:
+            # إذا كنا في وضع الاختبار، نعدل البرومبت ليصحح
+            if st.session_state.last_question:
+                 # تصحيح
+                 prompt_correction = f"""
+                 أنت مصحح. سألت الطالب: "{st.session_state.last_question}"
+                 أجاب: "{user_text}"
+                 صحح الإجابة من المرجع واعط درجة.
+                 """
+                 inputs[-1] = prompt_correction # استبدال السؤال بتعليمات التصحيح
+                 st.session_state.quiz_active = False
+                 st.session_state.last_question = ""
+            else:
+                 # طرح سؤال جديد
+                 st.session_state.last_question = "PENDING" # علامة مؤقتة
+
         response = model.generate_content(inputs)
-        text_response = response.text
-        if st.session_state.quiz_active: st.session_state.last_question = text_response
-        return text_response
-    except Exception as e: return f"خطأ: {e}"
+        resp_text = response.text
+        
+        if st.session_state.last_question == "PENDING":
+            st.session_state.last_question = resp_text
+            
+        return resp_text
+    except Exception as e: return f"خطأ تقني: {e}"
 
 # ==========================================
-# 7. الواجهات
+# 7. الواجهات والتشغيل
 # ==========================================
 def celebrate_success():
     st.balloons()
-    st.toast("🌟 أحسنت يا بطل!", icon="🎉")
+    st.toast("🌟 أحسنت!", icon="🎉")
 
 def login_page():
     with st.container():
@@ -261,7 +384,7 @@ def login_page():
                     st.rerun()
                 elif check_student_code(code):
                     st.session_state.user_data.update({"logged_in": True, "role": "Student", "name": name, "stage": stage, "grade": grade, "lang": lang})
-                    st.session_state.gemini_file = None # تصفير الكتاب
+                    st.session_state.book_data = {"type": None, "content": None} # تصفير
                     st.rerun()
                 else:
                     st.error("❌ الكود غير صحيح")
@@ -271,14 +394,17 @@ def main_app():
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data['grade']} | {st.session_state.user_data['lang']}")
         
-        if st.session_state.gemini_file:
-            st.success("✅ الكتاب متصل")
+        if st.session_state.book_data["content"] or st.session_state.book_data.get("path"):
+            st.success("✅ الكتاب جاهز")
         else:
-            st.warning("⚠️ جاري تحميل الكتاب...")
+            st.warning("⚠️ سيتم تحميل الكتاب عند أول سؤال...")
             
         if st.button("📝 ابدأ اختبار"):
+             st.session_state.quiz_active = True
+             st.session_state.last_question = "" # تصفير السؤال السابق
              st.session_state.messages.append({"role": "user", "content": "أريد اختباراً."})
-             with st.spinner("جاري البحث في الكتاب..."):
+             
+             with st.spinner("جاري إعداد السؤال..."):
                  resp = get_ai_response("أريد اختباراً.")
                  st.session_state.messages.append({"role": "assistant", "content": resp})
                  st.rerun()
@@ -316,7 +442,7 @@ def main_app():
         with st.chat_message("user"): st.write(final_q)
         
         with st.chat_message("assistant"):
-            with st.spinner("المعلم يراجع الكتاب..."):
+            with st.spinner("المعلم يفكر..."):
                 resp = get_ai_response(final_q, img)
                 st.write(resp)
                 
