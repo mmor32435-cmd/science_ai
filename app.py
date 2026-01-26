@@ -19,6 +19,10 @@ import time
 import traceback
 import json
 
+# OCR deps (تحتاج packages.txt + requirements.txt)
+from pdf2image import convert_from_path
+import pytesseract
+
 # =========================
 # 1) إعدادات الصفحة
 # =========================
@@ -30,7 +34,7 @@ st.set_page_config(
 )
 
 # =========================
-# 2) تصميم الواجهة (CSS آمن لا يُخفي حقول الإدخال)
+# 2) CSS آمن
 # =========================
 st.markdown("""
 <style>
@@ -41,10 +45,8 @@ st.markdown("""
         direction: rtl;
         text-align: right;
     }
-
     .stApp { background-color: #f8f9fa; }
 
-    /* Inputs */
     .stTextInput input, .stTextArea textarea {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -52,7 +54,6 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    /* Selectboxes */
     div[data-baseweb="select"] > div {
         background-color: #ffffff !important;
         border: 2px solid #004e92 !important;
@@ -62,10 +63,8 @@ st.markdown("""
     li[data-baseweb="option"] { color: #000000 !important; }
     li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
 
-    /* Text colors */
     h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
 
-    /* Buttons */
     .stButton>button {
         background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important;
         color: #ffffff !important;
@@ -100,7 +99,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 3) إدارة الجلسة
+# 3) Session state
 # =========================
 if 'user_data' not in st.session_state:
     st.session_state.user_data = {"logged_in": False, "role": None, "name": "", "grade": "", "stage": "", "lang": "العربية (علوم)"}
@@ -112,12 +111,10 @@ if 'quiz_state' not in st.session_state:
     st.session_state.quiz_state = "off"  # off | asking | waiting_answer | correcting
 if 'quiz_last_question' not in st.session_state:
     st.session_state.quiz_last_question = ""
-if 'gemini_file_name' not in st.session_state:
-    st.session_state.gemini_file_name = None
 if 'gemini_model_name' not in st.session_state:
     st.session_state.gemini_model_name = None
 
-# تشخيص
+# Debug
 if 'debug_enabled' not in st.session_state:
     st.session_state.debug_enabled = True
 if 'debug_log' not in st.session_state:
@@ -130,7 +127,7 @@ def dbg(event, data=None):
     if data is not None:
         rec["data"] = data
     st.session_state.debug_log.append(rec)
-    st.session_state.debug_log = st.session_state.debug_log[-300:]
+    st.session_state.debug_log = st.session_state.debug_log[-400:]
 
 
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
@@ -138,7 +135,7 @@ SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 # =========================
-# 4) الاتصال والبيانات
+# 4) Google creds + sheets + drive
 # =========================
 @st.cache_resource
 def get_credentials():
@@ -202,14 +199,12 @@ def load_book_smartly(stage, grade, lang):
             if all(token.lower() in f['name'].lower() for token in target_tokens):
                 matched_file = f
                 break
-
         if not matched_file:
-            dbg("book_not_found", {"stage": stage, "grade": grade, "lang": lang, "tokens": target_tokens, "files": [x["name"] for x in all_files]})
+            dbg("book_not_found", {"tokens": target_tokens, "files": [x["name"] for x in all_files]})
             return None
 
         request = service.files().get_media(fileId=matched_file['id'])
         file_path = os.path.join(tempfile.gettempdir(), matched_file['name'])
-
         with open(file_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
@@ -218,11 +213,12 @@ def load_book_smartly(stage, grade, lang):
 
         dbg("book_downloaded", {"name": matched_file["name"], "path": file_path, "size": os.path.getsize(file_path)})
 
+        # استخراج نص عادي أولاً
         text_content = ""
         try:
             with pdfplumber.open(file_path) as pdf:
                 for i, page in enumerate(pdf.pages):
-                    if i > 40:
+                    if i > 25:
                         break
                     extracted = page.extract_text()
                     if extracted:
@@ -231,10 +227,29 @@ def load_book_smartly(stage, grade, lang):
             dbg("pdf_extract_error", str(e))
 
         dbg("book_text_stats", {"chars": len(text_content)})
-        return {"path": file_path, "text": text_content, "name": matched_file['name']}
+        return {"path": file_path, "text": text_content, "name": matched_file["name"]}
     except Exception as e:
         dbg("load_book_error", {"err": str(e), "trace": traceback.format_exc()})
         return None
+
+# =========================
+# 4.1) OCR (عند النص = 0)
+# =========================
+@st.cache_data(show_spinner=False)
+def ocr_pdf_to_text(pdf_path: str, max_pages: int = 8, lang: str = "ara"):
+    """
+    OCR للـ PDF (مكلف). نحدده بعدد صفحات قليلة للتشخيص/التشغيل.
+    تحتاج poppler + tesseract.
+    """
+    try:
+        pages = convert_from_path(pdf_path, dpi=200, first_page=1, last_page=max_pages)
+        out = []
+        for idx, im in enumerate(pages, start=1):
+            txt = pytesseract.image_to_string(im, lang=lang)
+            out.append(f"\n--- PAGE {idx} ---\n{txt}")
+        return "\n".join(out)
+    except Exception as e:
+        return f"__OCR_ERROR__: {e}"
 
 # =========================
 # 5) الصوت
@@ -272,126 +287,84 @@ def text_to_speech_pro(text, lang_ui):
         return None
 
 # =========================
-# 6) Gemini helpers (تشخيصية)
+# 6) Gemini (نصي فقط لتجنب 400)
 # =========================
-def list_available_models_for_key():
+def list_models_supporting_generate():
     try:
         ms = genai.list_models()
-        out = []
+        valid = []
         for m in ms:
             methods = getattr(m, "supported_generation_methods", []) or []
             if "generateContent" in methods:
-                out.append(m.name)
-        return out
+                valid.append(m.name)
+        return valid
     except Exception as e:
         dbg("list_models_error", {"err": str(e), "trace": traceback.format_exc()})
         return []
 
-def pick_model_debug():
-    """اختيار موديل صحيح من list_models بدل أسماء ثابتة."""
+def pick_model():
     if st.session_state.gemini_model_name:
         return st.session_state.gemini_model_name
-
-    models = list_available_models_for_key()
+    models = list_models_supporting_generate()
     dbg("models_available", {"count": len(models), "models": models[:50]})
-
+    # تفضيل latest ثم flash ثم pro
     preferred = []
     for m in models:
-        if "flash" in m.lower():
+        if "latest" in m.lower():
             preferred.append(m)
     for m in models:
-        if "pro" in m.lower():
+        if "flash" in m.lower() and m not in preferred:
+            preferred.append(m)
+    for m in models:
+        if "pro" in m.lower() and m not in preferred:
             preferred.append(m)
     for m in models:
         if m not in preferred:
             preferred.append(m)
-
     chosen = preferred[0] if preferred else None
     st.session_state.gemini_model_name = chosen
     dbg("model_chosen", {"model": chosen})
     return chosen
 
-def ensure_book_loaded():
-    u = st.session_state.user_data
-    if st.session_state.book_data.get("name"):
-        return True
-    data = load_book_smartly(u['stage'], u['grade'], u['lang'])
-    if not data:
-        return False
-    st.session_state.book_data = data
-    st.session_state.gemini_file_name = None
-    return True
-
-def ensure_gemini_file_uploaded():
-    """يرفع PDF مرة واحدة. لا يرجع الملف إلا إذا حالته صالحة."""
-    book = st.session_state.book_data
-    if not book.get("path") or not os.path.exists(book["path"]):
-        dbg("gemini_file_missing_local", {"path": book.get("path")})
-        return None
-
-    try:
-        if st.session_state.gemini_file_name:
-            f = genai.get_file(st.session_state.gemini_file_name)
-            state = getattr(f, "state", None)
-            dbg("gemini_get_file", {"name": f.name, "state": getattr(state, "name", None)})
-            if state and state.name in ("FAILED",):
-                st.session_state.gemini_file_name = None
-                return None
-            if state and state.name == "PROCESSING":
-                return None
-            return f
-
-        dbg("gemini_upload_start", {"display_name": book.get("name"), "path": book.get("path"), "size": os.path.getsize(book.get("path"))})
-        uploaded = genai.upload_file(path=book["path"], display_name=book.get("name") or "book.pdf")
-
-        for i in range(60):
-            f = genai.get_file(uploaded.name)
-            state = getattr(f, "state", None)
-            dbg("gemini_processing_poll", {"i": i, "file": f.name, "state": getattr(state, "name", None)})
-            if not state:
-                break
-            if state.name == "PROCESSING":
-                time.sleep(1)
-                continue
-            if state.name == "FAILED":
-                return None
-            st.session_state.gemini_file_name = f.name
-            return f
-
-        return None
-    except Exception as e:
-        dbg("gemini_upload_error", {"err": str(e), "trace": traceback.format_exc()})
-        return None
-
 def build_system_prompt(is_english: bool):
     if is_english:
-        return (
-            "You are Mr. El-Sayed El-Badawy, a science teacher. "
-            "Use ONLY the provided textbook (PDF) as reference. "
-            "Be concise. If the answer is not in the book, say you can't find it in the textbook."
-        )
-    else:
-        return (
-            "أنت الأستاذ السيد البدوي (معلم العلوم). "
-            "استخدم فقط الكتاب المرفق كمرجع. "
-            "كن مختصراً. إذا لم تجد الإجابة في الكتاب فقل: غير موجود في الكتاب."
-        )
+        return "You are a science teacher. Answer ONLY from the provided textbook text. Be concise."
+    return "أنت معلم علوم. أجب فقط من نص الكتاب المقدم لك. كن مختصراً."
 
-def get_ai_response(user_text, img_obj=None):
+def ensure_book_loaded_and_text_ready():
+    u = st.session_state.user_data
+    if not st.session_state.book_data.get("name"):
+        data = load_book_smartly(u["stage"], u["grade"], u["lang"])
+        if not data:
+            return False
+        st.session_state.book_data = data
+
+    # لو النص 0 جرّب OCR
+    if not (st.session_state.book_data.get("text") or "").strip():
+        pdf_path = st.session_state.book_data.get("path")
+        if pdf_path and os.path.exists(pdf_path):
+            with st.spinner("الكتاب يبدو مُصوَّراً.. جاري OCR لصفحات محدودة (قد يستغرق وقتاً)..."):
+                lang = "eng" if "English" in u["lang"] else "ara"
+                ocr_text = ocr_pdf_to_text(pdf_path, max_pages=8, lang=lang)
+                dbg("ocr_done", {"len": len(ocr_text), "is_error": "__OCR_ERROR__" in ocr_text})
+                if "__OCR_ERROR__" not in ocr_text:
+                    st.session_state.book_data["text"] = ocr_text
+    return True
+
+def get_ai_response(user_text):
     keys = st.secrets.get("GOOGLE_API_KEYS", [])
     if not keys:
         return "⚠️ المفاتيح مفقودة."
-
     chosen_key = random.choice(keys)
     genai.configure(api_key=chosen_key)
     dbg("gemini_key_chosen", {"last4": chosen_key[-4:] if isinstance(chosen_key, str) else "?"})
 
-    if not ensure_book_loaded():
+    if not ensure_book_loaded_and_text_ready():
         return "⚠️ لم يتم العثور على الكتاب."
 
-    model_name = pick_model_debug()
+    model_name = pick_model()
     if not model_name:
-        return "⚠️ لا توجد موديلات متاحة لهذا المفتاح تدعم generateContent."
+        return "⚠️ لا توجد موديلات متاحة."
 
     u = st.session_state.user_data
     is_english = "English" in u["lang"]
@@ -399,131 +372,88 @@ def get_ai_response(user_text, img_obj=None):
 
     quiz_state = st.session_state.quiz_state
     if quiz_state == "asking":
-        user_text = (
-            "Create ONE short quiz question from the textbook for my grade. Return only the question, no solution."
-            if is_english else
-            "كوّن سؤال اختبار واحد قصير من المنهج المناسب لصفّي. اكتب السؤال فقط بدون الحل."
-        )
+        user_text = "Create ONE short quiz question from the textbook text. Return only the question." if is_english else "كوّن سؤال اختبار واحد قصير من نص الكتاب. اكتب السؤال فقط."
     elif quiz_state == "correcting":
         q = st.session_state.quiz_last_question.strip()
         a = user_text.strip()
-        user_text = (
-            f"Grade the student's answer based on the textbook.\nQuestion: {q}\nStudent answer: {a}\nGive a score out of 10 + 1-2 lines feedback."
-            if is_english else
-            f"صحح إجابة الطالب بالرجوع للكتاب.\nالسؤال: {q}\nإجابة الطالب: {a}\nأعط درجة من 10 مع تعليق مختصر (سطرين)."
-        )
+        user_text = (f"Grade the student's answer based on the textbook text.\nQuestion: {q}\nStudent answer: {a}\nScore /10 + short feedback."
+                     if is_english else
+                     f"صحح إجابة الطالب بالرجوع لنص الكتاب.\nالسؤال: {q}\nإجابة الطالب: {a}\nدرجة /10 + تعليق مختصر.")
 
-    # أثناء التشخيص: لا نرسل صورة إلى Gemini
-    img_obj = None
+    book_text = (st.session_state.book_data.get("text") or "")
+    context = book_text[:18000]  # سياق محدود
 
-    file_part = ensure_gemini_file_uploaded()
-
-    if file_part is not None:
-        inputs = [sys_prompt, file_part, user_text]
-        dbg("inputs_mode", {"mode": "pdf_file", "sys_len": len(sys_prompt), "user_len": len(user_text), "model": model_name})
-    else:
-        txt = st.session_state.book_data.get("text") or ""
-        context = txt[:12000] if txt else ""
-        sys2 = sys_prompt + ("\n\nمرجع نصي مقتطع من الكتاب:\n" + context if context.strip() else "")
-        inputs = [sys2, user_text]
-        dbg("inputs_mode", {"mode": "text_fallback", "sys_len": len(sys2), "user_len": len(user_text), "ctx_len": len(context), "model": model_name})
+    prompt = f"{sys_prompt}\n\nنص الكتاب (مقتطع):\n{context}\n\nسؤال/طلب المستخدم:\n{user_text}"
+    dbg("prompt_stats", {"model": model_name, "prompt_len": len(prompt), "ctx_len": len(context)})
 
     try:
         model = genai.GenerativeModel(model_name)
-        dbg("generate_start", {"model": model_name})
-        resp_obj = model.generate_content(inputs)
-        resp_text = (resp_obj.text or "").strip()
-        dbg("generate_ok", {"resp_len": len(resp_text)})
+        resp = model.generate_content(prompt).text.strip()
+        dbg("generate_ok", {"resp_len": len(resp)})
 
         if quiz_state == "asking":
-            st.session_state.quiz_last_question = resp_text
+            st.session_state.quiz_last_question = resp
             st.session_state.quiz_state = "waiting_answer"
         elif quiz_state == "correcting":
             st.session_state.quiz_last_question = ""
             st.session_state.quiz_state = "off"
 
-        return resp_text if resp_text else "⚠️ لم يصل نص في الاستجابة."
-
+        return resp if resp else "⚠️ لم يصل نص في الاستجابة."
     except Exception as e:
-        err = str(e)
-        dbg("generate_error", {"err": err, "trace": traceback.format_exc(), "model": model_name})
-
-        if "404" in err and "not found" in err.lower():
-            st.session_state.gemini_model_name = None
-            return "⚠️ موديل غير متاح لهذا المفتاح. تم تصفير اختيار الموديل. أعد المحاولة."
-        if "400" in err or "invalid argument" in err.lower():
-            return "⚠️ خطأ 400 (Invalid argument). افتح DEBUG وانسخ السجل."
+        dbg("generate_error", {"err": str(e), "trace": traceback.format_exc(), "model": model_name})
         return f"خطأ تقني: {e}"
 
 # =========================
-# 7) الواجهات
+# 7) UI
 # =========================
 def celebrate_success():
     st.balloons()
     st.toast("أحسنت!", icon="🎉")
 
 def login_page():
-    with st.container():
-        st.markdown("### 🔐 تسجيل الدخول")
-        with st.form("login"):
-            name = st.text_input("الاسم الثلاثي")
-            code = st.text_input("الكود السري", type="password")
-            st.markdown("---")
-            col1, col2 = st.columns(2)
-            with col1:
-                stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
-                lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
-            with col2:
-                grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
+    st.markdown("### 🔐 تسجيل الدخول")
+    with st.form("login"):
+        name = st.text_input("الاسم الثلاثي")
+        code = st.text_input("الكود السري", type="password")
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
+            lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
+        with col2:
+            grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
 
-            submit = st.form_submit_button("🚀 بدء التعلم")
-            if submit:
-                if code == TEACHER_KEY:
-                    st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
-                    st.rerun()
-                elif check_student_code(code):
-                    st.session_state.user_data.update({
-                        "logged_in": True, "role": "Student", "name": name,
-                        "stage": stage, "grade": grade, "lang": lang
-                    })
-                    st.session_state.book_data = {"path": None, "text": None, "name": None}
-                    st.session_state.gemini_file_name = None
-                    st.session_state.gemini_model_name = None
-                    st.session_state.messages = []
-                    st.session_state.quiz_state = "off"
-                    st.session_state.quiz_last_question = ""
-                    st.session_state.debug_log = []
-                    st.rerun()
-                else:
-                    st.error("❌ الكود غير صحيح")
+        submit = st.form_submit_button("🚀 بدء التعلم")
+        if submit:
+            if code == TEACHER_KEY:
+                st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
+                st.rerun()
+            elif check_student_code(code):
+                st.session_state.user_data.update({
+                    "logged_in": True, "role": "Student", "name": name,
+                    "stage": stage, "grade": grade, "lang": lang
+                })
+                st.session_state.book_data = {"path": None, "text": None, "name": None}
+                st.session_state.gemini_model_name = None
+                st.session_state.messages = []
+                st.session_state.quiz_state = "off"
+                st.session_state.quiz_last_question = ""
+                st.session_state.debug_log = []
+                st.rerun()
+            else:
+                st.error("❌ الكود غير صحيح")
 
 def main_app():
     with st.sidebar:
         st.success(f"مرحباً: {st.session_state.user_data['name']}")
         st.info(f"{st.session_state.user_data.get('grade','')} | {st.session_state.user_data.get('lang','')}")
-        if st.session_state.book_data.get("name"):
-            st.success("✅ الكتاب جاهز")
-        else:
-            st.warning("⚠️ سيتم تحميل الكتاب...")
-
         st.write("---")
         st.session_state.debug_enabled = st.checkbox("DEBUG", value=True)
-
-        colA, colB = st.columns(2)
-        with colA:
-            if st.button("مسح سجل DEBUG"):
-                st.session_state.debug_log = []
-                st.rerun()
-        with colB:
-            if st.button("تصفير اختيار الموديل"):
-                st.session_state.gemini_model_name = None
-                st.rerun()
-
-        if st.button("تصفير ملف Gemini المرفوع"):
-            st.session_state.gemini_file_name = None
+        if st.button("مسح سجل DEBUG"):
+            st.session_state.debug_log = []
             st.rerun()
 
-        with st.expander("سجل DEBUG (انسخه عند الخطأ)"):
+        with st.expander("سجل DEBUG"):
             st.code(json.dumps(st.session_state.debug_log, ensure_ascii=False, indent=2))
 
         st.write("---")
@@ -551,12 +481,12 @@ def main_app():
         st.info("🎙️ الميكروفون:")
         audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال ⏹️", key='recorder', format='wav')
     with col2:
-        with st.expander("📸 صورة (موقوفة في النسخة التشخيصية)"):
+        with st.expander("📸 صورة (سيتم تجاهلها حالياً)"):
             f = st.file_uploader("رفع", type=['jpg', 'png'])
             img = Image.open(f) if f else None
             if img:
                 st.image(img, width=150)
-                st.caption("الصورة لا تُرسل إلى Gemini في النسخة التشخيصية.")
+                st.caption("ملاحظة: الصورة غير مستخدمة في هذه النسخة.")
 
     voice_text = None
     if audio:
@@ -580,7 +510,7 @@ def main_app():
 
         with st.chat_message("assistant"):
             with st.spinner("المعلم يفكر..."):
-                resp = get_ai_response(final_q, img_obj=None)
+                resp = get_ai_response(final_q)
                 st.write(resp)
 
                 if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت", "Excellent"]):
