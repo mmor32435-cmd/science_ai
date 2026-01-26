@@ -1,3 +1,6 @@
 ffmpeg
 tesseract-ocr
 poppler-utils
+tesseract-ocr
+tesseract-ocr-ara
+poppler-utils
