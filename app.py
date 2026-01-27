@@ -25,6 +25,10 @@ import google.generativeai as genai
 from pdf2image import convert_from_path
 import pytesseract
 
+# RAG deps (جديد: لتقسيم النص والبحث)
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
 
 # =========================
 # 1) إعدادات الصفحة
@@ -139,6 +143,9 @@ if "debug_enabled" not in st.session_state:
 if "debug_log" not in st.session_state:
     st.session_state.debug_log = []
 
+# (جديد) لتخزين vector store لـ RAG
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
 
 def dbg(event, data=None):
     if not st.session_state.debug_enabled:
@@ -198,7 +205,7 @@ def check_student_code(input_code):
 
 
 # =========================
-# 6) تحميل الكتاب من Drive + استخراج نص مبدئي
+# 6) تحميل الكتاب من Drive + استخراج نص كامل (معدل)
 # =========================
 def load_book_smartly(stage, grade, lang):
     creds = get_credentials()
@@ -262,12 +269,11 @@ def load_book_smartly(stage, grade, lang):
 
         dbg("book_downloaded", {"name": matched_file["name"], "path": file_path, "size": os.path.getsize(file_path)})
 
+        # استخراج النص الكامل (معدل: جميع الصفحات)
         text_content = ""
         try:
             with pdfplumber.open(file_path) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    if i > 25:
-                        break
+                for page in pdf.pages:  # لا حد على الصفحات
                     extracted = page.extract_text()
                     if extracted:
                         text_content += extracted + "\n"
@@ -283,23 +289,16 @@ def load_book_smartly(stage, grade, lang):
 
 
 # =========================
-# 7) OCR (مُحسّن للتشخيص)
+# 7) OCR (معدل: لجميع الصفحات مع caching)
 # =========================
 @st.cache_data(show_spinner=False)
-def ocr_pdf_to_text(pdf_path: str, max_pages: int = 8, lang: str = "ara"):
+def ocr_pdf_to_text(pdf_path: str, lang: str = "ara"):
     """
-    OCR للـ PDF.
-    على Streamlit Cloud تحتاج:
-      packages.txt:
-        poppler-utils
-        tesseract-ocr
-        tesseract-ocr-ara
-      requirements.txt:
-        pdf2image
-        pytesseract
+    OCR للـ PDF الكامل (جميع الصفحات).
+    تحذير: قد يستغرق وقتاً طويلاً لكتب كبيرة (350 صفحة).
     """
     try:
-        pages = convert_from_path(pdf_path, dpi=200, first_page=1, last_page=max_pages)
+        pages = convert_from_path(pdf_path, dpi=200)  # جميع الصفحات
         out = []
         for idx, im in enumerate(pages, start=1):
             txt = pytesseract.image_to_string(im, lang=lang)
@@ -318,23 +317,33 @@ def ensure_book_loaded_and_text_ready():
             return False
         st.session_state.book_data = data
 
-    # لو النص صفر → OCR
+    # لو النص صفر → OCR للكامل
     if not (st.session_state.book_data.get("text") or "").strip():
         pdf_path = st.session_state.book_data.get("path")
         if pdf_path and os.path.exists(pdf_path):
-            with st.spinner("الكتاب يبدو مُصوَّراً.. جاري OCR لصفحات محدودة (قد يستغرق وقتاً)..."):
+            with st.spinner("الكتاب يبدو مُصوَّراً.. جاري OCR لجميع الصفحات (قد يستغرق وقتاً طويلاً)..."):
                 ocr_lang = "eng" if "English" in u["lang"] else "ara"
-                ocr_text = ocr_pdf_to_text(pdf_path, max_pages=8, lang=ocr_lang)
+                ocr_text = ocr_pdf_to_text(pdf_path, lang=ocr_lang)
                 dbg("ocr_done", {"len": len(ocr_text), "is_error": "__OCR_ERROR__" in ocr_text})
                 dbg("ocr_text_preview", {"text": ocr_text[:400]})
                 if "__OCR_ERROR__" not in ocr_text:
                     st.session_state.book_data["text"] = ocr_text
 
+    # (جديد) بناء vector store لـ RAG إذا لم يكن موجوداً
+    if st.session_state.book_data.get("text") and not st.session_state.vectorstore:
+        with st.spinner("جاري بناء فهرس البحث للكتاب الكامل..."):
+            full_text = st.session_state.book_data["text"]
+            text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            chunks = text_splitter.split_text(full_text)
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            st.session_state.vectorstore = FAISS.from_texts(chunks, embeddings)
+            dbg("rag_vectorstore_built", {"chunks_count": len(chunks)})
+
     return True
 
 
 # =========================
-# 8) Gemini (نصي فقط لتفادي 400 الخاص بالملفات)
+# 8) Gemini (معدل: مع RAG بدلاً من النص الكامل)
 # =========================
 def list_models_supporting_generate():
     try:
@@ -415,10 +424,15 @@ def get_ai_response(user_text: str) -> str:
             f"صحح إجابة الطالب بالرجوع لنص الكتاب.\nالسؤال: {q}\nإجابة الطالب: {a}\nدرجة /10 + تعليق مختصر."
         )
 
-    book_text = (st.session_state.book_data.get("text") or "")
-    context = book_text[:18000]
+    # (معدل: استخدام RAG لجلب أجزاء ذات صلة فقط)
+    context = ""
+    if st.session_state.vectorstore:
+        results = st.session_state.vectorstore.similarity_search(user_text, k=5)  # أفضل 5 أجزاء
+        context = "\n".join([doc.page_content for doc in results])
+    else:
+        context = (st.session_state.book_data.get("text") or "")[:18000]  # fallback إذا فشل RAG
 
-    prompt = f"{sys_prompt}\n\nنص الكتاب (مقتطع):\n{context}\n\nسؤال/طلب المستخدم:\n{user_text}"
+    prompt = f"{sys_prompt}\n\nنص الكتاب (مقتطع ذو صلة):\n{context}\n\nسؤال/طلب المستخدم:\n{user_text}"
     dbg("prompt_stats", {"model": model_name, "prompt_len": len(prompt), "ctx_len": len(context)})
 
     try:
@@ -514,6 +528,7 @@ def login_page():
                     "lang": lang
                 })
                 st.session_state.book_data = {"path": None, "text": None, "name": None}
+                st.session_state.vectorstore = None  # (جديد) إعادة تعيين vectorstore
                 st.session_state.gemini_model_name = None
                 st.session_state.messages = []
                 st.session_state.quiz_state = "off"
