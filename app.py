@@ -206,4 +206,135 @@ def load_book_smartly(stage, grade, lang):
     try:
         target_tokens = []
 
-        if "الثانوية" 
+        if "الثانوية" in stage:
+            if "الأول" in grade:
+                target_tokens.append("Sec1")
+            elif "الثاني" in grade:
+                target_tokens.append("Sec2")
+            elif "الثالث" in grade:
+                target_tokens.append("Sec3")
+
+        elif "الإعدادية" in stage:
+            if "الأول" in grade:
+                target_tokens.append("Prep1")
+            elif "الثاني" in grade:
+                target_tokens.append("Prep2")
+            elif "الثالث" in grade:
+                target_tokens.append("Prep3")
+
+        else:
+            if "الرابع" in grade:
+                target_tokens.append("Grade4")
+            elif "الخامس" in grade:
+                target_tokens.append("Grade5")
+            elif "السادس" in grade:
+                target_tokens.append("Grade6")
+
+        lang_code = "Ar" if "العربية" in lang else "En"
+        target_tokens.append(lang_code)
+
+        service = build("drive", "v3", credentials=creds)
+        query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        all_files = results.get("files", [])
+
+        matched_file = None
+        for f in all_files:
+            name = f.get("name", "")
+            if all(tok.lower() in name.lower() for tok in target_tokens):
+                matched_file = f
+                break
+
+        if not matched_file:
+            dbg("book_not_found", {"tokens": target_tokens, "files": [x.get("name") for x in all_files]})
+            return None
+
+        request = service.files().get_media(fileId=matched_file["id"])
+        file_path = os.path.join(tempfile.gettempdir(), matched_file["name"])
+
+        with open(file_path, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+        dbg("book_downloaded", {"name": matched_file["name"], "path": file_path, "size": os.path.getsize(file_path)})
+
+        # استخراج النص الكامل (جميع الصفحات)
+        text_content = ""
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text_content += extracted + "\n"
+        except Exception as e:
+            dbg("pdf_extract_error", str(e))
+
+        dbg("book_text_stats", {"chars": len(text_content)})
+        return {"path": file_path, "text": text_content, "name": matched_file["name"]}
+
+    except Exception as e:
+        dbg("load_book_error", {"err": str(e), "trace": traceback.format_exc()})
+        return None
+
+
+# =========================
+# 7) OCR (لجميع الصفحات مع caching)
+# =========================
+@st.cache_data(show_spinner=False)
+def ocr_pdf_to_text(pdf_path: str, lang: str = "ara"):
+    try:
+        pages = convert_from_path(pdf_path, dpi=200)
+        out = []
+        for idx, im in enumerate(pages, start=1):
+            txt = pytesseract.image_to_string(im, lang=lang)
+            out.append(f"\n--- PAGE {idx} ---\n{txt}")
+        return "\n".join(out)
+    except Exception as e:
+        return f"__OCR_ERROR__:{type(e).__name__}:{e}"
+
+
+def ensure_book_loaded_and_text_ready():
+    u = st.session_state.user_data
+
+    if not st.session_state.book_data.get("name"):
+        data = load_book_smartly(u["stage"], u["grade"], u["lang"])
+        if not data:
+            return False
+        st.session_state.book_data = data
+
+    # لو النص صفر → OCR للكامل
+    if not (st.session_state.book_data.get("text") or "").strip():
+        pdf_path = st.session_state.book_data.get("path")
+        if pdf_path and os.path.exists(pdf_path):
+            with st.spinner("الكتاب يبدو مُصوَّراً.. جاري OCR لجميع الصفحات (قد يستغرق وقتاً طويلاً، كن صبوراً)..."):
+                ocr_lang = "eng" if "English" in u["lang"] else "ara"
+                ocr_text = ocr_pdf_to_text(pdf_path, lang=ocr_lang)
+                dbg("ocr_done", {"len": len(ocr_text), "is_error": "__OCR_ERROR__" in ocr_text})
+                dbg("ocr_text_preview", {"text": ocr_text[:400]})
+                if "__OCR_ERROR__" not in ocr_text:
+                    st.session_state.book_data["text"] = ocr_text
+
+    return True
+
+
+# =========================
+# 8) Gemini (مع حد أكبر للنص)
+# =========================
+def list_models_supporting_generate():
+    try:
+        ms = genai.list_models()
+        valid = []
+        for m in ms:
+            methods = getattr(m, "supported_generation_methods", []) or []
+            if "generateContent" in methods:
+                valid.append(m.name)
+        return valid
+    except Exception as e:
+        dbg("list_models_error", {"err": str(e), "trace": traceback.format_exc()})
+        return []
+
+
+def pick_model():
+    if 
