@@ -425,7 +425,10 @@ def main_app():
                     except: pass
         st.session_state.messages.append({"role": "assistant", "content": resp})
         st.rerun()
-        if __name__ == "__main__":
+# =========================
+# 11) نقطة تشغيل التطبيق
+# =========================
+if __name__ == "__main__":
     if st.session_state.user_data.get("logged_in", False):
         main_app()
     else:
