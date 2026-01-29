@@ -119,4 +119,4 @@ def get_gspread_client():
     return gspread.authorize(creds) if creds else None
 
 def check_student_code(input_code):
-    client = 
+client = get_gspread_client()
