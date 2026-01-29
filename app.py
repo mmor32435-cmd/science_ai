@@ -33,8 +33,21 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 try:
     from langchain.prompts import PromptTemplate
 except Exception:
-    from langchain_core.prompts import PromptTemplatefrom langchain.chains import load_qa_chain
-from langchain_core.documents import Document
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_community.vectorstores import Chroma
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+try:
+    from langchain.prompts import PromptTemplate
+except Exception:
+    from langchain_core.prompts import PromptTemplate
+
+try:
+    from langchain.chains import load_qa_chain
+except Exception:
+    from langchain.chains.question_answering import load_qa_chain
+
+from langchain_core.documents import Documentfrom langchain_core.documents import Document
 
 
 # =========================
