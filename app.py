@@ -1,5 +1,5 @@
 # =========================
-# الجزء 1: المكتبات والإعدادات
+# الجزء 1: المكتبات والإعدادات (مصحح لتفادي أخطاء الاستيراد)
 # =========================
 import streamlit as st
 import os
@@ -28,13 +28,42 @@ from googleapiclient.http import MediaIoBaseDownload
 from pdf2image import convert_from_path
 import pytesseract
 
-# LangChain & AI
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_community.vectorstores import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import PromptTemplate
-from langchain.chains.question_answering import load_qa_chain
-from langchain_core.documents import Document
+# LangChain & AI - (تم إضافة try-except لحل مشاكل الإصدارات)
+try:
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+except ImportError:
+    # Fallback if names changed slightly
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+
+try:
+    from langchain_community.vectorstores import Chroma
+except ImportError:
+    from langchain.vectorstores import Chroma
+
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+try:
+    from langchain_core.prompts import PromptTemplate
+except ImportError:
+    from langchain.prompts import PromptTemplate
+
+# --- إصلاح خطأ load_qa_chain ---
+try:
+    from langchain.chains.question_answering import load_qa_chain
+except ImportError:
+    try:
+        from langchain.chains import load_qa_chain
+    except ImportError:
+        from langchain_community.chains.question_answering import load_qa_chain
+
+try:
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.docstore.document import Document
+
 
 # إعداد الصفحة
 st.set_page_config(
@@ -115,7 +144,7 @@ def init_state():
     if "debug_log" not in st.session_state:
         st.session_state.debug_log = []
     if "book_data" not in st.session_state:
-        st.session_state.book_data = {} # تم التأكد من هذا السطر
+        st.session_state.book_data = {}
     if "vector_store" not in st.session_state:
         st.session_state.vector_store = None
     if "uploaded_context" not in st.session_state:
@@ -164,56 +193,25 @@ def term_token(term: str) -> str:
 
 def drive_tokens(stage: str, grade: str, subject: str, term: str, lang_ui: str) -> Tuple[List[str], List[str]]:
     stage_map = {"الابتدائية": "Grade", "الإعدادية": "Prep", "الثانوية": "Sec"}
-    grade_map 
-# =========================
-# الجزء 2: Google Services & OCR
-# =========================
-@st.cache_resource
-def get_credentials():
-    if "gcp_service_account" not in st.secrets:
-        return None
-    try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    except Exception as e:
-        dbg("creds_error", str(e))
-        return None
+    grade_map = {"الرابع": "4", "الخامس": "5", "السادس": "6", "الأول": "1", "الثاني": "2", "الثالث": "3"}
+    subject_map = {
+        "علوم": "Science",
+        "علوم متكاملة": "Integrated",
+        "كيمياء": "Chemistry",
+        "فيزياء": "Physics",
+        "أحياء": "Biology",
+    }
+    lang_code = "En" if is_english(lang_ui) else "Ar"
+    sg = f"{stage_map.get(stage, '')}{grade_map.get(grade, '')}"
+    sub = subject_map.get(subject, subject)
+    tt = term_token(term)
+    with_term = [sg, sub, tt, lang_code]
+    no_term = [sg, sub, lang_code]
+    return with_term, no_term
 
-@st.cache_resource
-def get_gspread_client():
-    creds = get_credentials()
-    return gspread.authorize(creds) if creds else None
-
-def open_sheet():
-    client = get_gspread_client()
-    if not client:
-        return None
-    try:
-        return client.open(SHEET_NAME)
-    except Exception as e:
-        dbg("open_sheet_error", str(e))
-        return None
-
-def ensure_ws(sh, title: str, headers: List[str]):
-    try:
-        try:
-            ws = sh.worksheet(title)
-        except Exception:
-            ws = sh.add_worksheet(title=title, rows=2000, cols=max(12, len(headers) + 2))
-        first = ws.row_values(1)
-        if not first or all((c.strip() == "" for c in first)):
-            ws.update("A1", [headers])
-        return ws
-    except Exception as e:
-        dbg("ensure_ws_error", {"title": title, "err": str(e)})
-        return None
-
+def sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+# --- نهاية الجزء الأول ---
 def append_row(ws, row: List[Any]) -> bool:
     try:
         ws.append_row([str(x) if x is not None else "" for x in row], value_input_option="USER_ENTERED")
