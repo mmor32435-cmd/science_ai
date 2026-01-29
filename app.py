@@ -29,11 +29,11 @@ import pytesseract
 
 # -- مكتبات الحل الاحترافي (RAG) باستخدام LangChain --
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_community.vectorstores import FAISS  # <--- تم التعديل هنا
+from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
-from langchain_core.documents import Document  # <--- تم التعديل هنا أيضاً للاحتياط
+from langchain_core.documents import Document
 
 # =========================
 # 1) إعدادات الصفحة
@@ -76,7 +76,6 @@ st.markdown("""
     <h3>المنصة التعليمية الذكية</h3>
 </div>
 """, unsafe_allow_html=True)
-
 # =========================
 # 3) Session state + Debug
 # =========================
@@ -111,7 +110,6 @@ TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
 FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
-
 # =========================
 # 5) Google creds + Sheets
 # =========================
@@ -141,8 +139,7 @@ def check_student_code(input_code):
     except Exception as e:
         dbg("check_student_code_error", str(e))
         return False
-
-# =========================
+       # =========================
 # 6) تحميل الكتاب من Drive
 # =========================
 def load_book_from_drive(stage, grade, lang):
@@ -246,7 +243,6 @@ def ensure_book_and_rag_are_ready():
                 st.error(f"حدث خطأ أثناء قراءة الكتاب (OCR): {full_text}")
                 return False
     return st.session_state.vector_store is not None
-
 # =========================
 # 8) Gemini (باستخدام RAG)
 # =========================
@@ -283,8 +279,9 @@ def get_ai_response(user_text: str) -> str:
             final_user_query = f"Based on the provided context, grade the student's answer.\nQuestion: {q}\nStudent answer: {a}\nGive a score out of 10 and short, encouraging feedback." if is_english else f"بناءً على النص المقدم، صحح إجابة الطالب.\nالسؤال: {q}\nإجابة الطالب: {a}\nأعطِ درجة من 10 مع تعليق مختصر ومشجع."
         else:
             final_user_query = user_text
-
-        prompt_template_str = """You are an expert science teacher... (باقي الـ prompt كما هو)""" # أبقيت على الـ prompt كما هو للاختصار
+        
+        prompt_template_str = """You are an expert science teacher. Answer the student's question based ONLY on the provided textbook context. If the answer is not in the context, say 'I cannot find the answer in the provided text'. Be concise and clear. Context: {context} Question: {question} Answer:""" if is_english else """أنت معلم علوم خبير. أجب على سؤال الطالب بالاعتماد الكامل على النص المقدم من كتابه المدرسي. إذا كانت الإجابة غير موجودة، قل 'لا أجد الإجابة في النص المقدم'. كن مختصراً وواضحاً. النص المرجعي: {context} سؤال الطالب: {question} الإجابة:"""
+        
         prompt = PromptTemplate(template=prompt_template_str, input_variables=["context", "question"])
         chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
         resp = chain.invoke({"input_documents": relevant_docs, "question": final_user_query}, return_only_outputs=True).get("output_text", "")
@@ -331,8 +328,7 @@ def text_to_speech_pro(text, lang_ui):
     except Exception as e:
         dbg("tts_error", str(e))
         return None
-
-# =========================
+        # =========================
 # 10) UI
 # =========================
 def celebrate_success():
@@ -429,8 +425,7 @@ def main_app():
                     except: pass
         st.session_state.messages.append({"role": "assistant", "content": resp})
         st.rerun()
-
-if __name__ == "__main__":
+        if __name__ == "__main__":
     if st.session_state.user_data.get("logged_in", False):
         main_app()
     else:
