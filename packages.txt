@@ -1,4 +1,4 @@
-ffmpeg
-tesseract-ocr
 poppler-utils
+tesseract-ocr
 tesseract-ocr-ara
+tesseract-ocr-eng
