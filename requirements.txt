@@ -14,10 +14,9 @@ edge-tts
 pdfplumber
 pdf2image==1.17.0
 pytesseract==0.3.13
-
-# -- مكتبات الحل الاحترافي RAG (نسخة مرنة ومستقرة) --
+# -- مكتبات الحل الاحترافي RAG (النسخة النهائية مع ChromaDB) --
 langchain>=0.2.0
 langchain-community
 langchain-google-genai
 langchain-text-splitters
-# faiss-cpu # <--- تم التعطيل مؤقتاً للتشخيص
+chromadb~=0.5.0
