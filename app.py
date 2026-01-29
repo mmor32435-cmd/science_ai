@@ -1,5 +1,5 @@
 # =========================
-# الجزء 1: المكتبات والإعدادات (مصحح لتفادي أخطاء الاستيراد)
+# الجزء 1: المكتبات والإعدادات (مصحح 100%)
 # =========================
 import streamlit as st
 import os
@@ -28,44 +28,39 @@ from googleapiclient.http import MediaIoBaseDownload
 from pdf2image import convert_from_path
 import pytesseract
 
-# LangChain & AI - (تم إضافة try-except لحل مشاكل الإصدارات)
+# LangChain & AI Imports
+# ---------------------------
+# استخدام المسارات القياسية للإصدارات الحديثة
 try:
     from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 except ImportError:
-    # Fallback if names changed slightly
+    # في حالة عدم التثبيت الصحيح، نعيد المحاولة
+    import langchain_google_genai
     from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 
-try:
-    from langchain_community.vectorstores import Chroma
-except ImportError:
-    from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-
+# التعامل مع PromptTemplate
 try:
     from langchain_core.prompts import PromptTemplate
 except ImportError:
     from langchain.prompts import PromptTemplate
 
-# --- إصلاح خطأ load_qa_chain ---
-try:
-    from langchain.chains.question_answering import load_qa_chain
-except ImportError:
-    try:
-        from langchain.chains import load_qa_chain
-    except ImportError:
-        from langchain_community.chains.question_answering import load_qa_chain
+# التعامل مع load_qa_chain (هنا كان الخطأ)
+# المسار القياسي هو langchain.chains.question_answering
+from langchain.chains.question_answering import load_qa_chain
 
+# التعامل مع Document
 try:
     from langchain_core.documents import Document
 except ImportError:
     from langchain.docstore.document import Document
 
 
+# =========================
 # إعداد الصفحة
+# =========================
 st.set_page_config(
     page_title="المعلم العلمي | السيد البدوي",
     page_icon="🧬",
@@ -211,8 +206,7 @@ def drive_tokens(stage: str, grade: str, subject: str, term: str, lang_ui: str) 
 
 def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
-# --- نهاية الجزء الأول ---
-def append_row(ws, row: List[Any]) -> bool:
+# --- نهاية الجزء الأول المصحح ---def append_row(ws, row: List[Any]) -> bool:
     try:
         ws.append_row([str(x) if x is not None else "" for x in row], value_input_option="USER_ENTERED")
         return True
