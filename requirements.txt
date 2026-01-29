@@ -15,8 +15,8 @@ pdfplumber
 pdf2image==1.17.0
 pytesseract==0.3.13
 # -- مكتبات الحل الاحترافي RAG --
-langchain>=0.1.0  # <--- تم التعديل هنا لضمان إصدار حديث
-langchain-community
-langchain-google-genai
-langchain-text-splitters
+langchain==0.1.20  # <--- تم التثبيت على نسخة محددة وثابتة
+langchain-community==0.0.38
+langchain-google-genai==0.1.6
+langchain-text-splitters==0.0.1
 faiss-cpu
