@@ -8,9 +8,10 @@ edge-tts
 pdf2image
 pytesseract
 pillow
-langchain
-langchain-community
-langchain-core
-langchain-google-genai
+# تثبيت إصدارات مستقرة لحل مشكلة Import Error
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-core==0.1.52
+langchain-google-genai==1.0.3
 langchain-text-splitters
 chromadb
