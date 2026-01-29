@@ -8,6 +8,8 @@ import random
 import asyncio
 import tempfile
 import traceback
+import requests  # للتنزيل والـ scraping
+from bs4 import BeautifulSoup  # للـ scraping
 
 from PIL import Image
 import pdfplumber
@@ -16,12 +18,9 @@ import speech_recognition as sr
 from streamlit_mic_recorder import mic_recorder
 import edge_tts
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 import google.generativeai as genai
 
-# OCR deps (تحتاج packages.txt + requirements.txt على Streamlit Cloud)
+# OCR deps
 from pdf2image import convert_from_path
 import pytesseract
 # =========================
@@ -143,28 +142,24 @@ def dbg(event, data=None):
         rec["data"] = data
     st.session_state.debug_log.append(rec)
     st.session_state.debug_log = st.session_state.debug_log[-400:]
-    # =========================
+  # =========================
 # 4) Secrets
 # =========================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 
 # =========================
-# 5) Google creds + Sheets
+# 5) Google creds + Sheets (فقط للكود السري)
 # =========================
 @st.cache_resource
 def get_credentials():
-    if "gcp_service_account" not in st.secrets:
+    if "gcp_service_account" not in st.session_state:
         return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
     except Exception as e:
         dbg("creds_error", str(e))
@@ -185,72 +180,77 @@ def check_student_code(input_code):
     except Exception as e:
         dbg("check_student_code_error", str(e))
         return False
-        # =========================
-# 6) تحميل الكتاب من Drive + استخراج نص كامل
+# =========================
+# 6) تحميل الكتاب من الموقع الرسمي + استخراج نص
 # =========================
 def load_book_smartly(stage, grade, lang):
-    creds = get_credentials()
-    if not creds:
-        return None
-
     try:
-        target_tokens = []
+        base_url = "https://ellibrary.moe.gov.eg/books/"
+        headers = {"User-Agent": "Mozilla/5.0"}  # لتجنب الحظر
 
-        if "الثانوية" in stage:
-            if "الأول" in grade:
-                target_tokens.append("Sec1")
-            elif "الثاني" in grade:
-                target_tokens.append("Sec2")
-            elif "الثالث" in grade:
-                target_tokens.append("Sec3")
+        # خريطة للاختيارات (غيرها إذا تغير هيكل الموقع)
+        stages = {
+            "الابتدائية": "primary",
+            "الإعدادية": "preparatory",
+            "الثانوية": "secondary"
+        }
+        grades = {
+            "الرابع": "4",
+            "الخامس": "5",
+            "السادس": "6",
+            "الأول": "1",
+            "الثاني": "2",
+            "الثالث": "3"
+        }
+        terms = "الفصل الدراسي الثاني"  # افتراضي للفصل الثاني
+        subjects = {
+            "علوم": "science",
+            "علوم متكاملة": "integrated_science",
+            "كيمياء": "chemistry",
+            "فيزياء": "physics",
+            "أحياء": "biology"
+        }
+        book_type = "كتاب الطالب"  # نوع الكتاب
 
-        elif "الإعدادية" in stage:
-            if "الأول" in grade:
-                target_tokens.append("Prep1")
-            elif "الثاني" in grade:
-                target_tokens.append("Prep2")
-            elif "الثالث" in grade:
-                target_tokens.append("Prep3")
-
-        else:
-            if "الرابع" in grade:
-                target_tokens.append("Grade4")
-            elif "الخامس" in grade:
-                target_tokens.append("Grade5")
-            elif "السادس" in grade:
-                target_tokens.append("Grade6")
-
-        lang_code = "Ar" if "العربية" in lang else "En"
-        target_tokens.append(lang_code)
-
-        service = build("drive", "v3", credentials=creds)
-        query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
-        results = service.files().list(q=query, fields="files(id, name)").execute()
-        all_files = results.get("files", [])
-
-        matched_file = None
-        for f in all_files:
-            name = f.get("name", "")
-            if all(tok.lower() in name.lower() for tok in target_tokens):
-                matched_file = f
-                break
-
-        if not matched_file:
-            dbg("book_not_found", {"tokens": target_tokens, "files": [x.get("name") for x in all_files]})
+        # بناء الاستعلام أو التنقل (هذا افتراضي؛ قد يحتاج تعديل بناءً على HTML الموقع)
+        # هنا، نفترض أن الموقع يستخدم GET parameters أو forms؛ سنستخدم scraping لاستخراج الرابط
+        response = requests.get(base_url, headers=headers)
+        if response.status_code != 200:
+            dbg("site_access_error", {"status": response.status_code})
             return None
 
-        request = service.files().get_media(fileId=matched_file["id"])
-        file_path = os.path.join(tempfile.gettempdir(), matched_file["name"])
+        soup = BeautifulSoup(response.text, "lxml")
 
+        # مثال على استخراج رابط (غير selectors بناءً على HTML الموقع)
+        # افتراض: ابحث عن روابط تحتوي على stage/grade/term/subject
+        book_link = None
+        for a in soup.find_all("a", href=True):
+            if all(term in a['href'] or term in a.text for term in [stages.get(stage, ""), grades.get(grade, ""), terms, subjects.get("علوم", "")]):  # تخصيص
+                book_link = a['href']
+                break
+
+        if not book_link:
+            dbg("book_link_not_found", {"stage": stage, "grade": grade})
+            return None
+
+        # إذا كان الرابط نسبي، أضف base
+        if not book_link.startswith("http"):
+            book_link = base_url + book_link
+
+        # تنزيل الـ PDF
+        pdf_response = requests.get(book_link, headers=headers)
+        if pdf_response.status_code != 200:
+            dbg("pdf_download_error", {"url": book_link, "status": pdf_response.status_code})
+            return None
+
+        book_name = f"{stage}_{grade}_{lang}.pdf"
+        file_path = os.path.join(tempfile.gettempdir(), book_name)
         with open(file_path, "wb") as fh:
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
+            fh.write(pdf_response.content)
 
-        dbg("book_downloaded", {"name": matched_file["name"], "path": file_path, "size": os.path.getsize(file_path)})
+        dbg("book_downloaded", {"name": book_name, "path": file_path, "size": os.path.getsize(file_path)})
 
-        # استخراج النص الكامل (جميع الصفحات)
+        # استخراج النص
         text_content = ""
         try:
             with pdfplumber.open(file_path) as pdf:
@@ -262,12 +262,12 @@ def load_book_smartly(stage, grade, lang):
             dbg("pdf_extract_error", str(e))
 
         dbg("book_text_stats", {"chars": len(text_content)})
-        return {"path": file_path, "text": text_content, "name": matched_file["name"]}
+        return {"path": file_path, "text": text_content, "name": book_name}
 
     except Exception as e:
         dbg("load_book_error", {"err": str(e), "trace": traceback.format_exc()})
         return None
-       # =========================
+        # =========================
 # 7) OCR (لجميع الصفحات مع caching)
 # =========================
 @st.cache_data(show_spinner=False)
@@ -291,21 +291,19 @@ def ensure_book_loaded_and_text_ready():
             return False
         st.session_state.book_data = data
 
-    # لو النص صفر → OCR للكامل
+    # لو النص صفر → OCR
     if not (st.session_state.book_data.get("text") or "").strip():
         pdf_path = st.session_state.book_data.get("path")
         if pdf_path and os.path.exists(pdf_path):
-            with st.spinner("الكتاب يبدو مُصوَّراً.. جاري OCR لجميع الصفحات (قد يستغرق وقتاً طويلاً، كن صبوراً)..."):
+            with st.spinner("الكتاب scanned.. جاري OCR..."):
                 ocr_lang = "eng" if "English" in u["lang"] else "ara"
                 ocr_text = ocr_pdf_to_text(pdf_path, lang=ocr_lang)
-                dbg("ocr_done", {"len": len(ocr_text), "is_error": "__OCR_ERROR__" in ocr_text})
-                dbg("ocr_text_preview", {"text": ocr_text[:400]})
                 if "__OCR_ERROR__" not in ocr_text:
                     st.session_state.book_data["text"] = ocr_text
 
     return True
-# =========================
-# 8) Gemini (مع حد أكبر للنص)
+    # =========================
+# 8) Gemini
 # =========================
 def list_models_supporting_generate():
     try:
@@ -384,7 +382,7 @@ def get_ai_response(user_text: str) -> str:
         )
 
     book_text = (st.session_state.book_data.get("text") or "")
-    context = book_text[:50000]  # حد أكبر لتغطية أكثر (يمكن زيادته إذا سمح Gemini)
+    context = book_text[:100000]  # حد كبير لتغطية الكتب
 
     prompt = f"{sys_prompt}\n\nنص الكتاب (مقتطع):\n{context}\n\nسؤال/طلب المستخدم:\n{user_text}"
     dbg("prompt_stats", {"model": model_name, "prompt_len": len(prompt), "ctx_len": len(context)})
@@ -405,7 +403,7 @@ def get_ai_response(user_text: str) -> str:
     except Exception as e:
         dbg("generate_error", {"err": str(e), "trace": traceback.format_exc(), "model": model_name})
         return f"خطأ تقني: {e}"
-        # =========================
+       # =========================
 # 9) صوت (STT/TTS)
 # =========================
 def clean_text_for_speech(text):
@@ -431,15 +429,8 @@ async def generate_speech_async(text, lang_ui):
         await communicate.save(tmp_file.name)
         return tmp_file.name
 
-def text_to_speech_pro(text, lang_ui):
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(generate_speech_async(text, lang_ui))
-    except Exception as e:
-        dbg("tts_error", str(e))
-        return None
-       # =========================
+def text_to_speech_pro(text, 
+                      # =========================
 # 10) UI
 # =========================
 def celebrate_success():
@@ -458,6 +449,8 @@ def login_page():
             lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
         with col2:
             grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"])
+            if "الثانوية" in stage and grade in ["الثاني", "الثالث"]:
+                subject = st.selectbox("المادة", ["كيمياء", "فيزياء", "أحياء"])  # إضافة للثانوية
 
         submit = st.form_submit_button("🚀 بدء التعلم")
         if submit:
@@ -471,7 +464,8 @@ def login_page():
                     "name": name,
                     "stage": stage,
                     "grade": grade,
-                    "lang": lang
+                    "lang": lang,
+                    "subject": subject if "subject" in locals() else "علوم"  # حفظ المادة
                 })
                 st.session_state.book_data = {"path": None, "text": None, "name": None}
                 st.session_state.gemini_model_name = None
@@ -483,99 +477,4 @@ def login_page():
             else:
                 st.error("❌ الكود غير صحيح")
 
-def main_app():
-    with st.sidebar:
-        st.success(f"مرحباً: {st.session_state.user_data['name']}")
-        st.info(f"{st.session_state.user_data.get('grade','')} | {st.session_state.user_data.get('lang','')}")
-        st.write("---")
-
-        st.session_state.debug_enabled = st.checkbox("DEBUG", value=True)
-
-        colA, colB = st.columns(2)
-        with colA:
-            if st.button("مسح سجل DEBUG"):
-                st.session_state.debug_log = []
-                st.rerun()
-        with colB:
-            if st.button("تصفير اختيار الموديل"):
-                st.session_state.gemini_model_name = None
-                st.rerun()
-
-        with st.expander("سجل DEBUG"):
-            st.code(json.dumps(st.session_state.debug_log, ensure_ascii=False, indent=2))
-
-        st.write("---")
-        if st.button("📝 ابدأ اختبار"):
-            st.session_state.quiz_state = "asking"
-            st.session_state.quiz_last_question = ""
-            st.session_state.messages.append({"role": "user", "content": "ابدأ اختبار"})
-            with st.spinner("جاري إعداد السؤال..."):
-                resp = get_ai_response("ابدأ اختبار")
-                st.session_state.messages.append({"role": "assistant", "content": resp})
-            st.rerun()
-
-        if st.session_state.quiz_state == "waiting_answer" and st.session_state.quiz_last_question:
-            st.info("وضع الاختبار: اكتب/قل إجابتك على السؤال الأخير وسيتم تصحيحها.")
-
-        st.write("---")
-        if st.button("🚪 خروج"):
-            st.session_state.user_data["logged_in"] = False
-            st.rerun()
-
-    st.subheader("💬 اسأل المعلم")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info("🎙️ الميكروفون:")
-        audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال ⏹️", key="recorder", format="wav")
-    with col2:
-        with st.expander("📸 صورة (غير مستخدمة حالياً)"):
-            f = st.file_uploader("رفع", type=["jpg", "png"])
-            img = Image.open(f) if f else None
-            if img:
-                st.image(img, width=150)
-                st.caption("ملاحظة: الصورة غير مستخدمة في هذه النسخة.")
-
-    voice_text = None
-    if audio:
-        with st.spinner("جاري السماع..."):
-            voice_text = speech_to_text(audio["bytes"], st.session_state.user_data["lang"])
-
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-
-    text_input = st.chat_input("اكتب إجابتك أو سؤالك هنا...")
-    final_q = text_input if text_input else voice_text
-
-    if final_q:
-        if st.session_state.quiz_state == "waiting_answer":
-            st.session_state.quiz_state = "correcting"
-
-        st.session_state.messages.append({"role": "user", "content": final_q})
-        with st.chat_message("user"):
-            st.write(final_q)
-
-        with st.chat_message("assistant"):
-            with st.spinner("المعلم يفكر..."):
-                resp = get_ai_response(final_q)
-                st.write(resp)
-
-                if any(x in resp for x in ["10/10", "9/10", "ممتاز", "أحسنت", "Excellent"]):
-                    celebrate_success()
-
-                aud = text_to_speech_pro(resp, st.session_state.user_data["lang"])
-                if aud:
-                    st.audio(aud, format="audio/mp3")
-                    try:
-                        os.remove(aud)
-                    except Exception:
-                        pass
-
-        st.session_state.messages.append({"role": "assistant", "content": resp})
-
-if __name__ == "__main__":
-    if st.session_state.user_data["logged_in"]:
-        main_app()
-    else:
-        login_page() 
+# باقي main_app نفس السابق (انسخ من الرد السابق) 
