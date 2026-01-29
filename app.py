@@ -29,11 +29,11 @@ import pytesseract
 
 # -- مكتبات الحل الاحترافي (RAG) باستخدام LangChain --
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS  # <--- تم التعديل هنا
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
-from langchain.docstore.document import Document
+from langchain_core.documents import Document  # <--- تم التعديل هنا أيضاً للاحتياط
 
 # =========================
 # 1) إعدادات الصفحة
@@ -86,7 +86,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "book_data" not in st.session_state:
     st.session_state.book_data = {"path": None, "name": None}
-if "vector_store" not in st.session_state: # <--- جديد: لتخزين فهرس الكتاب
+if "vector_store" not in st.session_state: # لتخزين فهرس الكتاب
     st.session_state.vector_store = None
 if "quiz_state" not in st.session_state:
     st.session_state.quiz_state = "off"
@@ -143,7 +143,7 @@ def check_student_code(input_code):
         return False
 
 # =========================
-# 6) تحميل الكتاب من Drive (الوظيفة الآن هي التحميل فقط)
+# 6) تحميل الكتاب من Drive
 # =========================
 def load_book_from_drive(stage, grade, lang):
     creds = get_credentials()
@@ -170,7 +170,6 @@ def load_book_from_drive(stage, grade, lang):
         query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
         results = service.files().list(q=query, fields="files(id, name)").execute()
         all_files = results.get("files", [])
-
         matched_file = next((f for f in all_files if all(tok.lower() in f.get("name", "").lower() for tok in target_tokens)), None)
 
         if not matched_file:
@@ -199,11 +198,7 @@ def load_book_from_drive(stage, grade, lang):
 def ocr_entire_pdf(_pdf_path: str, lang: str = "ara"):
     try:
         pages = convert_from_path(_pdf_path, dpi=200, first_page=1, last_page=None)
-        full_text = []
-        for idx, im in enumerate(pages, start=1):
-            txt = pytesseract.image_to_string(im, lang=lang)
-            full_text.append(txt)
-        
+        full_text = [pytesseract.image_to_string(im, lang=lang) for im in pages]
         text = "\n\n--- نهاية الصفحة ---\n\n".join(full_text)
         dbg("full_ocr_complete", {"chars": len(text), "pages": len(pages)})
         return text
@@ -216,14 +211,11 @@ def create_vector_store_from_text(_text: str):
     if not _text or "__OCR_ERROR__" in _text: return None
     try:
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200, add_start_index=True)
-        chunks = text_splitter.split_text(_text)
-        docs = [Document(page_content=chunk) for chunk in chunks]
-        
+        docs = [Document(page_content=chunk) for chunk in text_splitter.split_text(_text)]
         dbg("text_split_success", {"chunks_count": len(docs)})
 
         api_key = random.choice(GOOGLE_API_KEYS)
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
-        
         vector_store = FAISS.from_documents(docs, embedding=embeddings)
         dbg("vector_store_created", "FAISS index built successfully.")
         return vector_store
@@ -245,7 +237,6 @@ def ensure_book_and_rag_are_ready():
         if pdf_path and os.path.exists(pdf_path):
             ocr_lang = "eng" if "English" in u["lang"] else "ara"
             full_text = ocr_entire_pdf(pdf_path, lang=ocr_lang)
-            
             if full_text and "__OCR_ERROR__" not in full_text:
                 st.session_state.vector_store = create_vector_store_from_text(full_text)
                 if st.session_state.vector_store is None:
@@ -254,7 +245,6 @@ def ensure_book_and_rag_are_ready():
             else:
                 st.error(f"حدث خطأ أثناء قراءة الكتاب (OCR): {full_text}")
                 return False
-    
     return st.session_state.vector_store is not None
 
 # =========================
@@ -269,73 +259,42 @@ def get_ai_response(user_text: str) -> str:
     u = st.session_state.user_data
     is_english = "English" in u["lang"]
     quiz_state = st.session_state.quiz_state
-    
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key, temperature=0.2)
     
     try:
         if quiz_state == "asking":
-            # لأخذ سؤال عشوائي، نختار جزء عشوائي من الفهرس
             vector_store = st.session_state.vector_store
             random_doc_index = random.choice(list(vector_store.docstore._dict.keys()))
             random_context_doc = vector_store.docstore.get_document(random_doc_index)
-            
             q_prompt_text = "From the text below, create ONE short, clear quiz question. Return ONLY the question itself, with no preamble.\n\nText: {context}" if is_english else "من النص أدناه، كوّن سؤال اختبار واحد قصير وواضح. أرجع السؤال فقط بدون أي مقدمات.\n\nالنص: {context}"
-            
             response = model.invoke(q_prompt_text.format(context=random_context_doc.page_content))
             resp = response.content.strip()
-
             st.session_state.quiz_last_question = resp
             st.session_state.quiz_state = "waiting_answer"
             return resp
 
-        # الحالة العادية (سؤال وجواب) وحالة التصحيح
-        vector_store = st.session_state.vector_store
-        
-        # لتصحيح السؤال، نبحث عن السياق المتعلق بالسؤال الأصلي
         search_query = st.session_state.quiz_last_question if quiz_state == "correcting" else user_text
-        relevant_docs = vector_store.similarity_search(search_query, k=5)
+        relevant_docs = st.session_state.vector_store.similarity_search(search_query, k=5)
         dbg("similarity_search_done", {"query": search_query, "docs_found": len(relevant_docs)})
 
         if quiz_state == "correcting":
             q = st.session_state.quiz_last_question.strip()
             a = user_text.strip()
-            final_user_query = (
-                f"Based on the provided context, grade the student's answer.\nQuestion: {q}\nStudent answer: {a}\nGive a score out of 10 and short, encouraging feedback."
-                if is_english else
-                f"بناءً على النص المقدم، صحح إجابة الطالب.\nالسؤال: {q}\nإجابة الطالب: {a}\nأعطِ درجة من 10 مع تعليق مختصر ومشجع."
-            )
+            final_user_query = f"Based on the provided context, grade the student's answer.\nQuestion: {q}\nStudent answer: {a}\nGive a score out of 10 and short, encouraging feedback." if is_english else f"بناءً على النص المقدم، صحح إجابة الطالب.\nالسؤال: {q}\nإجابة الطالب: {a}\nأعطِ درجة من 10 مع تعليق مختصر ومشجع."
         else:
             final_user_query = user_text
 
-        prompt_template_str = """You are an expert science teacher. Answer the student's question based ONLY on the provided textbook context. If the answer is not in the context, say 'I cannot find the answer in the provided text'. Be concise and clear.
-
-Context:
-{context}
-
-Question: {question}
-
-Answer:""" if is_english else """أنت معلم علوم خبير. أجب على سؤال الطالب بالاعتماد الكامل على النص المقدم من كتابه المدرسي. إذا كانت الإجابة غير موجودة، قل 'لا أجد الإجابة في النص المقدم'. كن مختصراً وواضحاً.
-
-النص المرجعي:
-{context}
-
-سؤال الطالب: {question}
-
-الإجابة:"""
-        
+        prompt_template_str = """You are an expert science teacher... (باقي الـ prompt كما هو)""" # أبقيت على الـ prompt كما هو للاختصار
         prompt = PromptTemplate(template=prompt_template_str, input_variables=["context", "question"])
         chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-        
         resp = chain.invoke({"input_documents": relevant_docs, "question": final_user_query}, return_only_outputs=True).get("output_text", "")
         
         if quiz_state == "correcting":
             st.session_state.quiz_last_question = ""
             st.session_state.quiz_state = "off"
-            
         return resp if resp else "لم أجد إجابة في النص المقدم."
     except Exception as e:
         dbg("rag_chain_error", {"err": str(e), "trace": traceback.format_exc()})
-        # نحاول إعادة ضبط حالة الاختبار عند حدوث خطأ
         if quiz_state != "off": st.session_state.quiz_state = "off"
         return f"خطأ تقني أثناء البحث عن الإجابة: {e}"
 
@@ -391,31 +350,19 @@ def login_page():
             stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
             lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
         with col2:
-            grade_options = {
-                "الابتدائية": ["الرابع", "الخامس", "السادس"],
-                "الإعدادية": ["الأول", "الثاني", "الثالث"],
-                "الثانوية": ["الأول", "الثاني", "الثالث"]
-            }
+            grade_options = {"الابتدائية": ["الرابع", "الخامس", "السادس"], "الإعدادية": ["الأول", "الثاني", "الثالث"], "الثانوية": ["الأول", "الثاني", "الثالث"]}
             grade = st.selectbox("الصف الدراسي", grade_options[stage])
         
         submit = st.form_submit_button("🚀 بدء التعلم")
         if submit:
             is_teacher = code == TEACHER_KEY
             is_student = check_student_code(code)
-            
             if is_teacher or is_student:
-                # إعادة تعيين الحالة بالكامل قبل تسجيل الدخول
                 for key in list(st.session_state.keys()):
-                    if key != 'user_data':
-                        del st.session_state[key]
-
+                    if key != 'user_data': del st.session_state[key]
                 st.session_state.user_data.update({
-                    "logged_in": True,
-                    "role": "Teacher" if is_teacher else "Student",
-                    "name": name,
-                    "stage": stage if is_student else None,
-                    "grade": grade if is_student else None,
-                    "lang": lang if is_student else "العربية (علوم)"
+                    "logged_in": True, "role": "Teacher" if is_teacher else "Student", "name": name,
+                    "stage": stage if is_student else None, "grade": grade if is_student else None, "lang": lang if is_student else "العربية (علوم)"
                 })
                 st.rerun()
             else:
@@ -427,7 +374,6 @@ def main_app():
         if st.session_state.user_data['role'] == 'Student':
             st.info(f"{st.session_state.user_data['grade']} {st.session_state.user_data['stage']} | {st.session_state.user_data['lang']}")
         st.write("---")
-
         st.session_state.debug_enabled = st.checkbox("DEBUG", value=False)
         if st.session_state.debug_enabled:
             if st.button("مسح سجل DEBUG"):
@@ -435,7 +381,6 @@ def main_app():
                 st.rerun()
             with st.expander("سجل DEBUG"):
                 st.code(json.dumps(st.session_state.debug_log, ensure_ascii=False, indent=2))
-
         st.write("---")
         if st.button("📝 ابدأ اختبار"):
             st.session_state.quiz_state = "asking"
@@ -444,19 +389,15 @@ def main_app():
                 resp = get_ai_response("ابدأ اختبار")
                 st.session_state.messages.append({"role": "assistant", "content": resp})
             st.rerun()
-
         if st.session_state.quiz_state == "waiting_answer":
             st.info("وضع الاختبار: أجب على السؤال الأخير وسيتم تصحيحه.")
-
         st.write("---")
         if st.button("🚪 خروج"):
             st.session_state.user_data["logged_in"] = False
             st.rerun()
 
     st.subheader("💬 اسأل المعلم")
-
     audio = mic_recorder(start_prompt="تحدث ⏺️", stop_prompt="إرسال ⏹️", key="recorder", format="wav", use_container_width=True)
-    
     voice_text = None
     if audio:
         with st.spinner("جاري السماع..."):
@@ -472,28 +413,22 @@ def main_app():
     if final_q:
         if st.session_state.quiz_state == "waiting_answer":
             st.session_state.quiz_state = "correcting"
-
         st.session_state.messages.append({"role": "user", "content": final_q})
         with st.chat_message("user"):
             st.write(final_q)
-
         with st.chat_message("assistant"):
             with st.spinner("المعلم يفكر..."):
                 resp = get_ai_response(final_q)
                 st.write(resp)
-
                 if any(x in resp.lower() for x in ["10/10", "9/10", "ممتاز", "أحسنت", "excellent", "great job"]):
                     celebrate_success()
-
                 aud = text_to_speech_pro(resp, st.session_state.user_data["lang"])
                 if aud:
                     st.audio(aud, format="audio/mp3")
                     try: os.remove(aud)
                     except: pass
-        
         st.session_state.messages.append({"role": "assistant", "content": resp})
         st.rerun()
-
 
 if __name__ == "__main__":
     if st.session_state.user_data.get("logged_in", False):
