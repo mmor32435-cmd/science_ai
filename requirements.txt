@@ -8,7 +8,6 @@ edge-tts
 pdf2image
 pytesseract
 pillow
-# LangChain dependencies (Specific versions to fix import errors)
 langchain
 langchain-community
 langchain-core
