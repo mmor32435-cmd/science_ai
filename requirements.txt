@@ -14,9 +14,10 @@ edge-tts
 pdfplumber
 pdf2image==1.17.0
 pytesseract==0.3.13
-# -- مكتبات الحل الاحترافي RAG --
-langchain==0.1.20  # <--- تم التثبيت على نسخة محددة وثابتة
-langchain-community==0.0.38
-langchain-google-genai==0.1.6
-langchain-text-splitters==0.0.1
+
+# -- مكتبات الحل الاحترافي RAG (نسخة مرنة ومستقرة) --
+langchain>=0.2.0  # <--- اطلب نسخة حديثة من المكتبة الرئيسية فقط
+langchain-community
+langchain-google-genai
+langchain-text-splitters
 faiss-cpu
