@@ -1,5 +1,4 @@
 import streamlit as st
-import os
 import google.generativeai as genai
 
 # =========================
@@ -16,22 +15,28 @@ html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl
 """, unsafe_allow_html=True)
 
 # =========================
-# 2) جلب المفتاح والتأكد منه
+# 2) جلب المفتاح من قائمتك الخاصة
 # =========================
-# نحاول جلب المفتاح بأكثر من طريقة لضمان العمل
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("gemini_api_key")
-
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-else:
-    st.warning("⚠️ تحذير: لم يتم العثور على مفتاح GEMINI_API_KEY في ملف الأسرار.")
+# هنا قمت بتعديل الكود ليقرأ من "GOOGLE_API_KEYS" التي أرسلتها أنت
+try:
+    if "GOOGLE_API_KEYS" in st.secrets:
+        # نأخذ أول مفتاح من القائمة التي وضعتها
+        api_key = st.secrets["GOOGLE_API_KEYS"][0]
+        genai.configure(api_key=api_key)
+        configured = True
+    else:
+        st.error("⚠️ لم يتم العثور على GOOGLE_API_KEYS في Secrets")
+        configured = False
+except Exception as e:
+    st.error(f"❌ خطأ في الإعداد: {e}")
+    configured = False
 
 # =========================
 # 3) وظيفة الذكاء الاصطناعي
 # =========================
 def get_ai_response(user_input, stage, grade, lang):
-    if not GEMINI_API_KEY:
-        return "⚠️ نظام الذكاء الاصطناعي غير مفعل حالياً. تأكد من إضافة GEMINI_API_KEY في إعدادات Secrets."
+    if not configured:
+        return "⚠️ النظام غير جاهز، تأكد من صحة المفاتيح."
     
     try:
         model = genai.GenerativeModel('gemini-pro')
@@ -39,14 +44,14 @@ def get_ai_response(user_input, stage, grade, lang):
         
         prompt = f"""
         أنت المعلم 'السيد البدوي'. خبير مادة العلوم والفيزياء.
-        المرحلة: {stage} | الصف: {grade} | اللغة المطلوبة: {lang_str}.
+        المرحلة: {stage} | الصف: {grade} | اللغة: {lang_str}.
         سؤال الطالب: {user_input}
-        أجب بأسلوب تعليمي مبسط ومحفز.
+        أجب بأسلوب تعليمي مشوق ومبسط جداً.
         """
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"❌ حدث خطأ أثناء جلب الإجابة: {str(e)}"
+        return f"❌ حدث خطأ: {str(e)}"
 
 # =========================
 # 4) نظام تسجيل الدخول
@@ -60,7 +65,7 @@ if not st.session_state.logged_in:
         col1, col2 = st.columns(2)
         with col1:
             name = st.text_input("الاسم الثلاثي")
-            code = st.text_input("الكود السري", type="password")
+            code = st.text_input("الكود السري (جرب 1234)", type="password")
         with col2:
             lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science/Physics)"])
             stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
@@ -73,22 +78,25 @@ if not st.session_state.logged_in:
         grade = st.selectbox("الصف", grades[stage])
         
         if st.form_submit_button("دخول"):
-            if code in ["1234", "ADMIN"]:
+            # استخدمت ADMIN_2024 كما هو في ملف أسرارك
+            if code in ["1234", "ADMIN", "ADMIN_2024"]:
                 st.session_state.logged_in = True
                 st.session_state.u = {"name": name, "stage": stage, "grade": grade, "lang": lang}
                 st.rerun()
             else:
-                st.error("الكود خاطئ")
-
+                st.error("❌ الكود خاطئ")
 else:
     # واجهة الدردشة
     u = st.session_state.u
     st.sidebar.title(f"مرحباً {u['name']}")
+    st.sidebar.write(f"المرحلة: {u['stage']}")
+    st.sidebar.write(f"الصف: {u['grade']}")
+    
     if st.sidebar.button("خروج"):
         st.session_state.logged_in = False
         st.rerun()
 
-    st.markdown(f"### 🤖 معلم {u['lang']} للمرحلة {u['stage']}")
+    st.markdown(f"### 🤖 معلم {u['lang']} الافتراضي معك")
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -102,6 +110,7 @@ else:
         with st.chat_message("user"): st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            response = get_ai_response(prompt, u['stage'], u['grade'], u['lang'])
-            st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            with st.spinner("جاري التفكير..."):
+                response = get_ai_response(prompt, u['stage'], u['grade'], u['lang'])
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
