@@ -10,6 +10,6 @@ google-auth-oauthlib
 google-generativeai
 pdf2image
 pytesseract
-langchain
-faiss-cpu
-sentence-transformers
+requests
+beautifulsoup4
+lxml  # لتحليل HTML
