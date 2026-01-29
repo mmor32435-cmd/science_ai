@@ -1,16 +1,6 @@
-# =========================
-# 0) المكتبات المطلوبة (النسخة النهائية مع ChromaDB)
-# =========================
 import streamlit as st
-import os
-import re
-import io
-import json
-import time
-import random
-import asyncio
-import tempfile
-import traceback
+import os, re, io, json, time, random, asyncio, tempfile, hashlib
+from typing import Optional, List, Dict, Any, Tuple
 
 from PIL import Image
 import gspread
@@ -21,91 +11,180 @@ import edge_tts
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import google.generativeai as genai
 
-# -- مكتبات الـ OCR والـ PDF --
 from pdf2image import convert_from_path
 import pytesseract
 
-# -- مكتبات الحل الاحترافي (RAG) باستخدام LangChain --
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.chains import load_qa_chain
 from langchain.prompts import PromptTemplate
+from langchain.chains import load_qa_chain
 from langchain_core.documents import Document
 
-# =========================
-# 1) إعدادات الصفحة
-# =========================
-st.set_page_config(
-    page_title="المعلم العلمي | السيد البدوي",
-    page_icon="🧬",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # =========================
-# 2) CSS آمن
+# Page
 # =========================
+st.set_page_config(page_title="المعلم العلمي | السيد البدوي", page_icon="🧬", layout="wide", initial_sidebar_state="expanded")
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
 html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
-.stApp { background-color: #f8f9fa; }
-.stTextInput input, .stTextArea textarea { background-color: #ffffff !important; color: #000000 !important; border: 2px solid #004e92 !important; border-radius: 8px !important; }
-div[data-baseweb="select"] > div { background-color: #ffffff !important; border: 2px solid #004e92 !important; border-radius: 8px !important; }
-ul[data-baseweb="menu"] { background-color: #ffffff !important; }
-li[data-baseweb="option"] { color: #000000 !important; }
-li[data-baseweb="option"]:hover { background-color: #e3f2fd !important; }
-h1, h2, h3, h4, h5, p, label, span { color: #000000 !important; }
-.stButton>button { background: linear-gradient(90deg, #004e92 0%, #000428 100%) !important; color: #ffffff !important; border: none; border-radius: 10px; height: 55px; width: 100%; font-size: 20px !important; font-weight: bold !important; }
-.header-box { background: linear-gradient(90deg, #000428 0%, #004e92 100%); padding: 2rem; border-radius: 15px; text-align: center; margin-bottom: 2rem; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-.header-box h1, .header-box h3 { color: #ffffff !important; }
-.stChatMessage { background-color: #ffffff !important; border: 1px solid #d1d1d1 !important; border-radius: 12px !important; }
+.stApp { background: radial-gradient(circle at top, #f7fbff, #f4f6f8 55%, #eef2f6); }
+.header-box {
+  background: linear-gradient(90deg, #061a40 0%, #0353a4 50%, #006daa 100%);
+  padding: 1.6rem; border-radius: 18px; text-align: center;
+  margin-bottom: 1.2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.14);
+}
+.header-box h1, .header-box h3 { color: #ffffff !important; margin: 0.15rem 0; }
+.badge {
+  display:inline-block; padding: 0.25rem 0.7rem; border-radius: 999px;
+  background: rgba(255,255,255,0.18); color: #fff; font-size: 0.95rem;
+  border: 1px solid rgba(255,255,255,0.25);
+}
+.stTextInput input, .stTextArea textarea {
+  background-color: #ffffff !important; color: #000000 !important;
+  border: 1.8px solid #0353a4 !important; border-radius: 10px !important;
+}
+div[data-baseweb="select"] > div {
+  background-color: #ffffff !important; border: 1.8px solid #0353a4 !important; border-radius: 10px !important;
+}
+.stButton>button {
+  background: linear-gradient(90deg, #0353a4 0%, #061a40 100%) !important;
+  color: #ffffff !important; border: none; border-radius: 12px;
+  height: 50px; width: 100%; font-size: 18px !important; font-weight: 700 !important;
+}
+.stChatMessage { background-color: #ffffff !important; border: 1px solid #d9e2ef !important; border-radius: 14px !important; }
+small.muted { color: #6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
+TEACHER_NAME = st.secrets.get("TEACHER_NAME", "الأستاذ / السيد البدوي")
+st.markdown(f"""
 <div class="header-box">
-    <h1>الأستاذ / السيد البدوي</h1>
-    <h3>المنصة التعليمية الذكية</h3>
+  <h1>{TEACHER_NAME}</h1>
+  <h3>المنصة التعليمية الذكية للعلوم</h3>
+  <div class="badge">شات • ميكروفون • OCR • واجبات • اختبارات • عربي/English</div>
 </div>
 """, unsafe_allow_html=True)
 
-# =========================
-# 3) Session state + Debug
-# =========================
-if "user_data" not in st.session_state: st.session_state.user_data = {"logged_in": False}
-if "messages" not in st.session_state: st.session_state.messages = []
-if "book_data" not in st.session_state: st.session_state.book_data = {}
-if "vector_store" not in st.session_state: st.session_state.vector_store = None
-if "quiz_state" not in st.session_state: st.session_state.quiz_state = "off"
-if "quiz_last_question" not in st.session_state: st.session_state.quiz_last_question = ""
-if "debug_enabled" not in st.session_state: st.session_state.debug_enabled = False
-if "debug_log" not in st.session_state: st.session_state.debug_log = []
-
-def dbg(event, data=None):
-    if not st.session_state.debug_enabled: return
-    rec = {"t": time.strftime("%H:%M:%S"), "event": event}
-    if data is not None: rec["data"] = data
-    st.session_state.debug_log.append(rec)
-    st.session_state.debug_log = st.session_state.debug_log[-400:]
 
 # =========================
-# 4) Secrets
+# Secrets
 # =========================
 TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
 SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
+CONTROL_TAB = st.secrets.get("CONTROL_TAB_NAME", "")  # optional
+
 FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
 
+RESULTS_TAB = st.secrets.get("RESULTS_TAB_NAME", "Results")
+ASSIGNMENTS_TAB = st.secrets.get("ASSIGNMENTS_TAB_NAME", "Assignments")
+SUBMISSIONS_TAB = st.secrets.get("SUBMISSIONS_TAB_NAME", "Submissions")
+
+CHROMA_BASE_DIR = st.secrets.get("CHROMA_PERSIST_DIR", "./chroma_db")
+os.makedirs(CHROMA_BASE_DIR, exist_ok=True)
+
+if isinstance(GOOGLE_API_KEYS, str):
+    GOOGLE_API_KEYS = [k.strip() for k in GOOGLE_API_KEYS.split(",") if k.strip()]
+
+
 # =========================
-# 5 & 6 & 7) دوال إعداد الكتاب والفهرسة
+# Session State
+# =========================
+def init_state():
+    if "user_data" not in st.session_state:
+        st.session_state.user_data = {"logged_in": False, "role": None, "name": None}
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "debug_enabled" not in st.session_state:
+        st.session_state.debug_enabled = False
+    if "debug_log" not in st.session_state:
+        st.session_state.debug_log = []
+
+    if "book_data" not in st.session_state:
+        st.session_state.book_data = {}
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = None
+
+    if "uploaded_context" not in st.session_state:
+        st.session_state.uploaded_context = {"text": "", "vs": None, "name": ""}
+
+    if "tts_enabled" not in st.session_state:
+        st.session_state.tts_enabled = False
+
+    if "quiz" not in st.session_state:
+        st.session_state.quiz = {"state": "off", "question": "", "model_answer": "", "last_score": None}
+
+    if "hw" not in st.session_state:
+        st.session_state.hw = {"selected_id": None}
+
+init_state()
+
+def dbg(event, data=None):
+    if not st.session_state.debug_enabled:
+        return
+    rec = {"t": time.strftime("%H:%M:%S"), "event": event}
+    if data is not None:
+        rec["data"] = data
+    st.session_state.debug_log.append(rec)
+    st.session_state.debug_log = st.session_state.debug_log[-500:]
+
+
+# =========================
+# Constants / Maps
+# =========================
+STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
+GRADE_OPTIONS = {
+    "الابتدائية": ["الرابع", "الخامس", "السادس"],
+    "الإعدادية": ["الأول", "الثاني", "الثالث"],
+    "الثانوية": ["الأول", "الثاني", "الثالث"],
+}
+TERMS = ["الترم الأول", "الترم الثاني"]
+LANG_OPTIONS = ["العربية (علوم)", "English (Science)"]
+
+def subjects_for(stage: str, grade: str) -> List[str]:
+    if stage in ["الابتدائية", "الإعدادية"]:
+        return ["علوم"]
+    if grade == "الأول":
+        return ["علوم متكاملة"]
+    return ["كيمياء", "فيزياء", "أحياء"]
+
+def is_english(lang_ui: str) -> bool:
+    return "English" in (lang_ui or "")
+
+def ocr_lang_code(lang_ui: str) -> str:
+    return "eng" if is_english(lang_ui) else "ara"
+
+def ui_str(lang_ui: str, ar: str, en: str) -> str:
+    return en if is_english(lang_ui) else ar
+
+def term_token(term: str) -> str:
+    return "T2" if "الثاني" in term else "T1"
+
+def drive_tokens(stage: str, grade: str, subject: str, term: str, lang_ui: str) -> List[str]:
+    stage_map = {"الثانوية": "Sec", "الإعدادية": "Prep", "الابتدائية": "Grade"}
+    grade_map = {"الأول": "1", "الثاني": "2", "الثالث": "3", "الرابع": "4", "الخامس": "5", "السادس": "6"}
+    subject_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
+    lang_code = "En" if is_english(lang_ui) else "Ar"
+    return [
+        f"{stage_map.get(stage,'')}{grade_map.get(grade,'')}".strip(),
+        subject_map.get(subject, subject),
+        term_token(term),
+        lang_code,
+    ]
+
+
+# =========================
+# Google Credentials + Sheets helpers
 # =========================
 @st.cache_resource
 def get_credentials():
-    if "gcp_service_account" not in st.secrets: return None
+    if "gcp_service_account" not in st.secrets:
+        return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
@@ -120,178 +199,274 @@ def get_gspread_client():
     creds = get_credentials()
     return gspread.authorize(creds) if creds else None
 
-def check_student_code(input_code):
+def open_control_sheet():
     client = get_gspread_client()
     if not client:
-        return False
+        return None
     try:
         sh = client.open(SHEET_NAME)
-        real_code = str(sh.sheet1.acell("B1").value).strip()
+        return sh
+    except Exception as e:
+        dbg("open_sheet_error", str(e))
+        return None
+
+def ensure_worksheet(sh, title: str, headers: List[str]):
+    """
+    ينشئ Worksheet إن لم توجد + يضع headers في الصف الأول إن كانت فاضية
+    """
+    try:
+        try:
+            ws = sh.worksheet(title)
+        except Exception:
+            ws = sh.add_worksheet(title=title, rows=2000, cols=max(10, len(headers) + 2))
+
+        # وضع الهيدر إن لم يكن موجود
+        first_row = ws.row_values(1)
+        if not first_row or all((c.strip() == "" for c in first_row)):
+            ws.update("A1", [headers])
+        return ws
+    except Exception as e:
+        dbg("ensure_ws_error", {"title": title, "err": str(e)})
+        return None
+
+def safe_cell(s: Any, max_len: int = 35000) -> str:
+    if s is None:
+        return ""
+    t = str(s)
+    return t[:max_len]
+
+def append_row(ws, row: List[Any]):
+    try:
+        ws.append_row([safe_cell(x) for x in row], value_input_option="USER_ENTERED")
+        return True
+    except Exception as e:
+        dbg("append_row_error", str(e))
+        return False
+
+def check_student_code(input_code: str) -> bool:
+    sh = open_control_sheet()
+    if not sh:
+        return False
+    try:
+        ws = sh.worksheet(CONTROL_TAB) if CONTROL_TAB else sh.sheet1
+        real_code = str(ws.acell("B1").value).strip()
         return str(input_code).strip() == real_code
     except Exception as e:
         dbg("check_student_code_error", str(e))
         return False
 
-def load_book_from_drive(stage, grade, lang):
-    creds = get_credentials()
-    if not creds: return None
-    try:
-        target_tokens = []
-        stage_map = {"الثانوية": "Sec", "الإعدادية": "Prep", "الابتدائية": "Grade"}
-        grade_map = {"الأول": "1", "الثاني": "2", "الثالث": "3", "الرابع": "4", "الخامس": "5", "السادس": "6"}
-        
-        prefix = stage_map.get(stage)
-        suffix = grade_map.get(grade)
-        if prefix and suffix:
-            if prefix == "Grade": target_tokens.append(f"{prefix}{suffix}")
-            else: target_tokens.append(f"{prefix}{suffix}")
+def get_logging_worksheets():
+    sh = open_control_sheet()
+    if not sh:
+        return None, None, None
 
-        lang_code = "Ar" if "العربية" in lang else "En"
-        target_tokens.append(lang_code)
-        
+    results_headers = [
+        "timestamp", "student_name", "role", "stage", "grade", "subject", "term", "lang",
+        "type", "ref_book", "question", "student_answer", "score", "feedback"
+    ]
+    assignments_headers = [
+        "assignment_id", "created_at", "teacher_name", "stage", "grade", "subject", "term", "lang",
+        "title", "difficulty", "questions_json", "active"
+    ]
+    submissions_headers = [
+        "submission_id", "submitted_at", "assignment_id", "student_name", "stage", "grade", "subject", "term", "lang",
+        "answers_json", "grading_json", "total_score"
+    ]
+
+    ws_results = ensure_worksheet(sh, RESULTS_TAB, results_headers)
+    ws_assign = ensure_worksheet(sh, ASSIGNMENTS_TAB, assignments_headers)
+    ws_sub = ensure_worksheet(sh, SUBMISSIONS_TAB, submissions_headers)
+    return ws_results, ws_assign, ws_sub
+
+def log_result(
+    kind: str,
+    question: str,
+    student_answer: str,
+    score: str,
+    feedback: str,
+):
+    ws_results, _, _ = get_logging_worksheets()
+    if not ws_results:
+        return
+    u = st.session_state.user_data
+    book = st.session_state.book_data.get("name", "")
+    row = [
+        time.strftime("%Y-%m-%d %H:%M:%S"),
+        u.get("name",""),
+        u.get("role",""),
+        u.get("stage",""),
+        u.get("grade",""),
+        u.get("subject",""),
+        u.get("term",""),
+        u.get("lang",""),
+        kind,
+        book,
+        question,
+        student_answer,
+        score,
+        feedback,
+    ]
+    append_row(ws_results, row)
+
+
+# =========================
+# Drive: list + download
+# =========================
+@st.cache_data(ttl=300, show_spinner=False)
+def list_drive_pdfs(folder_id: str) -> List[Dict[str, str]]:
+    creds = get_credentials()
+    if not creds:
+        return []
+    service = build("drive", "v3", credentials=creds)
+    query = f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false"
+    res = service.files().list(q=query, fields="files(id, name, modifiedTime, size)").execute()
+    return res.get("files", [])
+
+def download_drive_pdf(file_id: str, file_name: str) -> Optional[str]:
+    creds = get_credentials()
+    if not creds:
+        return None
+    try:
         service = build("drive", "v3", credentials=creds)
-        query = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
-        results = service.files().list(q=query, fields="files(id, name)").execute()
-        all_files = results.get("files", [])
-        matched_file = next((f for f in all_files if all(tok.lower() in f.get("name", "").lower() for tok in target_tokens)), None)
-        if not matched_file:
-            dbg("book_not_found", {"tokens": target_tokens})
-            return None
-        
-        request = service.files().get_media(fileId=matched_file["id"])
-        file_path = os.path.join(tempfile.gettempdir(), matched_file["name"])
-        with open(file_path, "wb") as fh:
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-\.]+", "_", file_name)
+        local_path = os.path.join(CHROMA_BASE_DIR, "books_cache", f"{file_id}_{safe_name}")
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 10_000:
+            return local_path
+
+        request = service.files().get_media(fileId=file_id)
+        with open(local_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while not done:
-                status, done = downloader.next_chunk()
-        dbg("book_downloaded", {"name": matched_file["name"], "size": os.path.getsize(file_path)})
-        return {"path": file_path, "name": matched_file["name"]}
+                _, done = downloader.next_chunk()
+        return local_path
     except Exception as e:
-        dbg("load_book_error", {"err": str(e)})
+        dbg("download_drive_pdf_error", str(e))
         return None
 
-@st.cache_data(show_spinner="جاري قراءة الكتاب لأول مرة (قد يستغرق عدة دقائق)...")
-def ocr_entire_pdf(_pdf_path: str, lang: str = "ara"):
+def load_book_from_drive(stage: str, grade: str, subject: str, term: str, lang_ui: str) -> Optional[Dict[str, str]]:
+    if not FOLDER_ID:
+        return None
     try:
-        pages = convert_from_path(_pdf_path, dpi=200, first_page=1, last_page=None)
-        full_text = [pytesseract.image_to_string(im, lang=lang) for im in pages]
-        text = "\n\n--- نهاية الصفحة ---\n\n".join(full_text)
-        dbg("full_ocr_complete", {"chars": len(text), "pages": len(pages)})
-        return text
+        toks = drive_tokens(stage, grade, subject, term, lang_ui)
+        files = list_drive_pdfs(FOLDER_ID)
+        matched = None
+        for f in files:
+            name_low = (f.get("name") or "").lower()
+            if all(tok.lower() in name_low for tok in toks if tok):
+                matched = f
+                break
+        if not matched:
+            dbg("book_not_found", {"tokens": toks, "files_count": len(files)})
+            return None
+
+        path = download_drive_pdf(matched["id"], matched["name"])
+        if not path:
+            return None
+        return {"id": matched["id"], "name": matched["name"], "path": path}
     except Exception as e:
-        dbg("full_ocr_error", {"err": str(e)})
+        dbg("load_book_error", str(e))
+        return None
+
+
+# =========================
+# OCR
+# =========================
+def _hash_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+@st.cache_data(show_spinner=False)
+def ocr_image_bytes(img_bytes: bytes, lang: str) -> str:
+    try:
+        im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        return (pytesseract.image_to_string(im, lang=lang) or "").strip()
+    except Exception as e:
         return f"__OCR_ERROR__:{e}"
 
-@st.cache_resource(show_spinner="جاري فهرسة محتوى الكتاب...")
-def create_vector_store_from_text(_text: str):
-    if not _text or "__OCR_ERROR__" in _text:
+@st.cache_data(show_spinner="جاري قراءة PDF (OCR)...")
+def ocr_pdf_path(pdf_path: str, lang: str, max_pages: Optional[int] = None) -> str:
+    try:
+        texts = []
+        batch = 6
+        start = 1
+        pages_done = 0
+
+        while True:
+            if max_pages is not None and pages_done >= max_pages:
+                break
+            end = start + batch - 1
+            pages = convert_from_path(pdf_path, dpi=200, first_page=start, last_page=end)
+            if not pages:
+                break
+            for im in pages:
+                if max_pages is not None and pages_done >= max_pages:
+                    break
+                texts.append(pytesseract.image_to_string(im, lang=lang))
+                pages_done += 1
+            if len(pages) < batch:
+                break
+            start += batch
+
+        return "\n\n--- نهاية الصفحة ---\n\n".join(texts).strip()
+    except Exception as e:
+        return f"__OCR_ERROR__:{e}"
+
+
+# =========================
+# RAG (Chroma Persist)
+# =========================
+def pick_api_key() -> Optional[str]:
+    return random.choice(GOOGLE_API_KEYS) if GOOGLE_API_KEYS else None
+
+def get_embeddings():
+    k = pick_api_key()
+    if not k:
         return None
-    try:
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200, add_start_index=True)
-        docs = [Document(page_content=chunk) for chunk in text_splitter.split_text(_text)]
-        api_key = random.choice(GOOGLE_API_KEYS)
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
-        vector_store = Chroma.from_documents(docs, embedding=embeddings)
-        dbg("vector_store_created", "Chroma index built successfully.")
-        return vector_store
-    except Exception as e:
-        dbg("vector_store_error", {"err": str(e)})
+    return GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=k)
+
+def get_llm(temperature: float = 0.2):
+    k = pick_api_key()
+    if not k:
         return None
+    return ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=k, temperature=temperature)
 
-def ensure_book_and_rag_are_ready():
-    u = st.session_state.user_data
-    if not st.session_state.book_data.get("path"):
-        data = load_book_from_drive(u["stage"], u["grade"], u["lang"])
-        if not data:
-            st.error("لم يتم العثور على الكتاب.")
-            return False
-        st.session_state.book_data = data
-    if st.session_state.vector_store is None:
-        pdf_path = st.session_state.book_data.get("path")
-        if pdf_path and os.path.exists(pdf_path):
-            ocr_lang = "eng" if "English" in u["lang"] else "ara"
-            full_text = ocr_entire_pdf(pdf_path, lang=ocr_lang)
-            if full_text and "__OCR_ERROR__" not in full_text:
-                st.session_state.vector_store = create_vector_store_from_text(full_text)
-                if st.session_state.vector_store is None:
-                    st.error("فشل في إنشاء فهرس الكتاب.")
-                    return False
-            else:
-                st.error(f"خطأ أثناء قراءة الكتاب (OCR): {full_text}")
-                return False
-    return st.session_state.vector_store is not None
+def split_to_docs(text: str) -> List[Document]:
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1800, chunk_overlap=220, add_start_index=True)
+    return [Document(page_content=ch) for ch in splitter.split_text(text) if ch.strip()]
 
-# =========================
-# 8) Gemini (باستخدام RAG)
-# =========================
-def get_ai_response(user_text: str) -> str:
-    if not GOOGLE_API_KEYS: return "⚠️ المفاتيح مفقودة."
-    if not ensure_book_and_rag_are_ready():
-        return "⚠️ لم يتم تحميل الكتاب أو فهرسته بنجاح. حاول تحديث الصفحة."
+def collection_key(stage: str, grade: str, subject: str, term: str, lang_ui: str, book_id: str) -> str:
+    raw = f"{stage}|{grade}|{subject}|{term}|{lang_ui}|{book_id}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-    api_key = random.choice(GOOGLE_API_KEYS)
-    u = st.session_state.user_data
-    is_english = "English" in u["lang"]
-    quiz_state = st.session_state.quiz_state
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key, temperature=0.2)
-    
+def load_or_create_book_vectorstore(persist_dir: str, collection_name: str, full_text: str) -> Optional[Chroma]:
     try:
-        if quiz_state == "asking":
-            vector_store = st.session_state.vector_store
-            all_docs = vector_store.get(include=["documents"])
-            random_doc = random.choice(all_docs.get("documents", []))
-            if not random_doc:
-                return "عذراً، لا أستطيع إنشاء سؤال الآن."
+        embeddings = get_embeddings()
+        if not embeddings:
+            return None
+        os.makedirs(persist_dir, exist_ok=True)
+        has_existing = any(os.scandir(persist_dir))
+        if has_existing:
+            return Chroma(collection_name=collection_name, persist_directory=persist_dir, embedding_function=embeddings)
 
-            q_prompt_text = "From the text below, create ONE short, clear quiz question. Return ONLY the question itself, with no preamble.\n\nText: {context}" if is_english else "من النص أدناه، كوّن سؤال اختبار واحد قصير وواضح. أرجع السؤال فقط بدون أي مقدمات.\n\nالنص: {context}"
-            response = model.invoke(q_prompt_text.format(context=random_doc))
-            resp = response.content.strip()
-            st.session_state.quiz_last_question = resp
-            st.session_state.quiz_state = "waiting_answer"
-            return resp
+        docs = split_to_docs(full_text)
+        if not docs:
+            return None
 
-        search_query = st.session_state.quiz_last_question if quiz_state == "correcting" else user_text
-        relevant_docs = st.session_state.vector_store.similarity_search(search_query, k=5)
-        
-        if quiz_state == "correcting":
-            q = st.session_state.quiz_last_question.strip()
-            a = user_text.strip()
-            final_user_query = f"Based on the provided context, grade the student's answer.\nQuestion: {q}\nStudent answer: {a}\nGive a score out of 10 and short, encouraging feedback." if is_english else f"بناءً على النص المقدم، صحح إجابة الطالب.\nالسؤال: {q}\nإجابة الطالب: {a}\nأعطِ درجة من 10 مع تعليق مختصر ومشجع."
-        else:
-            final_user_query = user_text
-        
-        prompt_template_str = """You are an expert science teacher. Answer the student's question based ONLY on the provided textbook context. If the answer is not in the context, say 'I cannot find the answer in the provided text'. Be concise and clear. Context: {context} Question: {question} Answer:""" if is_english else """أنت معلم علوم خبير. أجب على سؤال الطالب بالاعتماد الكامل على النص المقدم من كتابه المدرسي. إذا كانت الإجابة غير موجودة، قل 'لا أجد الإجابة في النص المقدم'. كن مختصراً وواضحاً. النص المرجعي: {context} سؤال الطالب: {question} الإجابة:"""
-        prompt = PromptTemplate(template=prompt_template_str, input_variables=["context", "question"])
-        chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-        resp = chain.invoke({"input_documents": relevant_docs, "question": final_user_query}, return_only_outputs=True).get("output_text", "")
-        
-        if quiz_state == "correcting":
-            st.session_state.quiz_last_question = ""
-            st.session_state.quiz_state = "off"
-        return resp if resp else "لم أجد إجابة في النص المقدم."
+        vs = Chroma.from_documents(
+            docs,
+            embedding=embeddings,
+            collection_name=collection_name,
+            persist_directory=persist_dir
+        )
+        try:
+            vs.persist()
+        except Exception:
+            pass
+        return vs
     except Exception as e:
-        dbg("rag_chain_error", {"err": str(e)})
-        if quiz_state != "off":
-            st.session_state.quiz_state = "off"
-        return f"خطأ تقني أثناء البحث عن الإجابة: {e}"
-
-# =========================
-# 9) صوت (STT/TTS)
-# =========================
-def clean_text_for_speech(text):
-    return re.sub(r'[*#_`]', '', text)
-
-def speech_to_text(audio_bytes, lang_ui):
-    r = sr.Recognizer()
-    try:
-        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-            audio_data = r.record(source)
-        code = "en-US" if "English" in lang_ui else "ar-EG"
-        return r.recognize_google(audio_data, language=code)
-    except Exception as e:
-        dbg("stt_error", str(e))
+        dbg("chroma_error", str(e))
         return None
 
-async def generate_speech_async(text, lang_ui):
-    
+def 
