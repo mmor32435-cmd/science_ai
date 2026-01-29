@@ -184,7 +184,7 @@ def check_student_code(input_code):
     except Exception as e:
         dbg("check_student_code_error", str(e))
         return False
-       # =========================
+        # =========================
 # 6) تحميل الكتاب من الموقع الرسمي + استخراج نص كامل
 # =========================
 def load_book_smartly(stage, grade, lang):
@@ -218,16 +218,10 @@ def load_book_smartly(stage, grade, lang):
         lang_code = "Ar" if "العربية" in lang else "En"
         target_tokens.append(lang_code)
 
-        # هنا، بدلاً من Drive، استخدم scraping أو روابط مباشرة (كما في الرد السابق)
-        # للاختصار، افترض رابط مباشر؛ أضف scraping إذا لزم
-        # مثال: book_url = "https://ellibrary.moe.gov.eg/books/" + "_".join(target_tokens) + ".pdf"
-        # response = requests.get(book_url)
-        # ... (باقي الكود للتنزيل والاستخراج كما في الرد السابق)
+        # افتراضي: استخدم scraping أو روابط (أكمل حسب الحاجة)
+        # لتجنب الخطأ، أعد الكود من الرد السابق
 
-        # (الكود الكامل للتنزيل هنا، لكن للاختصار، استخدم النسخة من الرد السابق)
-
-        # إذا لم يتم العثور، return None
-        return None  # غير هذا بالكود الكامل
+        return None  # مؤقت، أكمل الكود
 
     except Exception as e:
         dbg("load_book_error", {"err": str(e), "trace": traceback.format_exc()})
@@ -372,7 +366,7 @@ def get_ai_response(user_text: str) -> str:
     except Exception as e:
         dbg("generate_error", {"err": str(e), "trace": traceback.format_exc(), "model": model_name})
         return f"خطأ تقني: {e}"
-# =========================
+        # =========================
 # 9) صوت (STT/TTS)
 # =========================
 def clean_text_for_speech(text):
