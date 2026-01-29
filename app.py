@@ -30,11 +30,7 @@ import pytesseract
 # =========================
 st.set_page_config(
     page_title="المعلم العلمي | السيد البدوي",
-    page_icon="🧬",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-# =========================
+    # =========================
 # 2) CSS آمن
 # =========================
 st.markdown("""
@@ -187,7 +183,7 @@ def check_student_code(input_code):
     except Exception as e:
         dbg("check_student_code_error", str(e))
         return False
-        # =========================
+       # =========================
 # 6) تحميل الكتاب من Drive + استخراج نص مبدئي
 # =========================
 def load_book_smartly(stage, grade, lang):
@@ -290,8 +286,64 @@ def ensure_book_loaded_and_text_ready():
     u = st.session_state.user_data
 
     if not st.session_state.book_data.get("name"):
-        data = load_book_smart
-        # =========================
+        data = load_book_smartly(u["stage"], u["grade"], u["lang"])
+        if not data:
+            return False
+        st.session_state.book_data = data
+
+    # لو النص صفر → OCR
+    if not (st.session_state.book_data.get("text") or "").strip():
+        pdf_path = st.session_state.book_data.get("path")
+        if pdf_path and os.path.exists(pdf_path):
+            with st.spinner("الكتاب يبدو مُصوَّراً.. جاري OCR لصفحات محدودة (قد يستغرق وقتاً)..."):
+                ocr_lang = "eng" if "English" in u["lang"] else "ara"
+                ocr_text = ocr_pdf_to_text(pdf_path, max_pages=8, lang=ocr_lang)
+                dbg("ocr_done", {"len": len(ocr_text), "is_error": "__OCR_ERROR__" in ocr_text})
+                dbg("ocr_text_preview", {"text": ocr_text[:400]})
+                if "__OCR_ERROR__" not in ocr_text:
+                    st.session_state.book_data["text"] = ocr_text
+
+    return True
+
+# =========================
+# 8) Gemini (نصي فقط لتفادي 400 الخاص بالملفات)
+# =========================
+def list_models_supporting_generate():
+    try:
+        ms = genai.list_models()
+        valid = []
+        for m in ms:
+            methods = getattr(m, "supported_generation_methods", []) or []
+            if "generateContent" in methods:
+                valid.append(m.name)
+        return valid
+    except Exception as e:
+        dbg("list_models_error", {"err": str(e), "trace": traceback.format_exc()})
+        return []
+
+def pick_model():
+    if st.session_state.gemini_model_name:
+        return st.session_state.gemini_model_name
+
+    models = list_models_supporting_generate()
+    dbg("models_available", {"count": len(models), "models": models[:50]})
+
+    preferred = []
+    for m in models:
+        if "latest" in m.lower():
+            preferred.append(m)
+    for m in models:
+        if "flash" in m.lower() and m not in preferred:
+            preferred.append(m)
+    for m in models:
+        if "pro" in m.lower() and m not in preferred:
+            preferred.append(m)
+    for m in models:
+        if m not in preferred:
+            preferred.append(m)
+
+    chosen =
+  # =========================
 # 9) صوت (STT/TTS)
 # =========================
 def clean_text_for_speech(text):
@@ -344,4 +396,61 @@ def login_page():
             stage = st.selectbox("المرحلة", ["الابتدائية", "الإعدادية", "الثانوية"])
             lang = st.selectbox("اللغة", ["العربية (علوم)", "English (Science)"])
         with col2:
-            grade = st.selectbox("الصف الدراسي", ["الرابع", "الخامس", 
+            grade = st.selectbox("الصف الدراسي", [
+                "الرابع", "الخامس", "السادس", "الأول", "الثاني", "الثالث"
+            ])
+
+        submit = st.form_submit_button("🚀 بدء التعلم")
+        if submit:
+            if code == TEACHER_KEY:
+                st.session_state.user_data.update({"logged_in": True, "role": "Teacher", "name": name})
+                st.rerun()
+            elif check_student_code(code):
+                st.session_state.user_data.update({
+                    "logged_in": True,
+                    "role": "Student",
+                    "name": name,
+                    "stage": stage,
+                    "grade": grade,
+                    "lang": lang
+                })
+                st.session_state.book_data = {"path": None, "text": None, "name": None}
+                st.session_state.gemini_model_name = None
+                st.session_state.messages = []
+                st.session_state.quiz_state = "off"
+                st.session_state.quiz_last_question = ""
+                st.session_state.debug_log = []
+                st.rerun()
+            else:
+                st.error("❌ الكود غير صحيح")
+
+def main_app():
+    with st.sidebar:
+        st.success(f"مرحباً: {st.session_state.user_data['name']}")
+        st.info(f"{st.session_state.user_data.get('grade','')} | {st.session_state.user_data.get('lang','')}")
+        st.write("---")
+
+        st.session_state.debug_enabled = st.checkbox("DEBUG", value=True)
+
+        colA, colB = st.columns(2)
+        with colA:
+            if st.button("مسح سجل DEBUG"):
+                st.session_state.debug_log = []
+                st.rerun()
+        with colB:
+            if st.button("تصفير اختيار الموديل"):
+                st.session_state.gemini_model_name = None
+                st.rerun()
+
+        with st.expander("سجل DEBUG"):
+            st.code(json.dumps(st.session_state.debug_log, ensure_ascii=False, indent=2))
+
+        st.write("---")
+        if st.button("📝 ابدأ اختبار"):
+            st.session_state.quiz_state = "asking"
+            st.session_state.quiz_last_question = ""
+            st.session_state.messages.append({"role": "user", "content": "ابدأ اختبار"})
+            with st.spinner("جاري إعداد السؤال..."):
+                resp = get_ai_response("ابدأ اختبار")
+                st.session_state.messages.append({"role": "assistant", "content": resp})  
+    
