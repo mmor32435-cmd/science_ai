@@ -112,7 +112,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # =========================
-# Maps (تم إعادة تفعيل جميع المراحل)
+# Maps
 # =========================
 STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
 
@@ -197,7 +197,7 @@ def dbg(event: str, data: Any = None):
     st.session_state.debug_log = st.session_state.debug_log[-500:]
 
 # =========================
-# Google Services
+# Google Services (Fixed Line 214)
 # =========================
 @st.cache_resource
 def get_credentials():
@@ -207,8 +207,30 @@ def get_credentials():
         creds_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        return service_account.Credentials.from_service_account_info(creds_dict, 
+        # تم تقسيم السطر الطويل لتجنب أخطاء النسخ
+        return service_account.Credentials.from_service_account_info(
+            creds_dict, 
+            scopes=scopes
+        )
+    except Exception as e:
+        dbg("creds_error", str(e))
+        return None
+
+@st.cache_resource
+def get_gspread_client():
+    creds = get_credentials()
+    return gspread.authorize(creds) if creds else None
+
+def open_sheet():
+    client = get_gspread_client()
+    if not client:
+        return None
+    try:
+        return client.open(SHEET_NAME)
+    except Exception as e:
+        dbg("open_sheet_error", 
