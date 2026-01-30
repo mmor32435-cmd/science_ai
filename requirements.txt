@@ -1,17 +1,7 @@
 streamlit
-gspread
-google-auth
-google-api-python-client
+google-generativeai
+requests
+# نحتاج هذه فقط للتعامل مع الصوت والواجهة
 SpeechRecognition
 streamlit-mic-recorder
 edge-tts
-pdf2image
-pytesseract
-pillow
-# تثبيت إصدارات مستقرة لحل مشكلة Import Error
-langchain==0.1.20
-langchain-community==0.0.38
-langchain-core==0.1.52
-langchain-google-genai==1.0.3
-langchain-text-splitters
-chromadb
