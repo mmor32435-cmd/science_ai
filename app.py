@@ -10,6 +10,8 @@ import tempfile
 import hashlib
 from typing import Optional, List, Dict, Any, Tuple
 
+from PIL import Image
+
 # Google & External Libs
 import gspread
 import speech_recognition as sr
@@ -22,7 +24,6 @@ from googleapiclient.http import MediaIoBaseDownload
 # OCR & Image Processing
 from pdf2image import convert_from_path
 import pytesseract
-from PIL import Image
 
 # LangChain & AI Imports
 try:
@@ -94,21 +95,30 @@ def init_state():
     if "quiz" not in st.session_state:
         st.session_state.quiz = {"state": "off", "q": "", "model": ""}
 
-# استدعاء الدالة فوراً للتأكد من وجود البيانات
+# Force initialization
 init_state()
 
+# --- هنا التعديل ليشمل كل المراحل ---
 STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
+
 GRADES = {
     "الابتدائية": ["الرابع", "الخامس", "السادس"],
     "الإعدادية": ["الأول", "الثاني", "الثالث"],
     "الثانوية": ["الأول", "الثاني", "الثالث"],
-}TERMS = ["الترم الأول", "الترم الثاني"]
+}
+
+TERMS = ["الترم الأول", "الترم الثاني"]
 LANGS = ["العربية (علوم)", "English (Science)"]
 
 def subjects_for(stage: str, grade: str) -> List[str]:
-    if stage == "الابتدائية" or stage == "الإعدادية": return ["علوم"]
-    if grade == "الأول": return ["علوم متكاملة"]
-    return ["كيمياء", "فيزياء", "أحياء"]
+    if stage in ["الابتدائية", "الإعدادية"]:
+        return ["علوم"]
+    if stage == "الثانوية":
+        if grade == "الأول":
+            return ["علوم متكاملة"]
+        else:
+            return ["كيمياء", "فيزياء", "أحياء"]
+    return ["علوم"]
 
 def is_english(lang_ui: str) -> bool:
     return "English" in (lang_ui or "")
@@ -123,16 +133,31 @@ def term_token(term: str) -> str:
     return "T2" if "الثاني" in term else "T1"
 
 def drive_tokens(stage: str, grade: str, subject: str, term: str, lang_ui: str) -> Tuple[List[str], List[str]]:
+    # خريطة تحويل الأسماء العربية إلى اختصارات الملفات
     stage_map = {"الابتدائية": "Grade", "الإعدادية": "Prep", "الثانوية": "Sec"}
     grade_map = {"الرابع": "4", "الخامس": "5", "السادس": "6", "الأول": "1", "الثاني": "2", "الثالث": "3"}
-    sub = "Science" if subject == "علوم" else subject
+    
+    # تحويل المواد
+    subject_map = {
+        "علوم": "Science",
+        "علوم متكاملة": "Integrated",
+        "كيمياء": "Chemistry",
+        "فيزياء": "Physics",
+        "أحياء": "Biology"
+    }
+    
+    sub = subject_map.get(subject, subject)
     lang = "En" if is_english(lang_ui) else "Ar"
+    
+    # تكوين اسم الملف المتوقع: مثلاً Grade4_Science_T1_En
     sg = f"{stage_map.get(stage,'')}{grade_map.get(grade,'')}"
+    
+    # احتمالات البحث
     return [sg, sub, term_token(term), lang], [sg, sub, lang]
 
 def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
-   # =========================
+    # =========================
 # Services (Google, OCR, AI)
 # =========================
 @st.cache_resource
@@ -141,7 +166,10 @@ def get_credentials():
     try:
         creds = dict(st.secrets["gcp_service_account"])
         creds["private_key"] = creds["private_key"].replace("\\n", "\n")
-        return service_account.Credentials.from_service_account_info(creds, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+        return service_account.Credentials.from_service_account_info(
+            creds, 
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
     except: return None
 
 @st.cache_resource
@@ -185,20 +213,26 @@ def load_book(stage, grade, subject, term, lang):
     srv = get_drive_service()
     if not srv: return None
     q = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
-    files = srv.files().list(q=q, fields="files(id,name)").execute().get("files", [])
+    try:
+        results = srv.files().list(q=q, fields="files(id,name)").execute()
+        files = results.get("files", [])
+    except: return None
     
     t1, t2 = drive_tokens(stage, grade, subject, term, lang)
     
+    # دالة مطابقة مرنة
     def match(tokens):
         for f in files:
-            if all(t.lower() in f["name"].lower() for t in tokens if t): return f
+            # نتأكد أن كل جزء من التوكن موجود في اسم الملف
+            if all(t.lower() in f["name"].lower() for t in tokens if t): 
+                return f
         return None
         
     f = match(t1) or match(t2)
     if not f: return None
     
     path = download_drive_pdf(f["id"], f["name"])
-    return {"id": f["id"], "name": f["name"], "path": path, "matched_with_term": f==match(t1)} if path else None
+    return {"id": f["id"], "name": f["name"], "path": path} if path else None
 
 @st.cache_data(show_spinner=False)
 def ocr_pdf(path, lang):
@@ -214,6 +248,7 @@ def get_llm():
 def ensure_book_ready():
     u = st.session_state.user_data
     sig = f"{u['stage']}|{u['grade']}|{u['subject']}|{u['lang']}"
+    
     if st.session_state.book_data.get("base_sig") != sig:
         st.session_state.book_data = {"base_sig": sig}
         st.session_state.vector_store = None
@@ -221,17 +256,18 @@ def ensure_book_ready():
     if not st.session_state.book_data.get("path"):
         d = load_book(u['stage'], u['grade'], u['subject'], u['term'], u['lang'])
         if not d:
-            st.error("لم يتم العثور على الكتاب.")
+            st.error(f"عذراً، لم يتم العثور على كتاب للمادة: {u['subject']} ({u['grade']}).")
             return False
         st.session_state.book_data.update(d)
     
     if not st.session_state.vector_store:
-        text = ocr_pdf(st.session_state.book_data["path"], ocr_lang(u['lang']))
-        if not text: return False
-        
-        docs = [Document(page_content=c) for c in RecursiveCharacterTextSplitter(chunk_size=1500).split_text(text)]
-        emb = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=random.choice(GOOGLE_API_KEYS))
-        st.session_state.vector_store = Chroma.from_documents(docs, emb, persist_directory=os.path.join(CHROMA_PERSIST_DIR, "chroma_books", sig))
+        with st.spinner("جاري تهيئة الكتاب للذكاء الاصطناعي..."):
+            text = ocr_pdf(st.session_state.book_data["path"], ocr_lang(u['lang']))
+            if not text: return False
+            
+            docs = [Document(page_content=c) for c in RecursiveCharacterTextSplitter(chunk_size=1500).split_text(text)]
+            emb = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=random.choice(GOOGLE_API_KEYS))
+            st.session_state.vector_store = Chroma.from_documents(docs, emb, persist_directory=os.path.join(CHROMA_PERSIST_DIR, "chroma_books", sig))
     return True
 
 def run_chat(q):
@@ -240,7 +276,7 @@ def run_chat(q):
     docs = st.session_state.vector_store.similarity_search(q, k=5)
     chain = load_qa_chain(llm, chain_type="stuff")
     return chain.invoke({"input_documents": docs, "question": q}, return_only_outputs=True).get("output_text", "")
-# =========================
+   # =========================
 # UI & Execution
 # =========================
 def login_page():
@@ -248,12 +284,20 @@ def login_page():
     with st.form("login"):
         name = st.text_input("الاسم")
         code = st.text_input("الكود", type="password")
+        
         c1, c2 = st.columns(2)
         stage = c1.selectbox("المرحلة", STAGES)
-        # إصلاح خطأ اختيار الصف - استخدام .get لتجنب الانهيار
-        grade = c1.selectbox("الصف", GRADES.get(stage, GRADES["الابتدائية"]))
+        
+        # تحديث الصفوف بناءً على المرحلة
+        available_grades = GRADES.get(stage, [])
+        grade = c1.selectbox("الصف", available_grades)
+        
         term = c2.selectbox("الترم", TERMS)
-        subject = c2.selectbox("المادة", subjects_for(stage, grade))
+        
+        # تحديث المواد بناءً على المرحلة والصف
+        avail_subs = subjects_for(stage, grade)
+        subject = c2.selectbox("المادة", avail_subs)
+        
         lang = st.selectbox("اللغة", LANGS)
         
         if st.form_submit_button("🚀 دخول"):
@@ -272,6 +316,7 @@ def main_app():
     u = st.session_state.user_data
     with st.sidebar:
         st.success(f"مرحباً {u.get('name')}")
+        st.info(f"{u['stage']} - {u['grade']}")
         if st.button("خروج"):
             st.session_state.user_data["logged_in"] = False
             st.rerun()
@@ -288,17 +333,14 @@ def main_app():
                 res = run_chat(q)
                 st.write(res)
 
-# نقطة الدخول الرئيسية مع حماية من الأخطاء
 if __name__ == "__main__":
-    # تأكد من أن session_state جاهز
     if "user_data" not in st.session_state:
         init_state()
-    
-    # استخدام .get بدلاً من الوصول المباشر لتجنب AttributeError
-    # st.session_state.get("user_data", {}) تعيد قاموساً فارغاً إذا لم تكن البيانات موجودة
+        
+    # استخدام .get لمنع الانهيار
     user_data = st.session_state.get("user_data", {})
     
     if user_data.get("logged_in", False):
         main_app()
     else:
-        login_page()
+        login_page() 
