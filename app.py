@@ -101,7 +101,7 @@ def dbg(event: str, data: Any = None):
     st.session_state.debug_log.append({"t": time.strftime("%H:%M:%S"), "event": event, "data": data})
 
 # =========================
-# Maps
+# Maps & Naming Logic (Updated)
 # =========================
 STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
 GRADES = {
@@ -122,15 +122,36 @@ def ocr_lang(lang_ui: str) -> str: return "eng" if is_english(lang_ui) else "ara
 def ui(lang_ui: str, ar: str, en: str) -> str: return en if is_english(lang_ui) else ar
 def term_token(term: str) -> str: return "T2" if "الثاني" in term else "T1"
 
+# --- دالة التسمية الجديدة (تطابق نمط Grade4_En) ---
 def drive_tokens(stage: str, grade: str, subject: str, term: str, lang_ui: str) -> Tuple[List[str], List[str]]:
-    stage_map = {"الابتدائية": "Grade", "الإعدادية": "Prep", "الثانوية": "Sec"}
-    grade_map = {"الرابع": "4", "الخامس": "5", "السادس": "6", "الأول": "1", "الثاني": "2", "الثالث": "3"}
-    sub_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
+    # 1. تحديد البادئة والرقم
+    if stage == "الابتدائية":
+        prefix = "Grade"
+        g_num = {"الرابع": "4", "الخامس": "5", "السادس": "6"}.get(grade, "")
+    elif stage == "الإعدادية":
+        prefix = "Prep"
+        g_num = {"الأول": "1", "الثاني": "2", "الثالث": "3"}.get(grade, "")
+    elif stage == "الثانوية":
+        prefix = "Sec"
+        g_num = {"الأول": "1", "الثاني": "2", "الثالث": "3"}.get(grade, "")
+    else:
+        prefix, g_num = "", ""
+
+    full_grade = f"{prefix}{g_num}" # مثال: Grade4
+
+    # 2. تحديد اللغة
+    lang_code = "En" if is_english(lang_ui) else "Ar"
+
+    # 3. الاسم البسيط المستهدف: Grade4_En
+    simple_name = f"{full_grade}_{lang_code}"
     
-    sub = sub_map.get(subject, subject)
-    lang = "En" if is_english(lang_ui) else "Ar"
-    sg = f"{stage_map.get(stage,'')}{grade_map.get(grade,'')}"
-    return [sg, sub, term_token(term), lang], [sg, sub, lang]
+    # 4. اسم بديل (للاحتياط): Science_Grade4
+    sub_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
+    sub_eng = sub_map.get(subject, "Science")
+    alt_name = f"{sub_eng}_{full_grade}"
+
+    # نرجع قائمة تحتوي على الاسم البسيط كأولوية قصوى
+    return [simple_name], [alt_name]
 
 def sha256_bytes(b: bytes) -> str: return hashlib.sha256(b).hexdigest()
 
@@ -213,14 +234,24 @@ def load_book(stage, grade, subject, term, lang):
         files = srv.files().list(q=q, fields="files(id,name)").execute().get("files", [])
     except: return None
     
+    # استخدام دالة التسمية الجديدة
     t1, t2 = drive_tokens(stage, grade, subject, term, lang)
+    
     def match(tokens):
         for f in files:
-            if all(t.lower() in f["name"].lower() for t in tokens if t): return f
+            # مطابقة جزئية ذكية (Case Insensitive)
+            # مثال: إذا كانت التوكن Grade4_En، سيجد Grade4_En.pdf أو Grade4_En_V2.pdf
+            fname = f["name"].lower()
+            if all(t.lower() in fname for t in tokens): return f
         return None
         
     f = match(t1) or match(t2)
-    if not f: return None
+    
+    if not f:
+        # عرض رسالة مساعدة عند الفشل
+        st.error(f"لم يتم العثور على كتاب باسم مشابه لـ: {' '.join(t1)}")
+        return None
+        
     path = download_drive_pdf(f["id"], f["name"])
     return {"id": f["id"], "name": f["name"], "path": path} if path else None
 
@@ -247,13 +278,11 @@ def ensure_book_ready():
     
     if not st.session_state.book_data.get("path"):
         d = load_book(u['stage'], u['grade'], u['subject'], u['term'], u['lang'])
-        if not d:
-            st.error(f"لم يتم العثور على كتاب: {u['subject']} ({u['grade']})")
-            return False
+        if not d: return False
         st.session_state.book_data.update(d)
     
     if not st.session_state.vector_store:
-        with st.spinner("جاري تجهيز الكتاب..."):
+        with st.spinner(f"جاري قراءة الكتاب: {st.session_state.book_data['name']}..."):
             text = ocr_pdf(st.session_state.book_data["path"], ocr_lang(u['lang']))
             if not text: return False
             docs = [Document(page_content=c) for c in RecursiveCharacterTextSplitter(chunk_size=1500).split_text(text)]
@@ -301,10 +330,8 @@ def login_page():
     if "login_stage" not in st.session_state:
         st.session_state.login_stage = "الابتدائية"
     
-    # قائمة المرحلة خارج الفورم لتحديث الصفحة
     sel_stage = st.selectbox("المرحلة", STAGES, index=STAGES.index(st.session_state.login_stage), key="stage_sel", on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_sel}))
     
-    # تحديث الصفوف
     current_grades = GRADES.get(sel_stage, [])
     
     with st.form("login_form"):
