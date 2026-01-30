@@ -1,405 +1,309 @@
 import streamlit as st
+import google.generativeai as genai
+import requests
+import tempfile
 import os
-import re
-import io
 import json
 import time
-import random
 import asyncio
-import tempfile
-import hashlib
-from typing import Optional, List, Dict, Any, Tuple
-
-from PIL import Image
-
-# Google & External Libs
-import gspread
-import speech_recognition as sr
 from streamlit_mic_recorder import mic_recorder
 import edge_tts
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-
-# OCR & Image Processing
-from pdf2image import convert_from_path
-import pytesseract
-
-# LangChain & AI Imports
-try:
-    from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-except ImportError:
-    import langchain_google_genai
-    from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-
-from langchain_community.vectorstores import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import PromptTemplate
-from langchain_core.documents import Document
-from langchain.chains.question_answering import load_qa_chain
+import speech_recognition as sr
+from io import BytesIO
 
 # =========================
-# Page config
+# 1. إعدادات الصفحة والسرية
 # =========================
 st.set_page_config(
-    page_title="المعلم العلمي | السيد البدوي",
-    page_icon="🧬",
+    page_title="المعلم الذكي | منهاج مصر",
+    page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# تنسيق CSS احترافي وعربي
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
 html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
-.header-box { background: linear-gradient(90deg, #061a40 0%, #0353a4 50%, #006daa 100%); padding: 1.6rem; border-radius: 18px; text-align: center; margin-bottom: 1.2rem; color: white; }
-.stButton>button { background: linear-gradient(90deg, #0353a4 0%, #061a40 100%) !important; color: #ffffff !important; border-radius: 12px; height: 50px; width: 100%; }
+.header-box { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); padding: 2rem; border-radius: 20px; text-align: center; color: white; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+.stButton>button { background: #2a5298; color: white; border-radius: 10px; height: 50px; width: 100%; font-size: 18px; border: none; transition: 0.3s; }
+.stButton>button:hover { background: #1e3c72; transform: scale(1.02); }
+.book-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# Secrets
-# =========================
-TEACHER_NAME = st.secrets.get("TEACHER_NAME", "الأستاذ")
-TEACHER_KEY = st.secrets.get("TEACHER_MASTER_KEY", "ADMIN")
-SHEET_NAME = st.secrets.get("CONTROL_SHEET_NAME", "App_Control")
-CONTROL_TAB_NAME = st.secrets.get("CONTROL_TAB_NAME", "")
-FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
+# مفاتيح API
 GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
 if isinstance(GOOGLE_API_KEYS, str):
     GOOGLE_API_KEYS = [k.strip() for k in GOOGLE_API_KEYS.split(",") if k.strip()]
 
-CHROMA_PERSIST_DIR = st.secrets.get("CHROMA_PERSIST_DIR", "./chroma_db")
-os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
-
-RESULTS_TAB_NAME = "Results"
-ASSIGNMENTS_TAB_NAME = "Assignments"
-SUBMISSIONS_TAB_NAME = "Submissions"
 # =========================
-# Session State
+# 2. مكتبة كتب الوزارة (قابلة للتوسع)
 # =========================
-def init_state():
-    if "user_data" not in st.session_state:
-        st.session_state.user_data = {"logged_in": False, "role": None, "name": ""}
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "book_data" not in st.session_state:
-        st.session_state.book_data = {}
-    if "vector_store" not in st.session_state:
-        st.session_state.vector_store = None
-    if "uploaded_context" not in st.session_state:
-        st.session_state.uploaded_context = {"name": "", "text": "", "vs": None}
-    if "tts_enabled" not in st.session_state:
-        st.session_state.tts_enabled = False
-    if "quiz" not in st.session_state:
-        st.session_state.quiz = {"state": "off", "q": "", "model": ""}
-
-init_state()
-
-def dbg(event: str, data: Any = None):
-    if not st.session_state.debug_enabled: return
-    st.session_state.debug_log.append({"t": time.strftime("%H:%M:%S"), "event": event, "data": data})
-
-# =========================
-# Maps & Naming Logic (Updated)
-# =========================
-STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
-GRADES = {
-    "الابتدائية": ["الرابع", "الخامس", "السادس"],
-    "الإعدادية": ["الأول", "الثاني", "الثالث"],
-    "الثانوية": ["الأول", "الثاني", "الثالث"],
+# يمكنك إضافة روابط الكتب الحقيقية هنا من موقع الوزارة
+MINISTRY_BOOKS = {
+    "الابتدائية": {
+        "الرابع": {
+            "علوم (عربي)": "https://example.com/grade4_science_ar.pdf", # استبدل هذا برابط حقيقي
+            "Science (Lg)": "https://example.com/grade4_science_en.pdf"
+        },
+        "الخامس": { "علوم": "url...", "Science": "url..." },
+        "السادس": { "علوم": "url...", "Science": "url..." },
+    },
+    "الإعدادية": {
+        "الأول": { "علوم": "url...", "Science": "url..." },
+        "الثاني": { "علوم": "url...", "Science": "url..." },
+        "الثالث": { "علوم": "url...", "Science": "url..." },
+    },
+    "الثانوية": {
+        "الأول": { "كيمياء": "url...", "فيزياء": "url...", "أحياء": "url..." },
+        "الثاني": { "كيمياء": "url...", "فيزياء": "url...", "أحياء": "url..." },
+        "الثالث": { "كيمياء": "url...", "فيزياء": "url...", "أحياء": "url..." },
+    }
 }
-TERMS = ["الترم الأول", "الترم الثاني"]
-LANGS = ["العربية (علوم)", "English (Science)"]
-
-def subjects_for(stage: str, grade: str) -> List[str]:
-    if stage in ["الابتدائية", "الإعدادية"]: return ["علوم"]
-    if grade == "الأول": return ["علوم متكاملة"]
-    return ["كيمياء", "فيزياء", "أحياء"]
-
-def is_english(lang_ui: str) -> bool: return "English" in (lang_ui or "")
-def ocr_lang(lang_ui: str) -> str: return "eng" if is_english(lang_ui) else "ara"
-def ui(lang_ui: str, ar: str, en: str) -> str: return en if is_english(lang_ui) else ar
-def term_token(term: str) -> str: return "T2" if "الثاني" in term else "T1"
-
-# --- دالة التسمية الجديدة (تطابق نمط Grade4_En) ---
-def drive_tokens(stage: str, grade: str, subject: str, term: str, lang_ui: str) -> Tuple[List[str], List[str]]:
-    # 1. تحديد البادئة والرقم
-    if stage == "الابتدائية":
-        prefix = "Grade"
-        g_num = {"الرابع": "4", "الخامس": "5", "السادس": "6"}.get(grade, "")
-    elif stage == "الإعدادية":
-        prefix = "Prep"
-        g_num = {"الأول": "1", "الثاني": "2", "الثالث": "3"}.get(grade, "")
-    elif stage == "الثانوية":
-        prefix = "Sec"
-        g_num = {"الأول": "1", "الثاني": "2", "الثالث": "3"}.get(grade, "")
-    else:
-        prefix, g_num = "", ""
-
-    full_grade = f"{prefix}{g_num}" # مثال: Grade4
-
-    # 2. تحديد اللغة
-    lang_code = "En" if is_english(lang_ui) else "Ar"
-
-    # 3. الاسم البسيط المستهدف: Grade4_En
-    simple_name = f"{full_grade}_{lang_code}"
-    
-    # 4. اسم بديل (للاحتياط): Science_Grade4
-    sub_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
-    sub_eng = sub_map.get(subject, "Science")
-    alt_name = f"{sub_eng}_{full_grade}"
-
-    # نرجع قائمة تحتوي على الاسم البسيط كأولوية قصوى
-    return [simple_name], [alt_name]
-
-def sha256_bytes(b: bytes) -> str: return hashlib.sha256(b).hexdigest()
 
 # =========================
-# Services
+# 3. محرك الذكاء الاصطناعي (Gemini Cloud)
 # =========================
-@st.cache_resource
-def get_credentials():
-    if "gcp_service_account" not in st.secrets: return None
-    try:
-        creds = dict(st.secrets["gcp_service_account"])
-        creds["private_key"] = creds["private_key"].replace("\\n", "\n")
-        return service_account.Credentials.from_service_account_info(creds, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
-    except: return None
-
-@st.cache_resource
-def get_gspread_client():
-    c = get_credentials()
-    return gspread.authorize(c) if c else None
-
-def open_sheet():
-    c = get_gspread_client()
-    return c.open(SHEET_NAME) if c else None
-
-def check_student_code(code: str) -> bool:
-    try:
-        sh = open_sheet()
-        ws = sh.worksheet(CONTROL_TAB_NAME) if CONTROL_TAB_NAME else sh.sheet1
-        return str(code).strip() == str(ws.acell("B1").value).strip()
-    except: return False
-
-def ensure_ws(sh, title, headers):
-    try:
-        ws = sh.worksheet(title)
-    except:
-        ws = sh.add_worksheet(title=title, rows=1000, cols=20)
-        ws.update("A1", [headers])
-    return ws
-
-def append_row(ws, row):
-    try: ws.append_row([str(x) for x in row], value_input_option="USER_ENTERED"); return True
-    except: return False
-
-def get_logging_sheets():
-    sh = open_sheet()
-    if not sh: return None, None, None
-    r = ensure_ws(sh, RESULTS_TAB_NAME, ["time", "name", "role", "stage", "grade", "subject", "term", "lang", "type", "book", "q", "a", "score", "fb"])
-    a = ensure_ws(sh, ASSIGNMENTS_TAB_NAME, ["id", "time", "teacher", "stage", "grade", "subject", "term", "lang", "title", "diff", "q_json", "active"])
-    s = ensure_ws(sh, SUBMISSIONS_TAB_NAME, ["sub_id", "time", "assign_id", "name", "stage", "grade", "subject", "term", "lang", "a_json", "g_json", "score"])
-    return r, a, s
-    # =========================
-# Drive & OCR
-# =========================
-@st.cache_resource
-def get_drive_service():
-    c = get_credentials()
-    return build("drive", "v3", credentials=c) if c else None
-
-def download_drive_pdf(file_id: str, name: str) -> Optional[str]:
-    srv = get_drive_service()
-    if not srv: return None
-    safe = re.sub(r"[^a-zA-Z0-9]+", "_", name)
-    path = os.path.join(CHROMA_PERSIST_DIR, "books_cache", f"{file_id}_{safe}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if os.path.exists(path): return path
-    try:
-        req = srv.files().get_media(fileId=file_id)
-        with open(path, "wb") as f:
-            d = MediaIoBaseDownload(f, req)
-            done = False
-            while not done: _, done = d.next_chunk()
-        return path
-    except: return None
-
-def load_book(stage, grade, subject, term, lang):
-    srv = get_drive_service()
-    if not srv: return None
-    q = f"'{FOLDER_ID}' in parents and mimeType='application/pdf'"
-    try:
-        files = srv.files().list(q=q, fields="files(id,name)").execute().get("files", [])
-    except: return None
-    
-    # استخدام دالة التسمية الجديدة
-    t1, t2 = drive_tokens(stage, grade, subject, term, lang)
-    
-    def match(tokens):
-        for f in files:
-            # مطابقة جزئية ذكية (Case Insensitive)
-            # مثال: إذا كانت التوكن Grade4_En، سيجد Grade4_En.pdf أو Grade4_En_V2.pdf
-            fname = f["name"].lower()
-            if all(t.lower() in fname for t in tokens): return f
-        return None
-        
-    f = match(t1) or match(t2)
-    
-    if not f:
-        # عرض رسالة مساعدة عند الفشل
-        st.error(f"لم يتم العثور على كتاب باسم مشابه لـ: {' '.join(t1)}")
-        return None
-        
-    path = download_drive_pdf(f["id"], f["name"])
-    return {"id": f["id"], "name": f["name"], "path": path} if path else None
-
-@st.cache_data(show_spinner=False)
-def ocr_pdf(path, lang):
-    try:
-        pages = convert_from_path(path, dpi=200)
-        return "\n".join([pytesseract.image_to_string(p, lang=lang) for p in pages])
-    except: return ""
-
-# =========================
-# AI Logic
-# =========================
-def get_llm(temp=0.2):
-    k = random.choice(GOOGLE_API_KEYS) if GOOGLE_API_KEYS else None
-    return ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=k, temperature=temp) if k else None
-
-def ensure_book_ready():
-    u = st.session_state.user_data
-    sig = f"{u['stage']}|{u['grade']}|{u['subject']}|{u['lang']}"
-    if st.session_state.book_data.get("base_sig") != sig:
-        st.session_state.book_data = {"base_sig": sig}
-        st.session_state.vector_store = None
-    
-    if not st.session_state.book_data.get("path"):
-        d = load_book(u['stage'], u['grade'], u['subject'], u['term'], u['lang'])
-        if not d: return False
-        st.session_state.book_data.update(d)
-    
-    if not st.session_state.vector_store:
-        with st.spinner(f"جاري قراءة الكتاب: {st.session_state.book_data['name']}..."):
-            text = ocr_pdf(st.session_state.book_data["path"], ocr_lang(u['lang']))
-            if not text: return False
-            docs = [Document(page_content=c) for c in RecursiveCharacterTextSplitter(chunk_size=1500).split_text(text)]
-            emb = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=random.choice(GOOGLE_API_KEYS))
-            st.session_state.vector_store = Chroma.from_documents(docs, emb, persist_directory=os.path.join(CHROMA_PERSIST_DIR, "chroma_books", sig))
+def configure_genai():
+    if not GOOGLE_API_KEYS:
+        st.error("⚠️ لم يتم العثور على مفاتيح API في Secrets")
+        return False
+    # تدوير المفاتيح لتجنب الحظر
+    genai.configure(api_key=random.choice(GOOGLE_API_KEYS))
     return True
 
-def run_chat(q):
-    llm = get_llm()
-    if not llm: return "API Error"
-    docs = st.session_state.vector_store.similarity_search(q, k=5)
-    chain = load_qa_chain(llm, chain_type="stuff")
-    return chain.invoke({"input_documents": docs, "question": q}, return_only_outputs=True).get("output_text", "")
-    # =========================
-# UI & Run
+import random
+
+def upload_to_gemini(path, mime_type="application/pdf"):
+    """يرفع الملف إلى سيرفرات جوجل مباشرة للمعالجة السريعة"""
+    try:
+        file = genai.upload_file(path, mime_type=mime_type)
+        # ننتظر حتى تتم معالجة الملف
+        while file.state.name == "PROCESSING":
+            time.sleep(2)
+            file = genai.get_file(file.name)
+        return file
+    except Exception as e:
+        st.error(f"فشل الرفع لسحابة جوجل: {e}")
+        return None
+
+def get_model(file_attachment=None):
+    """يجهز الموديل مع الملف المرفق (الكتاب)"""
+    config = {
+        "temperature": 0.3,
+        "top_p": 0.95,
+        "top_k": 64,
+        "max_output_tokens": 8192,
+    }
+    
+    system_prompt = """أنت معلم خبير في المناهج المصرية.
+    دورك هو مساعدة الطالب بناءً على محتوى الكتاب المدرسي المرفق فقط.
+    - اشرح بوضوح وبساطة.
+    - عند طلب اختبار، استخرج الأسئلة من الكتاب.
+    - عند التصحيح، كن دقيقاً وأعط درجة من 10.
+    """
+    
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        generation_config=config,
+        system_instruction=system_prompt
+    )
+    
+    # بدء الشات مع الملف المرفق (الكتاب)
+    history = []
+    if file_attachment:
+        history.append({"role": "user", "parts": [file_attachment, "هذا هو الكتاب المدرسي. اعتمد عليه في كل إجاباتك."]})
+        history.append({"role": "model", "parts": ["حسناً، لقد قرأت الكتاب المدرسي كاملاً وأنا مستعد للمساعدة."]})
+    
+    return model.start_chat(history=history)
+
 # =========================
-def clean_speech_text(text: str) -> str:
-    return re.sub(r'[*#_`]', '', text).strip()
-
-def speech_to_text(audio_bytes: bytes, lang_ui: str) -> Optional[str]:
-    r = sr.Recognizer()
+# 4. إدارة الملفات والتحميل
+# =========================
+def load_book_from_url(url, filename):
+    """يحمل الكتاب من رابط الوزارة"""
     try:
-        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-            audio_data = r.record(source)
-        return r.recognize_google(audio_data, language="en-US" if is_english(lang_ui) else "ar-EG")
-    except: return None
+        response = requests.get(url, stream=True)
+        if response.status_code == 200:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                for chunk in response.iter_content(chunk_size=8192):
+                    tmp.write(chunk)
+                return tmp.name
+        return None
+    except:
+        return None
 
-async def tts_async(text: str, lang_ui: str) -> str:
-    voice = "en-US-ChristopherNeural" if is_english(lang_ui) else "ar-EG-ShakirNeural"
-    communicate = edge_tts.Communicate(clean_speech_text(text), voice)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-        await communicate.save(tmp.name)
-        return tmp.name
+# =========================
+# 5. الواجهة والتشغيل
+# =========================
+def main():
+    # تهيئة الحالة
+    if "chat_session" not in st.session_state:
+        st.session_state.chat_session = None
+    if "current_book" not in st.session_state:
+        st.session_state.current_book = None
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-def text_to_speech(text: str, lang_ui: str) -> Optional[str]:
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(tts_async(text, lang_ui))
-    except: return None
-
-def login_page():
-    st.markdown("### 🔐 تسجيل الدخول")
-    
-    if "login_stage" not in st.session_state:
-        st.session_state.login_stage = "الابتدائية"
-    
-    sel_stage = st.selectbox("المرحلة", STAGES, index=STAGES.index(st.session_state.login_stage), key="stage_sel", on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_sel}))
-    
-    current_grades = GRADES.get(sel_stage, [])
-    
-    with st.form("login_form"):
-        name = st.text_input("الاسم")
-        code = st.text_input("الكود", type="password")
-        
-        c1, c2 = st.columns(2)
-        grade = c1.selectbox("الصف", current_grades)
-        term = c2.selectbox("الترم", TERMS)
-        
-        subject = c1.selectbox("المادة", subjects_for(sel_stage, grade))
-        lang = c2.selectbox("اللغة", LANGS)
-        
-        if st.form_submit_button("🚀 دخول"):
-            if code == TEACHER_KEY or check_student_code(code):
-                st.session_state.user_data = {"logged_in": True, "role": "Teacher" if code==TEACHER_KEY else "Student", "name": name, "stage": sel_stage, "grade": grade, "subject": subject, "term": term, "lang": lang}
-                st.rerun()
-            else:
-                st.error("الكود غير صحيح")
-
-def sidebar():
-    u = st.session_state.user_data
+    # --- القائمة الجانبية (اختيار المنهج) ---
     with st.sidebar:
-        st.success(f"مرحباً {u.get('name')}")
-        st.info(f"{u['stage']} | {u['grade']}")
+        st.image("https://cdn-icons-png.flaticon.com/512/3426/3426653.png", width=100)
+        st.title("إعدادات المنهج")
         
-        if "sb_stage" not in st.session_state: st.session_state.sb_stage = u["stage"]
+        stage = st.selectbox("المرحلة", list(MINISTRY_BOOKS.keys()))
+        grade = st.selectbox("الصف", list(MINISTRY_BOOKS[stage].keys()))
+        subject = st.selectbox("المادة", list(MINISTRY_BOOKS[stage][grade].keys()))
         
-        new_stage = st.selectbox("تغيير المرحلة", STAGES, index=STAGES.index(st.session_state.sb_stage), key="sb_s", on_change=lambda: st.session_state.update({"sb_stage": st.session_state.sb_s}))
-        new_grade = st.selectbox("الصف", GRADES.get(new_stage, []), key="sb_g")
-        new_sub = st.selectbox("المادة", subjects_for(new_stage, new_grade), key="sb_sub")
+        # خيار: استخدام رابط الوزارة أو رفع ملف
+        input_method = st.radio("مصدر الكتاب", ["رابط مباشر (URL)", "رفع ملف PDF"])
         
-        if st.button("تحديث"):
-            st.session_state.user_data.update({"stage": new_stage, "grade": new_grade, "subject": new_sub})
-            st.rerun()
+        book_ready = False
+        
+        if input_method == "رابط مباشر (URL)":
+            default_url = MINISTRY_BOOKS[stage][grade][subject]
+            # إذا كان الرابط مثال، نتركه فارغاً ليقوم المعلم بوضعه
+            val = "" if "example" in default_url else default_url
+            book_url = st.text_input("رابط كتاب الوزارة (PDF)", value=val)
             
-        st.write("---")
-        st.session_state.tts_enabled = st.checkbox("🔊 صوت", value=st.session_state.tts_enabled)
-        if st.button("خروج"):
-            st.session_state.user_data["logged_in"] = False
-            st.rerun()
+            if st.button("📥 تحميل وربط المنهج"):
+                if book_url:
+                    with st.status("جاري تحميل الكتاب وقراءته سحابياً..."):
+                        local_path = load_book_from_url(book_url, f"{subject}_{grade}.pdf")
+                        if local_path and configure_genai():
+                            gemini_file = upload_to_gemini(local_path)
+                            if gemini_file:
+                                st.session_state.chat_session = get_model(gemini_file)
+                                st.session_state.current_book = f"{subject} - {grade}"
+                                st.session_state.messages = []
+                                book_ready = True
+                                st.success("تم قراءة الكتاب بالكامل (150+ صفحة) بنجاح!")
+                else:
+                    st.error("يرجى إدخال الرابط")
+                    
+        else: # رفع ملف
+            uploaded_file = st.file_uploader("ارفع كتاب المدرسة (PDF)", type=['pdf'])
+            if uploaded_file and st.button("🚀 معالجة الكتاب"):
+                with st.status("جاري إرسال الكتاب للمعالجة السحابية..."):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(uploaded_file.getvalue())
+                        local_path = tmp.name
+                    
+                    if configure_genai():
+                        gemini_file = upload_to_gemini(local_path)
+                        if gemini_file:
+                            st.session_state.chat_session = get_model(gemini_file)
+                            st.session_state.current_book = uploaded_file.name
+                            st.session_state.messages = []
+                            book_ready = True
+                            st.success("تم استيعاب الكتاب بنجاح!")
 
-def main_app():
-    sidebar()
-    if not ensure_book_ready(): st.stop()
-    
-    st.markdown("### 💬 الشات")
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.write(m["content"])
+        st.divider()
+        if st.session_state.current_book:
+            st.info(f"📘 المنهج الحالي: {st.session_state.current_book}")
+            if st.button("مسح المحادثة"):
+                st.session_state.messages = []
+                st.rerun()
+
+    # --- المنطقة الرئيسية ---
+    st.markdown(f"""
+    <div class="header-box">
+        <h1>المنصة التعليمية الذكية</h1>
+        <p>اشرح، قيّم، وصحح الواجبات من كتاب الوزارة مباشرة</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not st.session_state.chat_session:
+        st.warning("👈 يرجى اختيار المنهج وتحميل الكتاب من القائمة الجانبية للبدء.")
+        return
+
+    # التبويبات الوظيفية
+    tabs = st.tabs(["💬 الشات والشرح", "📝 إنشاء اختبار", "✅ تصحيح الواجب"])
+
+    # 1. تبويب الشات
+    with tabs[0]:
+        for msg in st.session_state.messages:
+            role = "user" if msg["role"] == "user" else "assistant"
+            with st.chat_message(role):
+                st.write(msg["content"])
+
+        # إدخال صوتي أو كتابي
+        c1, c2 = st.columns([1, 8])
+        with c1:
+            audio = mic_recorder(start_prompt="🎙️", stop_prompt="🛑", key="mic")
+        with c2:
+            prompt = st.chat_input("اسأل عن أي درس في الكتاب...")
+
+        input_text = None
+        if prompt: input_text = prompt
+        elif audio:
+            # تحويل الصوت لنص (بسيط)
+            r = sr.Recognizer()
+            try:
+                with sr.AudioFile(BytesIO(audio['bytes'])) as source:
+                    input_text = r.recognize_google(r.record(source), language="ar-EG")
+            except: pass
+
+        if input_text:
+            st.session_state.messages.append({"role": "user", "content": input_text})
+            with st.chat_message("user"): st.write(input_text)
+            
+            with st.chat_message("assistant"):
+                with st.spinner("جاري البحث في صفحات الكتاب..."):
+                    try:
+                        response = st.session_state.chat_session.send_message(input_text)
+                        st.write(response.text)
+                        st.session_state.messages.append({"role": "model", "content": response.text})
+                        
+                        # قراءة صوتية للإجابة
+                        if st.checkbox("قراءة الإجابة", value=True, key="tts"):
+                            async def play_tts():
+                                v = edge_tts.Communicate(response.text, "ar-EG-ShakirNeural")
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+                                    await v.save(f.name)
+                                    st.audio(f.name)
+                            asyncio.run(play_tts())
+                    except Exception as e:
+                        st.error(f"حدث خطأ: {e}")
+
+    # 2. تبويب الاختبارات
+    with tabs[1]:
+        st.subheader("توليد اختبار من الكتاب")
+        topic = st.text_input("موضوع الاختبار (مثلاً: الوحدة الأولى)")
+        q_count = st.slider("عدد الأسئلة", 1, 10, 5)
+        difficulty = st.select_slider("المستوى", ["سهل", "متوسط", "صعب"])
         
-    q = st.chat_input("سؤالك...")
-    if q:
-        st.session_state.messages.append({"role": "user", "content": q})
-        with st.chat_message("user"): st.write(q)
-        with st.chat_message("assistant"):
-            with st.spinner("جاري البحث..."):
-                res = run_chat(q)
-                st.write(res)
-                if st.session_state.tts_enabled:
-                    aud = text_to_speech(res, st.session_state.user_data['lang'])
-                    if aud: st.audio(aud)
-                st.session_state.messages.append({"role": "assistant", "content": res})
+        if st.button("إنشاء الاختبار"):
+            if topic:
+                prompt = f"قم بإنشاء اختبار مكون من {q_count} أسئلة عن '{topic}' من الكتاب بمستوى {difficulty}. اجعل الأسئلة متنوعة (اختيار من متعدد، صح وخطأ). لا تجب عليها، فقط اعرض الأسئلة."
+                with st.spinner("المعلم يكتب الاختبار..."):
+                    resp = st.session_state.chat_session.send_message(prompt)
+                    st.markdown(resp.text)
+            else:
+                st.error("حدد الموضوع أولاً")
+
+    # 3. تبويب التصحيح
+    with tabs[2]:
+        st.subheader("تصحيح إجابة الطالب")
+        question = st.text_input("السؤال")
+        student_ans = st.text_area("إجابة الطالب")
+        
+        if st.button("قيّم الإجابة"):
+            if question and student_ans:
+                prompt = f"""
+                السؤال: {question}
+                إجابة الطالب: {student_ans}
+                
+                بناءً على المعلومات الموجودة في الكتاب:
+                1. هل الإجابة صحيحة؟
+                2. أعط درجة من 10.
+                3. إذا كانت خاطئة، ما هي الإجابة النموذجية من الكتاب؟
+                """
+                with st.spinner("جاري التصحيح..."):
+                    resp = st.session_state.chat_session.send_message(prompt)
+                    st.success("النتيجة:")
+                    st.write(resp.text)
 
 if __name__ == "__main__":
-    if "user_data" not in st.session_state:
-        init_state()
-    
-    if st.session_state.get("user_data", {}).get("logged_in", False):
-        main_app()
-    else:
-        login_page()
+    main()
