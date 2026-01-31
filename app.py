@@ -15,7 +15,7 @@ import edge_tts
 import speech_recognition as sr
 
 # =========================
-# 1. الإعدادات
+# 1. إعدادات الصفحة
 # =========================
 st.set_page_config(page_title="المعلم الذكي | منهاج مصر", layout="wide", page_icon="🇪🇬")
 st.markdown("""
@@ -27,12 +27,11 @@ html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl
 </style>
 """, unsafe_allow_html=True)
 
-# الأسرار
+# الأسرار (تأكد من وجودها في Secrets)
 FOLDER_ID = "1ub4ML8q4YCM_VZR991XXQ6hBBas2X6rS"
 GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
 if isinstance(GOOGLE_API_KEYS, str): GOOGLE_API_KEYS = [k.strip() for k in GOOGLE_API_KEYS.split(",")]
-
-# =========================
+    # =========================
 # 2. الخرائط ومنطق التسمية
 # =========================
 STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
@@ -44,29 +43,57 @@ GRADES = {
 TERMS = ["الترم الأول", "الترم الثاني"]
 
 def subjects_for(stage, grade):
-    if stage == "الثانوية":
-        return ["علوم متكاملة"] if grade == "الأول" else ["كيمياء", "فيزياء", "أحياء"]
+    if stage in ["الابتدائية", "الإعدادية"]:
+        return ["علوم"]
+    elif stage == "الثانوية":
+        if grade == "الأول": return ["علوم متكاملة"]
+        return ["كيمياء", "فيزياء", "أحياء"]
     return ["علوم"]
 
-def get_search_tokens(stage, grade, subject, lang_type):
-    # تحويل الاختيارات العربية إلى أجزاء اسم الملف
-    s_map = {"الابتدائية": "Grade", "الإعدادية": "Prep", "الثانوية": "Sec"}
+def generate_file_name_search(stage, grade, subject, lang_type):
+    """
+    توليد اسم الملف ليطابق الملفات الـ 26 الموجودة في Drive بدقة.
+    """
+    
+    # 1. تحويل رقم الصف
     g_map = {"الأول": "1", "الثاني": "2", "الثالث": "3", "الرابع": "4", "الخامس": "5", "السادس": "6"}
+    g_num = g_map.get(grade, "1")
     
-    stage_code = f"{s_map[stage]}{g_map[grade]}" # مثال: Prep3
-    
-    sub_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
-    sub_code = sub_map.get(subject, "Science")
-    
+    # 2. تحويل كود اللغة (Ar / En)
     lang_code = "En" if "English" in lang_type else "Ar"
-    
-    # نرجع مجموعتين للبحث:
-    # 1. دقيقة: الصف + المادة + اللغة
-    # 2. مرنة: الصف + المادة (في حال لم يكن اسم الملف يحتوي على Ar)
-    return [stage_code, sub_code, lang_code], [stage_code, sub_code]
 
-# =========================
-# 3. خدمات جوجل والبحث الذكي (تم التعديل هنا)
+    # 3. تركيب الاسم حسب المرحلة (Matching Pattern)
+    
+    if stage == "الابتدائية":
+        # النمط: Grade{N}_{Lang} -> مثال: Grade4_Ar
+        return f"Grade{g_num}_{lang_code}"
+    
+    elif stage == "الإعدادية":
+        # النمط: Prep{N}_{Lang} -> مثال: Prep1_En
+        return f"Prep{g_num}_{lang_code}"
+    
+    elif stage == "الثانوية":
+        # الصف الأول الثانوي
+        if grade == "الأول":
+            # النمط: Sec1_Integrated_{Lang}
+            return f"Sec1_Integrated_{lang_code}"
+        
+        # الصف الثاني والثالث الثانوي
+        else:
+            # تحويل اسم المادة للاختصارات المعتمدة في ملفاتك
+            sub_map = {
+                "كيمياء": "Chem",
+                "فيزياء": "Physics",
+                "أحياء": "Biology"
+            }
+            sub_code = sub_map.get(subject, "Chem") # Chem افتراضي لو حصل خطأ
+            
+            # النمط: Sec{N}_{Subject}_{Lang} -> مثال: Sec2_Chem_Ar
+            return f"Sec{g_num}_{sub_code}_{lang_code}"
+            
+    return ""
+    # =========================
+# 3. خدمات جوجل والبحث الذكي
 # =========================
 def configure_genai():
     if not GOOGLE_API_KEYS: return False
@@ -82,76 +109,54 @@ def get_drive_service():
         return build("drive", "v3", credentials=service_account.Credentials.from_service_account_info(creds))
     except: return None
 
-def find_and_download_book(primary_tokens, secondary_tokens):
+def find_and_download_book(search_name):
     srv = get_drive_service()
-    if not srv: return None, "خطأ Drive"
+    if not srv: return None, "خطأ في الاتصال بـ Google Drive"
     
-    # جلب قائمة الملفات
-    q = f"'{FOLDER_ID}' in parents and mimeType='application/pdf' and trashed=false"
+    # البحث عن الملف الذي يحتوي اسمه على النمط المولد (يتجاهل .pdf.pdf)
+    q = f"'{FOLDER_ID}' in parents and name contains '{search_name}' and trashed=false"
+    
     try:
         results = srv.files().list(q=q, fields="files(id, name)").execute()
         files = results.get('files', [])
-    except: return None, "فشل الاتصال"
-
-    # دالة البحث الداخلية
-    def search_in_files(tokens_to_find):
-        for f in files:
-            fname = f['name'].lower()
-            if all(t.lower() in fname for t in tokens_to_find):
-                return f
-        return None
-
-    # المحاولة الأولى: بحث دقيق (Prep3 + Science + Ar)
-    target_file = search_in_files(primary_tokens)
-    
-    # المحاولة الثانية: بحث مرن (Prep3 + Science فقط)
-    if not target_file:
-        target_file = search_in_files(secondary_tokens)
-    
-    # إذا فشل البحث تماماً، اعرض الملفات الموجودة للمستخدم
-    if not target_file:
-        file_list = "\n".join([f"- {f['name']}" for f in files[:10]]) # عرض أول 10 ملفات
-        msg = f"""
-        ❌ لم يتم العثور على الكتاب.
         
-        كنت أبحث عن ملف يحتوي على: {primary_tokens}
+        if not files:
+            return None, f"لم يتم العثور على كتاب بهذا الاسم: {search_name}"
         
-        📂 **الملفات التي وجدتها في المجلد:**
-        {file_list}
-        
-        ⚠️ **الحل:** قم بتغيير اسم الملف في Drive ليحتوي على الكلمات الإنجليزية المطلوبة (مثل: {primary_tokens[0]} و {primary_tokens[1]}).
-        """
-        return None, msg
-
-    # تحميل الملف
-    try:
+        # تحميل أول ملف مطابق
+        target_file = files[0]
         request = srv.files().get_media(fileId=target_file['id'])
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             downloader = MediaIoBaseDownload(tmp, request)
             done = False
             while not done: _, done = downloader.next_chunk()
             return tmp.name, target_file['name']
+            
     except Exception as e:
         return None, str(e)
 
-# الذاكرة الذكية العالمية
 @st.cache_resource(show_spinner="جاري تجهيز الكتاب ورفعه للسحابة (مرة واحدة لكل الطلاب)...")
 def get_global_gemini_file(stage, grade, subject, lang_type):
     if not configure_genai(): return None
     
-    tokens1, tokens2 = get_search_tokens(stage, grade, subject, lang_type)
-    local_path, msg = find_and_download_book(tokens1, tokens2)
+    # توليد الاسم والبحث
+    search_name = generate_file_name_search(stage, grade, subject, lang_type)
+    local_path, msg = find_and_download_book(search_name)
     
     if not local_path:
         st.error(msg)
         return None
         
     try:
-        print(f"Uploading {msg}...")
+        print(f"Uploading {msg} to Gemini...")
         file = genai.upload_file(local_path, mime_type="application/pdf")
+        
+        # انتظار المعالجة
         while file.state.name == "PROCESSING":
             time.sleep(1)
             file = genai.get_file(file.name)
+            
         return file
     except Exception as e:
         st.error(f"خطأ سحابي: {e}")
@@ -162,8 +167,7 @@ def get_model_session(gemini_file):
     sys_prompt = "أنت معلم مصري خبير. اشرح من الكتاب المرفق فقط. بسط المعلومة."
     model = genai.GenerativeModel(model_name=model_name, system_instruction=sys_prompt)
     return model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
-
-# =========================
+    # =========================
 # 4. التطبيق والواجهة
 # =========================
 def init_session():
@@ -174,8 +178,8 @@ def init_session():
 def login_page():
     st.markdown("<h2 style='text-align: center;'>بوابة الطالب الذكية 🇪🇬</h2>", unsafe_allow_html=True)
     
-    if "login_stage" not in st.session_state:
-        st.session_state.login_stage = "الابتدائية"
+    # تحديث تلقائي للقوائم
+    if "login_stage" not in st.session_state: st.session_state.login_stage = "الابتدائية"
 
     selected_stage = st.selectbox(
         "اختر المرحلة الدراسية:", 
@@ -189,6 +193,7 @@ def login_page():
     
     with st.form("login_form"):
         name = st.text_input("اسم الطالب")
+        
         c1, c2 = st.columns(2)
         grade = c1.selectbox("الصف", current_grades)
         term = c2.selectbox("الترم", TERMS)
@@ -227,7 +232,7 @@ def main_app():
                 st.session_state.messages = []
                 st.success("تم فتح الكتاب!")
             else:
-                st.warning("تحقق من اسم الملف في Drive.")
+                st.warning("لم يتم العثور على الكتاب، تأكد من وجوده في Drive.")
 
         st.divider()
         if st.button("خروج"):
