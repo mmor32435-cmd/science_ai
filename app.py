@@ -15,7 +15,7 @@ import edge_tts
 import speech_recognition as sr
 
 # =========================
-# 1. إعدادات الصفحة
+# 1. الإعدادات
 # =========================
 st.set_page_config(page_title="المعلم الذكي | منهاج مصر", layout="wide", page_icon="🇪🇬")
 st.markdown("""
@@ -27,8 +27,8 @@ html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl
 </style>
 """, unsafe_allow_html=True)
 
-# الأسرار والمفاتيح
-FOLDER_ID = "1ub4ML8q4YCM_VZR991XXQ6hBBas2X6rS" # مجلد الكتب الذي أرسلته
+# الأسرار
+FOLDER_ID = "1ub4ML8q4YCM_VZR991XXQ6hBBas2X6rS"
 GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
 if isinstance(GOOGLE_API_KEYS, str): GOOGLE_API_KEYS = [k.strip() for k in GOOGLE_API_KEYS.split(",")]
 
@@ -44,40 +44,25 @@ GRADES = {
 TERMS = ["الترم الأول", "الترم الثاني"]
 
 def subjects_for(stage, grade):
-    if stage in ["الابتدائية", "الإعدادية"]: return ["علوم"]
-    if stage == "الثانوية" and grade == "الأول": return ["علوم متكاملة"] # أو مواد منفصلة حسب نظامك
-    if stage == "الثانوية": return ["كيمياء", "فيزياء", "أحياء"]
+    if stage == "الثانوية":
+        return ["علوم متكاملة"] if grade == "الأول" else ["كيمياء", "فيزياء", "أحياء"]
     return ["علوم"]
 
 def get_search_tokens(stage, grade, subject, lang_type):
     # تحويل الاختيارات العربية إلى أجزاء اسم الملف
-    # النمط: Sec2_Physics_Ar.pdf.pdf
-    
-    # 1. المرحلة والصف
     s_map = {"الابتدائية": "Grade", "الإعدادية": "Prep", "الثانوية": "Sec"}
     g_map = {"الأول": "1", "الثاني": "2", "الثالث": "3", "الرابع": "4", "الخامس": "5", "السادس": "6"}
     
-    stage_code = f"{s_map[stage]}{g_map[grade]}" # مثال: Sec2
+    stage_code = f"{s_map[stage]}{g_map[grade]}" # مثال: Prep1
     
-    # 2. المادة
-    sub_map = {
-        "علوم": "Science",
-        "علوم متكاملة": "Integrated", # تأكد من اسم المادة في الملفات
-        "كيمياء": "Chemistry",
-        "فيزياء": "Physics",
-        "أحياء": "Biology"
-    }
+    sub_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
     sub_code = sub_map.get(subject, "Science")
     
-    # 3. اللغة
-    # lang_type تأتي من الراديو: "علوم (عربي)" أو "Science (Lg)"
-    lang_code = "En" if "Lg" in lang_type else "Ar"
+    # تحديد اللغة: إذا اختار "English (Lg)" يبحث عن En، وإلا Ar
+    lang_code = "En" if "English" in lang_type else "Ar"
     
-    # اسم الملف المتوقع (بدون الامتداد المكرر لنسهل البحث)
-    # مثال: Sec2_Physics_Ar
-    expected_name = f"{stage_code}_{sub_code}_{lang_code}"
-    
-    return expected_name
+    # الكلمات المفتاحية للبحث (يجب أن تتوفر جميعها في اسم الملف)
+    return [stage_code, sub_code, lang_code]
 
 # =========================
 # 3. خدمات جوجل والبحث الذكي
@@ -96,67 +81,62 @@ def get_drive_service():
         return build("drive", "v3", credentials=service_account.Credentials.from_service_account_info(creds))
     except: return None
 
-def find_and_download_book(search_name):
-    """
-    يبحث في المجلد المحدد عن ملف يحتوي اسمه على search_name
-    """
+def find_and_download_book(tokens):
     srv = get_drive_service()
-    if not srv: return None, "خطأ في خدمة Drive"
+    if not srv: return None, "خطأ Drive"
     
-    # البحث في المجلد المحدد
-    # name contains '{search_name}'
-    q = f"'{FOLDER_ID}' in parents and name contains '{search_name}' and trashed=false"
-    
+    # جلب كل ملفات الـ PDF في المجلد
+    q = f"'{FOLDER_ID}' in parents and mimeType='application/pdf' and trashed=false"
     try:
         results = srv.files().list(q=q, fields="files(id, name)").execute()
         files = results.get('files', [])
-        
-        if not files:
-            return None, f"لم يتم العثور على كتاب باسم يحتوي على: {search_name}"
-        
-        # نأخذ أول نتيجة (عادة هي الأصح)
-        target_file = files[0]
-        file_id = target_file['id']
-        file_real_name = target_file['name']
-        
-        # التحميل
-        request = srv.files().get_media(fileId=file_id)
+    except: return None, "فشل الاتصال"
+
+    # البحث عن ملف يحتوي على كل التوكنز (Case Insensitive)
+    target_file = None
+    for f in files:
+        fname = f['name'].lower()
+        # هل كل كلمة مطلوبة موجودة في الاسم؟
+        if all(token.lower() in fname for token in tokens):
+            target_file = f
+            break
+    
+    if not target_file:
+        # رسالة خطأ مفصلة للمساعدة
+        return None, f"لم يتم العثور على ملف يحتوي على الكلمات: {tokens} \n\nتأكد أن اسم الملف في Drive يحتوي على هذه الكلمات بالإنجليزية."
+
+    # تحميل الملف
+    try:
+        request = srv.files().get_media(fileId=target_file['id'])
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             downloader = MediaIoBaseDownload(tmp, request)
             done = False
             while not done: _, done = downloader.next_chunk()
-            return tmp.name, file_real_name
-            
+            return tmp.name, target_file['name']
     except Exception as e:
         return None, str(e)
 
-# --- الذاكرة الذكية العالمية ---
+# الذاكرة الذكية العالمية
 @st.cache_resource(show_spinner="جاري تجهيز الكتاب ورفعه للسحابة (مرة واحدة لكل الطلاب)...")
 def get_global_gemini_file(stage, grade, subject, lang_type):
     if not configure_genai(): return None
     
-    # 1. تحديد اسم البحث
-    search_name = get_search_tokens(stage, grade, subject, lang_type)
-    
-    # 2. البحث والتحميل من درايف
-    local_path, msg = find_and_download_book(search_name)
+    tokens = get_search_tokens(stage, grade, subject, lang_type)
+    local_path, msg = find_and_download_book(tokens)
     
     if not local_path:
         st.error(msg)
         return None
         
     try:
-        # 3. الرفع لـ Gemini
         print(f"Uploading {msg}...")
         file = genai.upload_file(local_path, mime_type="application/pdf")
-        
         while file.state.name == "PROCESSING":
             time.sleep(1)
             file = genai.get_file(file.name)
-            
         return file
     except Exception as e:
-        st.error(f"خطأ في المعالجة السحابية: {e}")
+        st.error(f"خطأ سحابي: {e}")
         return None
 
 def get_model_session(gemini_file):
@@ -166,7 +146,7 @@ def get_model_session(gemini_file):
     return model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
 
 # =========================
-# 4. التطبيق والواجهة
+# 4. التطبيق والواجهة (إصلاح تحديث الصفوف)
 # =========================
 def init_session():
     if "user" not in st.session_state: st.session_state.user = {"logged_in": False}
@@ -176,15 +156,31 @@ def init_session():
 def login_page():
     st.markdown("<h2 style='text-align: center;'>بوابة الطالب الذكية 🇪🇬</h2>", unsafe_allow_html=True)
     
-    with st.form("login"):
+    # --- إصلاح القائمة المنسدلة ---
+    # نستخدم متغيرات session_state لتخزين الاختيارات وتحديثها
+    if "login_stage" not in st.session_state:
+        st.session_state.login_stage = "الابتدائية"
+
+    # اختيار المرحلة خارج الـ form ليعمل التحديث الفوري
+    selected_stage = st.selectbox(
+        "اختر المرحلة الدراسية:", 
+        STAGES, 
+        index=STAGES.index(st.session_state.login_stage),
+        key="stage_selector",
+        on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_selector})
+    )
+    
+    # تحديث الصفوف بناءً على المرحلة المختارة
+    current_grades = GRADES.get(selected_stage, [])
+    
+    with st.form("login_form"):
         name = st.text_input("اسم الطالب")
         
-        # جعل الاختيارات داخل الفورم بسيطة
         c1, c2 = st.columns(2)
-        stage = c1.selectbox("المرحلة", STAGES)
-        grade = c2.selectbox("الصف", GRADES[stage]) # سيتم تحديثها عند الضغط، لكن كبداية لا بأس
+        # الآن ستظهر الصفوف الصحيحة (إعدادي/ثانوي)
+        grade = c1.selectbox("الصف", current_grades)
+        term = c2.selectbox("الترم", TERMS)
         
-        term = st.selectbox("الترم", TERMS)
         lang_type = st.radio("نوع الدراسة", ["عربي (مدارس حكومي/تجريبي)", "English (Lg)"], horizontal=True)
         
         if st.form_submit_button("دخول المنصة 🚀"):
@@ -192,14 +188,14 @@ def login_page():
                 st.session_state.user = {
                     "logged_in": True,
                     "name": name,
-                    "stage": stage,
+                    "stage": selected_stage, # نستخدم المرحلة المختارة من الخارج
                     "grade": grade,
                     "term": term,
                     "lang_type": lang_type
                 }
                 st.rerun()
             else:
-                st.error("اكتب اسمك")
+                st.error("الاسم قصير")
 
 def main_app():
     u = st.session_state.user
@@ -208,12 +204,10 @@ def main_app():
         st.success(f"أهلاً: {u['name']}")
         st.info(f"{u['stage']} | {u['grade']}")
         
-        # اختيار المادة ديناميكياً
         subjects = subjects_for(u['stage'], u['grade'])
         selected_subject = st.radio("اختر المادة:", subjects)
         
         if st.button(f"📖 فتح كتاب: {selected_subject}"):
-            # استدعاء الدالة الذكية التي تبحث في المجلد مباشرة
             gemini_file = get_global_gemini_file(u['stage'], u['grade'], selected_subject, u['lang_type'])
             
             if gemini_file:
@@ -221,7 +215,7 @@ def main_app():
                 st.session_state.messages = []
                 st.success("تم فتح الكتاب!")
             else:
-                st.warning("تأكد أن الكتاب موجود في المجلد بالاسم الصحيح.")
+                st.warning("لم يتم العثور على الكتاب، تأكد من وجوده في Drive.")
 
         st.divider()
         if st.button("خروج"):
