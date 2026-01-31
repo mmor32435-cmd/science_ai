@@ -117,23 +117,56 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
         st.error(f"خطأ سحابي: {e}")
         return None
 
+# --- الدالة الذكية لاختيار الموديل (الحل النهائي) ---
+def get_valid_model_name():
+    """
+    تقوم هذه الدالة بسؤال جوجل: "ما هي الموديلات المتاحة لي؟"
+    وتختار أول واحد يدعم الشات (generateContent) وتفضّل الإصدارات الحديثة.
+    """
+    try:
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        # ترتيب الأولويات (نبحث عن 1.5 أولاً، ثم برو، ثم أي شيء)
+        priorities = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
+        
+        for p in priorities:
+            # البحث الجزئي (مثلاً gemini-1.5-flash-latest يطابق gemini-1.5-flash)
+            for model in available_models:
+                if p in model:
+                    return model
+        
+        # إذا لم نجد المفضلات، نعود لأول موديل متاح في القائمة
+        if available_models:
+            return available_models[0]
+            
+    except Exception as e:
+        st.error(f"فشل في جلب قائمة الموديلات: {e}")
+        return None
+        
+    return None
+
 def get_model_session(gemini_file):
-    # محاولة استخدام الموديلات المتاحة بالترتيب
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    # 1. الحصول على اسم الموديل المتاح فعلياً
+    model_name = get_valid_model_name()
     
+    if not model_name:
+        st.error("لم يتم العثور على أي موديل ذكاء اصطناعي متاح في حسابك.")
+        return None
+
+    # (اختياري) إظهار اسم الموديل المستخدم للتأكد
+    # st.toast(f"تم الاتصال بـ: {model_name}")
+
     sys_prompt = "أنت معلم مصري خبير. اشرح من الكتاب المرفق فقط. بسط المعلومة."
     
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name=model_name, system_instruction=sys_prompt)
-            chat = model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
-            return chat
-        except:
-            continue # جرب الموديل التالي
-            
-    # إذا فشلت كل المحاولات
-    st.error("لم نتمكن من الوصول لخدمة الذكاء الاصطناعي حالياً.")
-    return None
+    try:
+        model = genai.GenerativeModel(model_name=model_name, system_instruction=sys_prompt)
+        return model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
+    except Exception as e:
+        st.error(f"فشل إنشاء الجلسة مع الموديل {model_name}: {e}")
+        return None
 
 # =========================
 # 4. التطبيق والواجهة
@@ -223,7 +256,6 @@ def main_app():
                                 st.audio(f.name)
                         asyncio.run(play())
                 except Exception as e:
-                    # هنا سيظهر الخطأ الحقيقي بدلاً من "خطأ في الاتصال"
                     st.error(f"حدث خطأ: {e}")
 
 if __name__ == "__main__":
