@@ -1,7 +1,8 @@
 streamlit
 google-generativeai
+google-auth
+google-api-python-client
 requests
-# نحتاج هذه فقط للتعامل مع الصوت والواجهة
-SpeechRecognition
 streamlit-mic-recorder
 edge-tts
+SpeechRecognition
