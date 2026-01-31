@@ -44,21 +44,29 @@ GRADES = {
 TERMS = ["الترم الأول", "الترم الثاني"]
 
 def subjects_for(stage, grade):
-    if stage in ["الابتدائية", "الإعدادية"]: return ["علوم"]
+    if stage in ["الابتدائية", "الإعدادية"]:
+        return ["علوم"]
     elif stage == "الثانوية":
         if grade == "الأول": return ["علوم متكاملة"]
         return ["كيمياء", "فيزياء", "أحياء"]
     return ["علوم"]
 
 def generate_file_name_search(stage, grade, subject, lang_type):
+    # 1. كود الصف
     grade_map = {"الرابع": "4", "الخامس": "5", "السادس": "6", "الأول": "1", "الثاني": "2", "الثالث": "3"}
     g_num = grade_map.get(grade, "1")
+    
+    # 2. كود اللغة
     lang_code = "En" if "English" in lang_type else "Ar"
 
-    if stage == "الابتدائية": return f"Grade{g_num}_{lang_code}"
-    elif stage == "الإعدادية": return f"Prep{g_num}_{lang_code}"
+    # 3. تركيب الاسم
+    if stage == "الابتدائية":
+        return f"Grade{g_num}_{lang_code}"
+    elif stage == "الإعدادية":
+        return f"Prep{g_num}_{lang_code}"
     elif stage == "الثانوية":
-        if grade == "الأول": return f"Sec1_Integrated_{lang_code}"
+        if grade == "الأول":
+            return f"Sec1_Integrated_{lang_code}"
         else:
             sub_map = {"كيمياء": "Chem", "فيزياء": "Physics", "أحياء": "Biology"}
             sub_code = sub_map.get(subject, "Chem")
@@ -68,9 +76,11 @@ def generate_file_name_search(stage, grade, subject, lang_type):
 # =========================
 # 3. خدمات جوجل والبحث الذكي
 # =========================
-def configure_genai():
+def configure_genai(key_index=0):
     if not GOOGLE_API_KEYS: return False
-    genai.configure(api_key=random.choice(GOOGLE_API_KEYS))
+    # اختيار المفتاح بناءً على المحاولة الحالية
+    idx = key_index % len(GOOGLE_API_KEYS)
+    genai.configure(api_key=GOOGLE_API_KEYS[idx])
     return True
 
 @st.cache_resource
@@ -85,180 +95,10 @@ def get_drive_service():
 def find_and_download_book(search_name):
     srv = get_drive_service()
     if not srv: return None, "خطأ Drive"
+    
     q = f"'{FOLDER_ID}' in parents and name contains '{search_name}' and trashed=false"
     try:
         results = srv.files().list(q=q, fields="files(id, name)").execute()
         files = results.get('files', [])
-        if not files: return None, f"لم يتم العثور على كتاب: {search_name}"
-        target_file = files[0]
-        request = srv.files().get_media(fileId=target_file['id'])
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            downloader = MediaIoBaseDownload(tmp, request)
-            done = False
-            while not done: _, done = downloader.next_chunk()
-            return tmp.name, target_file['name']
-    except Exception as e: return None, str(e)
-
-@st.cache_resource(show_spinner="جاري تجهيز الكتاب...")
-def get_global_gemini_file(stage, grade, subject, lang_type):
-    if not configure_genai(): return None
-    search_name = generate_file_name_search(stage, grade, subject, lang_type)
-    local_path, msg = find_and_download_book(search_name)
-    if not local_path:
-        st.error(msg)
-        return None
-    try:
-        file = genai.upload_file(local_path, mime_type="application/pdf")
-        while file.state.name == "PROCESSING":
-            time.sleep(1)
-            file = genai.get_file(file.name)
-        return file
-    except Exception as e:
-        st.error(f"خطأ سحابي: {e}")
-        return None
-
-# --- الدالة الذكية لاختيار الموديل (الحل النهائي) ---
-def get_valid_model_name():
-    """
-    تقوم هذه الدالة بسؤال جوجل: "ما هي الموديلات المتاحة لي؟"
-    وتختار أول واحد يدعم الشات (generateContent) وتفضّل الإصدارات الحديثة.
-    """
-    try:
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
         
-        # ترتيب الأولويات (نبحث عن 1.5 أولاً، ثم برو، ثم أي شيء)
-        priorities = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
-        
-        for p in priorities:
-            # البحث الجزئي (مثلاً gemini-1.5-flash-latest يطابق gemini-1.5-flash)
-            for model in available_models:
-                if p in model:
-                    return model
-        
-        # إذا لم نجد المفضلات، نعود لأول موديل متاح في القائمة
-        if available_models:
-            return available_models[0]
-            
-    except Exception as e:
-        st.error(f"فشل في جلب قائمة الموديلات: {e}")
-        return None
-        
-    return None
-
-def get_model_session(gemini_file):
-    # 1. الحصول على اسم الموديل المتاح فعلياً
-    model_name = get_valid_model_name()
-    
-    if not model_name:
-        st.error("لم يتم العثور على أي موديل ذكاء اصطناعي متاح في حسابك.")
-        return None
-
-    # (اختياري) إظهار اسم الموديل المستخدم للتأكد
-    # st.toast(f"تم الاتصال بـ: {model_name}")
-
-    sys_prompt = "أنت معلم مصري خبير. اشرح من الكتاب المرفق فقط. بسط المعلومة."
-    
-    try:
-        model = genai.GenerativeModel(model_name=model_name, system_instruction=sys_prompt)
-        return model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
-    except Exception as e:
-        st.error(f"فشل إنشاء الجلسة مع الموديل {model_name}: {e}")
-        return None
-
-# =========================
-# 4. التطبيق والواجهة
-# =========================
-def init_session():
-    if "user" not in st.session_state: st.session_state.user = {"logged_in": False}
-    if "chat" not in st.session_state: st.session_state.chat = None
-    if "messages" not in st.session_state: st.session_state.messages = []
-
-def login_page():
-    st.markdown("<h2 style='text-align: center;'>بوابة الطالب الذكية 🇪🇬</h2>", unsafe_allow_html=True)
-    if "login_stage" not in st.session_state: st.session_state.login_stage = "الابتدائية"
-    
-    sel_stage = st.selectbox("المرحلة:", STAGES, index=STAGES.index(st.session_state.login_stage), key="stage_sel", on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_sel}))
-    
-    with st.form("login_form"):
-        name = st.text_input("اسم الطالب")
-        c1, c2 = st.columns(2)
-        grade = c1.selectbox("الصف", GRADES.get(sel_stage, []))
-        term = c2.selectbox("الترم", TERMS)
-        lang_type = st.radio("نوع الدراسة", ["عربي (حكومي/تجريبي)", "English (Lg)"], horizontal=True)
-        if st.form_submit_button("دخول المنصة 🚀"):
-            if len(name) > 2:
-                st.session_state.user = {"logged_in": True, "name": name, "stage": sel_stage, "grade": grade, "term": term, "lang_type": lang_type}
-                st.rerun()
-            else: st.error("الاسم قصير")
-
-def main_app():
-    u = st.session_state.user
-    with st.sidebar:
-        st.success(f"أهلاً: {u['name']}")
-        st.info(f"{u['stage']} | {u['grade']}")
-        subjects = subjects_for(u['stage'], u['grade'])
-        selected_subject = st.radio("اختر المادة:", subjects)
-        
-        if st.button(f"📖 فتح كتاب: {selected_subject}"):
-            gemini_file = get_global_gemini_file(u['stage'], u['grade'], selected_subject, u['lang_type'])
-            if gemini_file:
-                session = get_model_session(gemini_file)
-                if session:
-                    st.session_state.chat = session
-                    st.session_state.messages = []
-                    st.success("تم فتح الكتاب!")
-            else:
-                st.warning("تأكد من اسم الملف في Drive.")
-        st.divider()
-        if st.button("خروج"):
-            st.session_state.user["logged_in"] = False
-            st.rerun()
-
-    st.markdown('<div class="header-box"><h1>المعلم المدرسي الذكي</h1></div>', unsafe_allow_html=True)
-
-    if not st.session_state.chat:
-        st.info("👈 اختر المادة واضغط 'فتح كتاب' من القائمة الجانبية.")
-        return
-
-    for m in st.session_state.messages:
-        with st.chat_message("user" if m["role"]=="user" else "assistant"): st.write(m["content"])
-
-    c1, c2 = st.columns([1, 8])
-    with c1: audio = mic_recorder(start_prompt="🎙️", stop_prompt="🛑", key="mic")
-    with c2: prompt = st.chat_input("اكتب سؤالك...")
-
-    input_text = prompt
-    if not input_text and audio:
-        try:
-            r = sr.Recognizer()
-            with sr.AudioFile(BytesIO(audio['bytes'])) as source:
-                input_text = r.recognize_google(r.record(source), language="ar-EG")
-        except: pass
-
-    if input_text:
-        st.session_state.messages.append({"role": "user", "content": input_text})
-        with st.chat_message("user"): st.write(input_text)
-        
-        with st.chat_message("assistant"):
-            with st.spinner("..."):
-                try:
-                    res = st.session_state.chat.send_message(input_text).text
-                    st.write(res)
-                    st.session_state.messages.append({"role": "model", "content": res})
-                    if st.checkbox("قراءة صوتية", value=True):
-                        async def play():
-                            v = edge_tts.Communicate(res, "ar-EG-ShakirNeural")
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-                                await v.save(f.name)
-                                st.audio(f.name)
-                        asyncio.run(play())
-                except Exception as e:
-                    st.error(f"حدث خطأ: {e}")
-
-if __name__ == "__main__":
-    init_session()
-    if st.session_state.user["logged_in"]: main_app()
-    else: login_page()
+        if 
