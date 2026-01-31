@@ -53,19 +53,20 @@ def get_search_tokens(stage, grade, subject, lang_type):
     s_map = {"الابتدائية": "Grade", "الإعدادية": "Prep", "الثانوية": "Sec"}
     g_map = {"الأول": "1", "الثاني": "2", "الثالث": "3", "الرابع": "4", "الخامس": "5", "السادس": "6"}
     
-    stage_code = f"{s_map[stage]}{g_map[grade]}" # مثال: Prep1
+    stage_code = f"{s_map[stage]}{g_map[grade]}" # مثال: Prep3
     
     sub_map = {"علوم": "Science", "علوم متكاملة": "Integrated", "كيمياء": "Chemistry", "فيزياء": "Physics", "أحياء": "Biology"}
     sub_code = sub_map.get(subject, "Science")
     
-    # تحديد اللغة: إذا اختار "English (Lg)" يبحث عن En، وإلا Ar
     lang_code = "En" if "English" in lang_type else "Ar"
     
-    # الكلمات المفتاحية للبحث (يجب أن تتوفر جميعها في اسم الملف)
-    return [stage_code, sub_code, lang_code]
+    # نرجع مجموعتين للبحث:
+    # 1. دقيقة: الصف + المادة + اللغة
+    # 2. مرنة: الصف + المادة (في حال لم يكن اسم الملف يحتوي على Ar)
+    return [stage_code, sub_code, lang_code], [stage_code, sub_code]
 
 # =========================
-# 3. خدمات جوجل والبحث الذكي
+# 3. خدمات جوجل والبحث الذكي (تم التعديل هنا)
 # =========================
 def configure_genai():
     if not GOOGLE_API_KEYS: return False
@@ -81,29 +82,46 @@ def get_drive_service():
         return build("drive", "v3", credentials=service_account.Credentials.from_service_account_info(creds))
     except: return None
 
-def find_and_download_book(tokens):
+def find_and_download_book(primary_tokens, secondary_tokens):
     srv = get_drive_service()
     if not srv: return None, "خطأ Drive"
     
-    # جلب كل ملفات الـ PDF في المجلد
+    # جلب قائمة الملفات
     q = f"'{FOLDER_ID}' in parents and mimeType='application/pdf' and trashed=false"
     try:
         results = srv.files().list(q=q, fields="files(id, name)").execute()
         files = results.get('files', [])
     except: return None, "فشل الاتصال"
 
-    # البحث عن ملف يحتوي على كل التوكنز (Case Insensitive)
-    target_file = None
-    for f in files:
-        fname = f['name'].lower()
-        # هل كل كلمة مطلوبة موجودة في الاسم؟
-        if all(token.lower() in fname for token in tokens):
-            target_file = f
-            break
+    # دالة البحث الداخلية
+    def search_in_files(tokens_to_find):
+        for f in files:
+            fname = f['name'].lower()
+            if all(t.lower() in fname for t in tokens_to_find):
+                return f
+        return None
+
+    # المحاولة الأولى: بحث دقيق (Prep3 + Science + Ar)
+    target_file = search_in_files(primary_tokens)
     
+    # المحاولة الثانية: بحث مرن (Prep3 + Science فقط)
     if not target_file:
-        # رسالة خطأ مفصلة للمساعدة
-        return None, f"لم يتم العثور على ملف يحتوي على الكلمات: {tokens} \n\nتأكد أن اسم الملف في Drive يحتوي على هذه الكلمات بالإنجليزية."
+        target_file = search_in_files(secondary_tokens)
+    
+    # إذا فشل البحث تماماً، اعرض الملفات الموجودة للمستخدم
+    if not target_file:
+        file_list = "\n".join([f"- {f['name']}" for f in files[:10]]) # عرض أول 10 ملفات
+        msg = f"""
+        ❌ لم يتم العثور على الكتاب.
+        
+        كنت أبحث عن ملف يحتوي على: {primary_tokens}
+        
+        📂 **الملفات التي وجدتها في المجلد:**
+        {file_list}
+        
+        ⚠️ **الحل:** قم بتغيير اسم الملف في Drive ليحتوي على الكلمات الإنجليزية المطلوبة (مثل: {primary_tokens[0]} و {primary_tokens[1]}).
+        """
+        return None, msg
 
     # تحميل الملف
     try:
@@ -121,8 +139,8 @@ def find_and_download_book(tokens):
 def get_global_gemini_file(stage, grade, subject, lang_type):
     if not configure_genai(): return None
     
-    tokens = get_search_tokens(stage, grade, subject, lang_type)
-    local_path, msg = find_and_download_book(tokens)
+    tokens1, tokens2 = get_search_tokens(stage, grade, subject, lang_type)
+    local_path, msg = find_and_download_book(tokens1, tokens2)
     
     if not local_path:
         st.error(msg)
@@ -146,7 +164,7 @@ def get_model_session(gemini_file):
     return model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
 
 # =========================
-# 4. التطبيق والواجهة (إصلاح تحديث الصفوف)
+# 4. التطبيق والواجهة
 # =========================
 def init_session():
     if "user" not in st.session_state: st.session_state.user = {"logged_in": False}
@@ -156,12 +174,9 @@ def init_session():
 def login_page():
     st.markdown("<h2 style='text-align: center;'>بوابة الطالب الذكية 🇪🇬</h2>", unsafe_allow_html=True)
     
-    # --- إصلاح القائمة المنسدلة ---
-    # نستخدم متغيرات session_state لتخزين الاختيارات وتحديثها
     if "login_stage" not in st.session_state:
         st.session_state.login_stage = "الابتدائية"
 
-    # اختيار المرحلة خارج الـ form ليعمل التحديث الفوري
     selected_stage = st.selectbox(
         "اختر المرحلة الدراسية:", 
         STAGES, 
@@ -170,14 +185,11 @@ def login_page():
         on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_selector})
     )
     
-    # تحديث الصفوف بناءً على المرحلة المختارة
     current_grades = GRADES.get(selected_stage, [])
     
     with st.form("login_form"):
         name = st.text_input("اسم الطالب")
-        
         c1, c2 = st.columns(2)
-        # الآن ستظهر الصفوف الصحيحة (إعدادي/ثانوي)
         grade = c1.selectbox("الصف", current_grades)
         term = c2.selectbox("الترم", TERMS)
         
@@ -188,7 +200,7 @@ def login_page():
                 st.session_state.user = {
                     "logged_in": True,
                     "name": name,
-                    "stage": selected_stage, # نستخدم المرحلة المختارة من الخارج
+                    "stage": selected_stage,
                     "grade": grade,
                     "term": term,
                     "lang_type": lang_type
@@ -215,7 +227,7 @@ def main_app():
                 st.session_state.messages = []
                 st.success("تم فتح الكتاب!")
             else:
-                st.warning("لم يتم العثور على الكتاب، تأكد من وجوده في Drive.")
+                st.warning("تحقق من اسم الملف في Drive.")
 
         st.divider()
         if st.button("خروج"):
