@@ -8,6 +8,7 @@ import os
 import time
 import random
 import asyncio
+import re
 from io import BytesIO
 from streamlit_mic_recorder import mic_recorder
 import edge_tts
@@ -16,7 +17,7 @@ import speech_recognition as sr
 # =========================
 # 1. إعدادات الصفحة
 # =========================
-st.set_page_config(page_title="المعلم الذكي", layout="wide", page_icon="🇪🇬")
+st.set_page_config(page_title="المعلم الذكي | منهاج مصر", layout="wide", page_icon="🇪🇬")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
@@ -63,8 +64,7 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             sub_code = sub_map.get(subject, "Chem")
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
-
-# =========================
+    # =========================
 # 3. خدمات جوجل والبحث
 # =========================
 @st.cache_resource
@@ -111,9 +111,9 @@ def find_and_download_book(search_name):
             while not done: _, done = downloader.next_chunk()
             tmp_path = tmp.name
             
-        # --- فحص حاسم: هل الملف فارغ؟ ---
+        # فحص الحجم للتأكد من نجاح التحميل
         if os.path.getsize(tmp_path) < 100:
-            return None, "الملف تم تحميله ولكنه فارغ! تأكد من مشاركة المجلد مع إيميل حساب الخدمة."
+            return None, "الملف فارغ! تأكد من مشاركة المجلد مع إيميل حساب الخدمة."
             
         return tmp_path, target_file['name']
     except Exception as e:
@@ -140,10 +140,9 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
     except Exception as e:
         st.error(f"خطأ أثناء الرفع لـ Gemini: {e}")
         return None
-
-# --- الدالة المصلحة لتفادي خطأ 400 و 404 ---
+        # --- إدارة الموديلات الذكية ---
 def get_model_session(gemini_file):
-    # 1. البحث عن موديل متاح
+    # 1. البحث عن أفضل موديل متاح
     available_model = "gemini-1.5-flash" # الافتراضي
     try:
         for m in genai.list_models():
@@ -155,17 +154,19 @@ def get_model_session(gemini_file):
                     available_model = m.name
     except: pass
 
-    # 2. التعليمات (نضعها في الرسالة الأولى بدلاً من النظام لتفادي خطأ 400)
+    # 2. دمج التعليمات في الرسالة الأولى (لتفادي خطأ 400 Invalid Argument)
     first_message_content = [
         gemini_file,
         "أنت معلم مصري خبير. اشرح لي من هذا الكتاب المرفق فقط. بسط المعلومات."
     ]
 
     last_error = ""
+    # محاولة جميع المفاتيح
     for api_key in GOOGLE_API_KEYS:
         try:
             genai.configure(api_key=api_key)
-            # لاحظ: لم نستخدم system_instruction هنا لتفادي الخطأ
+            
+            # ملاحظة: لم نستخدم system_instruction هنا لتفادي مشاكل التوافق
             model = genai.GenerativeModel(model_name=available_model)
             chat = model.start_chat(history=[{"role": "user", "parts": first_message_content}])
             return chat
@@ -173,10 +174,9 @@ def get_model_session(gemini_file):
             last_error = str(e)
             continue
 
-    st.error(f"فشل الاتصال. الخطأ: {last_error}")
+    st.error(f"فشل الاتصال بجميع المفاتيح. الخطأ الأخير: {last_error}")
     return None
-
-# =========================
+   # =========================
 # 4. التطبيق والواجهة
 # =========================
 def init_session():
@@ -281,4 +281,12 @@ def main_app():
                                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
                                     await v.save(f.name)
                                     st.audio(f.name)
-                            
+                            asyncio.run(play())
+                    else: st.error("الخادم مشغول.")
+                except Exception as e:
+                    st.error(f"حدث خطأ: {e}")
+
+if __name__ == "__main__":
+    init_session()
+    if st.session_state.user["logged_in"]: main_app()
+    else: login_page() 
