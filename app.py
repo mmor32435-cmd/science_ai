@@ -45,18 +45,20 @@ TERMS = ["الترم الأول", "الترم الثاني"]
 
 def subjects_for(stage, grade):
     if stage in ["الابتدائية", "الإعدادية"]: return ["علوم"]
-    if stage == "الثانوية":
+    elif stage == "الثانوية":
         if grade == "الأول": return ["علوم متكاملة"]
         return ["كيمياء", "فيزياء", "أحياء"]
     return ["علوم"]
 
 def generate_file_name_search(stage, grade, subject, lang_type):
-    # تحويل الاختيارات العربية إلى أجزاء اسم الملف
+    # تحويل الصف
     grade_map = {"الرابع": "4", "الخامس": "5", "السادس": "6", "الأول": "1", "الثاني": "2", "الثالث": "3"}
     g_num = grade_map.get(grade, "1")
     
+    # تحويل اللغة
     lang_code = "En" if "English" in lang_type else "Ar"
 
+    # تركيب الاسم حسب ملفاتك في Drive
     if stage == "الابتدائية":
         return f"Grade{g_num}_{lang_code}"
     
@@ -71,12 +73,12 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             sub_code = sub_map.get(subject, "Chem")
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
-   # =========================
+    # =========================
 # 3. خدمات جوجل والبحث الذكي
 # =========================
 def configure_genai(key_index=0):
     if not GOOGLE_API_KEYS: return False
-    # تدوير المفتاح بناء على المحاولة
+    # تدوير المفاتيح
     idx = key_index % len(GOOGLE_API_KEYS)
     genai.configure(api_key=GOOGLE_API_KEYS[idx])
     return True
@@ -94,6 +96,7 @@ def find_and_download_book(search_name):
     srv = get_drive_service()
     if not srv: return None, "خطأ Drive"
     
+    # البحث عن اسم الملف
     q = f"'{FOLDER_ID}' in parents and name contains '{search_name}' and trashed=false"
     try:
         results = srv.files().list(q=q, fields="files(id, name)").execute()
@@ -114,7 +117,7 @@ def find_and_download_book(search_name):
 
 @st.cache_resource(show_spinner="جاري تجهيز الكتاب ورفعه للسحابة (مرة واحدة لكل الطلاب)...")
 def get_global_gemini_file(stage, grade, subject, lang_type):
-    configure_genai() # استخدام المفتاح الافتراضي للرفع
+    configure_genai() # تفعيل المفتاح الافتراضي
     
     search_name = generate_file_name_search(stage, grade, subject, lang_type)
     local_path, msg = find_and_download_book(search_name)
@@ -133,40 +136,62 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
     except Exception as e:
         st.error(f"خطأ سحابي: {e}")
         return None
-# --- إدارة الموديلات الذكية لتفادي الحظر ---
+       # --- دالة البحث عن الموديل المتاح تلقائياً ---
+def get_valid_model_name():
+    """
+    تقوم هذه الدالة بسؤال جوجل عن الموديلات المتاحة للمفتاح الحالي،
+    وتختار أول موديل يدعم المحادثة، مع تفضيل الإصدارات السريعة.
+    """
+    try:
+        # جلب القائمة من جوجل
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        if not available_models:
+            return None
+
+        # قائمة التفضيلات (نبحث عنهم بالترتيب)
+        # نبحث عن أي موديل يحتوي على كلمة "flash" أولاً، ثم "pro"
+        for m in available_models:
+            if 'flash' in m: return m
+        
+        for m in available_models:
+            if 'pro' in m and 'vision' not in m: return m
+            
+        # إذا لم نجد المفضل، نرجع أول واحد متاح وخلاص
+        return available_models[0]
+            
+    except Exception as e:
+        # في حالة الفشل التام، نعود لاسم افتراضي آمن
+        return "models/gemini-1.5-flash"
+
 def get_model_session(gemini_file):
-    # قائمة الأولويات (الأخف أولاً)
-    models_priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
     sys_prompt = "أنت معلم مصري خبير. اشرح من الكتاب المرفق فقط. بسط المعلومة."
-    
     last_error = ""
     
-    # حلقة تجربة جميع المفاتيح والموديلات
+    # تجربة المفاتيح بالترتيب
     for api_key in GOOGLE_API_KEYS:
         try:
             genai.configure(api_key=api_key)
             
-            for model_name in models_priority:
-                try:
-                    model = genai.GenerativeModel(model_name=model_name, system_instruction=sys_prompt)
-                    # محاولة الاتصال
-                    chat = model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
-                    return chat # نجحنا!
-                except Exception as model_err:
-                    if "429" in str(model_err) or "Quota" in str(model_err):
-                        continue # الموديل مشغول، جرب التالي
-                    elif "not found" in str(model_err):
-                        continue # الموديل غير موجود
-                    else:
-                        last_error = str(model_err)
-                        
-        except Exception as key_err:
-            continue
+            # 1. اكتشف اسم الموديل المتاح لهذا المفتاح
+            model_name = get_valid_model_name()
+            if not model_name: continue # المفتاح لا يملك موديلات، جرب التالي
 
-    # إذا فشلت كل المحاولات
-    st.error(f"عذراً، الخوادم مشغولة جداً. يرجى الانتظار دقيقة. (السبب: {last_error})")
+            # 2. إنشاء الجلسة
+            model = genai.GenerativeModel(model_name=model_name, system_instruction=sys_prompt)
+            chat = model.start_chat(history=[{"role": "user", "parts": [gemini_file, "اشرح لي."]}])
+            return chat # نجح الاتصال!
+            
+        except Exception as e:
+            last_error = str(e)
+            continue # جرب المفتاح التالي
+
+    st.error(f"فشل الاتصال بجميع الموديلات. آخر خطأ: {last_error}")
     return None
-    # =========================
+# =========================
 # 4. التطبيق والواجهة
 # =========================
 def init_session():
@@ -178,24 +203,21 @@ def login_page():
     st.markdown("<h2 style='text-align: center;'>بوابة الطالب الذكية 🇪🇬</h2>", unsafe_allow_html=True)
     
     if "login_stage" not in st.session_state: st.session_state.login_stage = "الابتدائية"
-
-    selected_stage = st.selectbox("المرحلة:", STAGES, index=STAGES.index(st.session_state.login_stage), key="stage_sel", on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_sel}))
     
-    current_grades = GRADES.get(selected_stage, [])
+    sel_stage = st.selectbox("المرحلة:", STAGES, index=STAGES.index(st.session_state.login_stage), key="stage_sel", on_change=lambda: st.session_state.update({"login_stage": st.session_state.stage_sel}))
     
     with st.form("login_form"):
         name = st.text_input("اسم الطالب")
         c1, c2 = st.columns(2)
-        grade = c1.selectbox("الصف", current_grades)
+        grade = c1.selectbox("الصف", GRADES.get(sel_stage, []))
         term = c2.selectbox("الترم", TERMS)
-        lang_type = st.radio("نوع الدراسة", ["عربي (مدارس حكومي/تجريبي)", "English (Lg)"], horizontal=True)
+        lang_type = st.radio("نوع الدراسة", ["عربي (حكومي/تجريبي)", "English (Lg)"], horizontal=True)
         
         if st.form_submit_button("دخول المنصة 🚀"):
             if len(name) > 2:
-                st.session_state.user = {"logged_in": True, "name": name, "stage": selected_stage, "grade": grade, "term": term, "lang_type": lang_type}
+                st.session_state.user = {"logged_in": True, "name": name, "stage": sel_stage, "grade": grade, "term": term, "lang_type": lang_type}
                 st.rerun()
-            else:
-                st.error("الاسم قصير")
+            else: st.error("الاسم قصير")
 
 def main_app():
     u = st.session_state.user
@@ -248,7 +270,7 @@ def main_app():
         with st.chat_message("assistant"):
             with st.spinner("..."):
                 try:
-                    # إعادة المحاولة البسيطة (Retry Logic)
+                    # إعادة المحاولة البسيطة
                     response = None
                     for attempt in range(3):
                         try:
