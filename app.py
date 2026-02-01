@@ -17,7 +17,7 @@ import speech_recognition as sr
 # =========================
 # 1. إعدادات الصفحة
 # =========================
-st.set_page_config(page_title="المعلم الذكي | منهاج مصر", layout="wide", page_icon="🇪🇬")
+st.set_page_config(page_title="المعلم الذكي", layout="wide", page_icon="🇪🇬")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
@@ -65,9 +65,8 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
     # =========================
-# 3. خدمات جوجل والبحث
+# 3. خدمات جوجل
 # =========================
-# --- هذه هي الدالة التي كانت مفقودة وتسبب الخطأ ---
 @st.cache_resource
 def get_service_account_email():
     try:
@@ -99,38 +98,32 @@ def find_and_download_book(search_name):
         results = srv.files().list(q=q, fields="files(id, name, size)").execute()
         files = results.get('files', [])
         
-        if not files:
-            return None, f"لم يتم العثور على ملف يحتوي الاسم: {search_name}"
+        if not files: return None, f"لم يتم العثور على ملف: {search_name}"
         
         target_file = files[0]
         request = srv.files().get_media(fileId=target_file['id'])
         
-        # تحميل الملف
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             downloader = MediaIoBaseDownload(tmp, request)
             done = False
             while not done: _, done = downloader.next_chunk()
             tmp_path = tmp.name
             
-        # فحص الحجم
-        if os.path.getsize(tmp_path) < 100:
+        if os.path.getsize(tmp_path) < 1000:
             return None, "الملف فارغ! تأكد من مشاركة المجلد مع إيميل الخدمة."
             
         return tmp_path, target_file['name']
     except Exception as e:
         return None, str(e)
 
-@st.cache_resource(show_spinner="جاري تجهيز الكتاب (لأول مرة)...")
+@st.cache_resource(show_spinner="جاري تجهيز الكتاب...")
 def get_global_gemini_file(stage, grade, subject, lang_type):
     configure_genai()
-    
     search_name = generate_file_name_search(stage, grade, subject, lang_type)
     local_path, msg = find_and_download_book(search_name)
-    
     if not local_path:
         st.error(msg)
         return None
-        
     try:
         print(f"Uploading {msg}...")
         file = genai.upload_file(local_path, mime_type="application/pdf")
@@ -139,19 +132,17 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
             file = genai.get_file(file.name)
         return file
     except Exception as e:
-        st.error(f"خطأ أثناء الرفع لـ Gemini: {e}")
+        st.error(f"خطأ سحابي: {e}")
         return None
-        # --- إدارة الموديلات الذكية ---
+        # --- إدارة الموديلات ---
 def get_model_session(gemini_file):
-    # قائمة الموديلات التي تعمل
+    # ترتيب جديد: 1.5 Flash هو الأكثر استقراراً حالياً
     models_to_try = [
-        'models/gemini-2.0-flash', 
-        'models/gemini-2.0-flash-lite', 
-        'models/gemini-1.5-flash', 
-        'models/gemini-1.5-pro'
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-2.0-flash', # نجعله خياراً لاحقاً لأنه تجريبي وقد يكون مشغولاً
     ]
     
-    # التعليمات + الملف في الرسالة الأولى
     first_message = [
         gemini_file,
         "أنت معلم مصري خبير. اشرح لي من هذا الكتاب المرفق فقط. بسط المعلومات وتكلم باللهجة المصرية."
@@ -170,15 +161,16 @@ def get_model_session(gemini_file):
                     chat = model.start_chat(history=[{"role": "user", "parts": first_message}])
                     return chat # نجحنا!
                 except Exception as model_err:
-                    if "404" in str(model_err): continue
-                    if "429" in str(model_err): continue
-                    last_error = str(model_err)
+                    err_str = str(model_err)
+                    if "404" in err_str: continue
+                    if "429" in err_str: continue
+                    last_error = err_str
                     
         except Exception as e:
             last_error = str(e)
             continue
 
-    st.error(f"فشل الاتصال بجميع الموديلات. الخطأ الأخير: {last_error}")
+    st.error(f"جميع الموديلات مشغولة حالياً. حاول بعد دقيقة. (الخطأ: {last_error})")
     return None
     # =========================
 # 4. التطبيق والواجهة
@@ -225,10 +217,8 @@ def main_app():
                     st.success("تم فتح الكتاب!")
         
         st.divider()
-        # هنا الدالة التي كانت مفقودة ستعمل الآن
         svc_email = get_service_account_email()
-        with st.expander("🛠️ إعدادات المعلم (هام)"):
-            st.write("شارك مجلد Drive مع هذا الإيميل:")
+        with st.expander("🛠️ إعدادات المعلم"):
             st.code(svc_email, language="text")
             
         if st.button("خروج"):
@@ -263,16 +253,21 @@ def main_app():
         with st.chat_message("assistant"):
             with st.spinner("..."):
                 try:
+                    # تحسين إعادة المحاولة (صبر أطول)
                     response = None
-                    for attempt in range(3):
+                    # نحاول 5 مرات مع زيادة وقت الانتظار
+                    for attempt in range(5):
                         try:
                             response = st.session_state.chat.send_message(input_text)
                             break
                         except Exception as e:
-                            if "429" in str(e):
-                                time.sleep(2)
+                            err_msg = str(e)
+                            if "429" in err_msg or "Quota" in err_msg:
+                                time.sleep(2 * (attempt + 1)) # 2, 4, 6, 8... ثانية
                                 continue
-                            else: raise e
+                            else:
+                                st.error(f"خطأ تقني: {err_msg}")
+                                break
                     
                     if response:
                         st.write(response.text)
@@ -284,9 +279,10 @@ def main_app():
                                     await v.save(f.name)
                                     st.audio(f.name)
                             asyncio.run(play())
-                    else: st.error("الخادم مشغول.")
+                    else:
+                        st.warning("الخادم مشغول جداً بسبب كثرة الطلبات. يرجى الانتظار 30 ثانية والمحاولة مجدداً.")
                 except Exception as e:
-                    st.error(f"حدث خطأ: {e}")
+                    st.error(f"حدث خطأ غير متوقع: {e}")
 
 if __name__ == "__main__":
     init_session()
