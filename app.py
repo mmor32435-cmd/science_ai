@@ -13,17 +13,18 @@ from io import BytesIO
 from streamlit_mic_recorder import mic_recorder
 import edge_tts
 import speech_recognition as sr
+import pypdf  # مكتبة استخراج النص الجديدة
 
 # =========================
 # 1. إعدادات الصفحة
 # =========================
-st.set_page_config(page_title="المعلم الذكي", layout="wide", page_icon="🇪🇬")
+st.set_page_config(page_title="المعلم الذكي | منهاج مصر", layout="wide", page_icon="🇪🇬")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
 html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
-.header-box { background: linear-gradient(135deg, #b92b27 0%, #1565C0 100%); padding: 2rem; border-radius: 20px; color: white; text-align: center; margin-bottom: 20px; }
-.stButton>button { background: #1565C0; color: white; border-radius: 10px; height: 50px; width: 100%; border: none; font-size: 18px; }
+.header-box { background: linear-gradient(135deg, #20002c 0%, #cbb4d4 100%); padding: 2rem; border-radius: 20px; color: white; text-align: center; margin-bottom: 20px; }
+.stButton>button { background: #20002c; color: white; border-radius: 10px; height: 50px; width: 100%; border: none; font-size: 18px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -33,7 +34,7 @@ GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
 if isinstance(GOOGLE_API_KEYS, str): GOOGLE_API_KEYS = [k.strip() for k in GOOGLE_API_KEYS.split(",")]
 
 # =========================
-# 2. الخرائط
+# 2. الخرائط والمنطق
 # =========================
 STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
 GRADES = {
@@ -64,10 +65,11 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             sub_code = sub_map.get(subject, "Chem")
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
-   # =========================
-# 3. خدمات جوجل والبحث
+
 # =========================
-def get_service_email():
+# 3. خدمات جوجل والتحميل
+# =========================
+def get_service_account_email():
     try:
         creds = dict(st.secrets["gcp_service_account"])
         return creds.get("client_email", "غير موجود")
@@ -97,8 +99,7 @@ def find_and_download_book(search_name):
         results = srv.files().list(q=q, fields="files(id, name, size)").execute()
         files = results.get('files', [])
         
-        if not files:
-            return None, f"لم يتم العثور على ملف يحتوي الاسم: {search_name}"
+        if not files: return None, f"لم يتم العثور على ملف: {search_name}"
         
         target_file = files[0]
         request = srv.files().get_media(fileId=target_file['id'])
@@ -109,66 +110,70 @@ def find_and_download_book(search_name):
             while not done: _, done = downloader.next_chunk()
             tmp_path = tmp.name
             
-        # --- الفحص الحاسم: هل الملف فارغ؟ ---
-        if os.path.getsize(tmp_path) < 1000: # أقل من 1 كيلو بايت
-            return None, "⛔ مشكلة صلاحيات: الملف فارغ. تأكد من مشاركة المجلد مع إيميل الخدمة (Service Account)."
+        if os.path.getsize(tmp_path) < 1000:
+            return None, "الملف فارغ! تأكد من مشاركة المجلد مع إيميل الخدمة."
             
         return tmp_path, target_file['name']
     except Exception as e:
         return None, str(e)
 
-@st.cache_resource(show_spinner="جاري تجهيز الكتاب (لأول مرة)...")
-def get_global_gemini_file(stage, grade, subject, lang_type):
-    configure_genai()
-    
+# --- دالة استخراج النص (الحل البديل للرفع) ---
+def extract_text_from_pdf(pdf_path):
+    text_content = ""
+    try:
+        reader = pypdf.PdfReader(pdf_path)
+        # قراءة أول 150 صفحة كحد أقصى لتفادي الثقل
+        max_pages = min(len(reader.pages), 150)
+        for i in range(max_pages):
+            text_content += reader.pages[i].extract_text() + "\n"
+    except Exception as e:
+        return None
+    return text_content
+
+@st.cache_resource(show_spinner="جاري قراءة نص الكتاب...")
+def get_book_text_content(stage, grade, subject, lang_type):
     search_name = generate_file_name_search(stage, grade, subject, lang_type)
     local_path, msg = find_and_download_book(search_name)
     
     if not local_path:
         st.error(msg)
         return None
-        
-    try:
-        print(f"Uploading {msg}...")
-        file = genai.upload_file(local_path, mime_type="application/pdf")
-        while file.state.name == "PROCESSING":
-            time.sleep(1)
-            file = genai.get_file(file.name)
-        return file
-    except Exception as e:
-        st.error(f"خطأ أثناء الرفع لـ Gemini (تأكد من المفاتيح): {e}")
+    
+    # استخراج النص بدلاً من رفع الملف
+    text = extract_text_from_pdf(local_path)
+    if not text or len(text) < 100:
+        st.error("فشل استخراج النصوص من الكتاب. قد يكون صوراً ممسوحة ضوئياً.")
         return None
-# --- إدارة الموديلات الذكية ---
-def get_model_session(gemini_file):
-    # 1. البحث عن موديل متاح (Flash هو الأفضل للكتب)
-    available_model = "gemini-1.5-flash"
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'flash' in m.name: 
-                    available_model = m.name
-                    break
-    except: pass
+        
+    return text
 
-    # 2. تجهيز الرسالة الأولى (بدون system_instruction لتجنب خطأ 400)
-    first_message = [
-        gemini_file,
-        "أنت معلم مصري خبير. هذا هو الكتاب المدرسي. اشرح لي منه فقط. بسط المعلومات وتكلم باللهجة المصرية."
-    ]
-
+# =========================
+# 4. إدارة الشات (إرسال النص مباشرة)
+# =========================
+def get_model_chat(book_text):
+    # استخدام الموديل الأسرع
+    model_name = "gemini-1.5-flash"
+    
+    # التعليمات + محتوى الكتاب
+    sys_prompt = f"""
+    أنت معلم مصري خبير.
+    هذا هو محتوى الكتاب المدرسي للطالب:
+    {book_text[:800000]}  # نرسل أول 800 ألف حرف لضمان عدم تجاوز الحدود
+    
+    - اشرح الدروس بناءً على هذا المحتوى فقط.
+    - بسط المعلومة وتكلم باللهجة المصرية.
+    """
+    
     last_error = ""
-    # تجربة المفاتيح
     for api_key in GOOGLE_API_KEYS:
         try:
             genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name=model_name)
             
-            # تهيئة الموديل بدون تعليمات نظام (System Instruction) لتفادي التعقيد
-            model = genai.GenerativeModel(model_name=available_model)
-            
-            # بدء الشات وإرسال الملف في أول رسالة
+            # بدء الشات مع تعليمات النظام
             chat = model.start_chat(history=[
-                {"role": "user", "parts": first_message},
-                {"role": "model", "parts": ["تمام يا بطل، أنا قريت الكتاب وجاهز للشرح. اسألني في أي جزء."]}
+                {"role": "user", "parts": [sys_prompt + "\n\nهل أنت جاهز؟"]},
+                {"role": "model", "parts": ["أيوة يا بطل، أنا قريت الكتاب وجاهز للشرح. اسألني في أي حاجة."]}
             ])
             return chat
         except Exception as e:
@@ -177,8 +182,9 @@ def get_model_session(gemini_file):
 
     st.error(f"فشل الاتصال. الخطأ: {last_error}")
     return None
-    # =========================
-# 4. التطبيق والواجهة
+
+# =========================
+# 5. الواجهة
 # =========================
 def init_session():
     if "user" not in st.session_state: st.session_state.user = {"logged_in": False}
@@ -206,7 +212,6 @@ def login_page():
 def main_app():
     u = st.session_state.user
     
-    # --- الشريط الجانبي ---
     with st.sidebar:
         st.success(f"أهلاً: {u['name']}")
         st.info(f"{u['stage']} | {u['grade']}")
@@ -214,19 +219,20 @@ def main_app():
         selected_subject = st.radio("اختر المادة:", subjects)
         
         if st.button(f"📖 فتح كتاب: {selected_subject}"):
-            gemini_file = get_global_gemini_file(u['stage'], u['grade'], selected_subject, u['lang_type'])
-            if gemini_file:
-                session = get_model_session(gemini_file)
+            # هنا التغيير: نجلب النص بدلاً من كائن الملف
+            book_text = get_book_text_content(u['stage'], u['grade'], selected_subject, u['lang_type'])
+            if book_text:
+                session = get_model_chat(book_text)
                 if session:
                     st.session_state.chat = session
                     st.session_state.messages = []
                     st.success("تم فتح الكتاب!")
         
         st.divider()
-        # --- هنا الحل: عرض إيميل الخدمة ---
-        with st.expander("🔴 إصلاح مشاكل التحميل"):
-            st.write("إذا ظهر خطأ، تأكد من مشاركة مجلد الكتب في Drive مع هذا الإيميل:")
-            st.code(get_service_email(), language="text")
+        svc_email = get_service_account_email()
+        with st.expander("🛠️ إعدادات المعلم"):
+            st.write("شارك مجلد Drive مع هذا الإيميل:")
+            st.code(svc_email, language="text")
             
         if st.button("خروج"):
             st.session_state.user["logged_in"] = False
@@ -260,16 +266,13 @@ def main_app():
         with st.chat_message("assistant"):
             with st.spinner("..."):
                 try:
-                    # إعادة المحاولة البسيطة
                     response = None
                     for attempt in range(3):
                         try:
                             response = st.session_state.chat.send_message(input_text)
                             break
                         except Exception as e:
-                            if "429" in str(e):
-                                time.sleep(2)
-                                continue
+                            if "429" in str(e): time.sleep(2); continue
                             else: raise e
                     
                     if response:
