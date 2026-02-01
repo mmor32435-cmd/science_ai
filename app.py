@@ -64,11 +64,12 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             sub_code = sub_map.get(subject, "Chem")
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
-
+    # =========================
+# 3. خدمات جوجل والبحث
 # =========================
-# 3. خدمات جوجل والبحث الذكي
-# =========================
-def get_service_email():
+# --- هذه هي الدالة التي كانت مفقودة وتسبب الخطأ ---
+@st.cache_resource
+def get_service_account_email():
     try:
         creds = dict(st.secrets["gcp_service_account"])
         return creds.get("client_email", "غير موجود")
@@ -98,18 +99,21 @@ def find_and_download_book(search_name):
         results = srv.files().list(q=q, fields="files(id, name, size)").execute()
         files = results.get('files', [])
         
-        if not files: return None, f"لم يتم العثور على ملف: {search_name}"
+        if not files:
+            return None, f"لم يتم العثور على ملف يحتوي الاسم: {search_name}"
         
         target_file = files[0]
         request = srv.files().get_media(fileId=target_file['id'])
         
+        # تحميل الملف
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             downloader = MediaIoBaseDownload(tmp, request)
             done = False
             while not done: _, done = downloader.next_chunk()
             tmp_path = tmp.name
             
-        if os.path.getsize(tmp_path) < 1000:
+        # فحص الحجم
+        if os.path.getsize(tmp_path) < 100:
             return None, "الملف فارغ! تأكد من مشاركة المجلد مع إيميل الخدمة."
             
         return tmp_path, target_file['name']
@@ -137,22 +141,20 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
     except Exception as e:
         st.error(f"خطأ أثناء الرفع لـ Gemini: {e}")
         return None
-
-# --- إدارة الموديلات الذكية (تم التحديث بناءً على القائمة) ---
+        # --- إدارة الموديلات الذكية ---
 def get_model_session(gemini_file):
-    # قائمة الموديلات الصالحة والمتاحة في حسابك (مرتبة بالأفضلية)
-    models_priority = [
-        'models/gemini-2.0-flash',       # الأسرع والأحدث
-        'models/gemini-2.0-flash-lite',  # خفيف جداً
-        'models/gemini-2.5-flash',       # قوي وسريع
-        'models/gemini-1.5-flash',       # الاحتياطي الكلاسيكي
-        'models/gemini-2.0-pro'          # الأقوى (للأسئلة المعقدة)
+    # قائمة الموديلات التي تعمل
+    models_to_try = [
+        'models/gemini-2.0-flash', 
+        'models/gemini-2.0-flash-lite', 
+        'models/gemini-1.5-flash', 
+        'models/gemini-1.5-pro'
     ]
     
-    # دمج التعليمات في الرسالة الأولى لتفادي خطأ 400
+    # التعليمات + الملف في الرسالة الأولى
     first_message = [
         gemini_file,
-        "أنت معلم مصري خبير. هذا هو الكتاب المدرسي. اشرح لي منه فقط. بسط المعلومات وتكلم باللهجة المصرية."
+        "أنت معلم مصري خبير. اشرح لي من هذا الكتاب المرفق فقط. بسط المعلومات وتكلم باللهجة المصرية."
     ]
 
     last_error = ""
@@ -161,25 +163,24 @@ def get_model_session(gemini_file):
         try:
             genai.configure(api_key=api_key)
             
-            for model_name in models_priority:
+            for model_name in models_to_try:
                 try:
-                    # محاولة الاتصال بالموديل
+                    # محاولة الاتصال
                     model = genai.GenerativeModel(model_name=model_name)
                     chat = model.start_chat(history=[{"role": "user", "parts": first_message}])
                     return chat # نجحنا!
                 except Exception as model_err:
-                    if "404" in str(model_err): continue # موديل غير موجود، جرب اللي بعده
-                    if "429" in str(model_err): continue # موديل مشغول
+                    if "404" in str(model_err): continue
+                    if "429" in str(model_err): continue
                     last_error = str(model_err)
                     
         except Exception as e:
             last_error = str(e)
             continue
 
-    st.error(f"فشل الاتصال بجميع الموديلات. آخر خطأ: {last_error}")
+    st.error(f"فشل الاتصال بجميع الموديلات. الخطأ الأخير: {last_error}")
     return None
-
-# =========================
+    # =========================
 # 4. التطبيق والواجهة
 # =========================
 def init_session():
@@ -224,6 +225,7 @@ def main_app():
                     st.success("تم فتح الكتاب!")
         
         st.divider()
+        # هنا الدالة التي كانت مفقودة ستعمل الآن
         svc_email = get_service_account_email()
         with st.expander("🛠️ إعدادات المعلم (هام)"):
             st.write("شارك مجلد Drive مع هذا الإيميل:")
