@@ -17,13 +17,13 @@ import speech_recognition as sr
 # =========================
 # 1. إعدادات الصفحة
 # =========================
-st.set_page_config(page_title="المعلم الذكي | منهاج مصر", layout="wide", page_icon="🇪🇬")
+st.set_page_config(page_title="المعلم الذكي", layout="wide", page_icon="🇪🇬")
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
 html, body, .stApp { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
-.header-box { background: linear-gradient(135deg, #b00000 0%, #c31432 100%); padding: 2rem; border-radius: 20px; color: white; text-align: center; margin-bottom: 20px; }
-.stButton>button { background: #b00000; color: white; border-radius: 10px; height: 50px; width: 100%; border: none; font-size: 18px; }
+.header-box { background: linear-gradient(135deg, #b92b27 0%, #1565C0 100%); padding: 2rem; border-radius: 20px; color: white; text-align: center; margin-bottom: 20px; }
+.stButton>button { background: #1565C0; color: white; border-radius: 10px; height: 50px; width: 100%; border: none; font-size: 18px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -33,7 +33,7 @@ GOOGLE_API_KEYS = st.secrets.get("GOOGLE_API_KEYS", [])
 if isinstance(GOOGLE_API_KEYS, str): GOOGLE_API_KEYS = [k.strip() for k in GOOGLE_API_KEYS.split(",")]
 
 # =========================
-# 2. الخرائط ومنطق التسمية
+# 2. الخرائط
 # =========================
 STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
 GRADES = {
@@ -64,15 +64,14 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             sub_code = sub_map.get(subject, "Chem")
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
-    # =========================
+   # =========================
 # 3. خدمات جوجل والبحث
 # =========================
-@st.cache_resource
-def get_service_account_email():
+def get_service_email():
     try:
         creds = dict(st.secrets["gcp_service_account"])
-        return creds.get("client_email", "Unknown")
-    except: return "Unknown"
+        return creds.get("client_email", "غير موجود")
+    except: return "غير موجود"
 
 def configure_genai(key_index=0):
     if not GOOGLE_API_KEYS: return False
@@ -104,16 +103,15 @@ def find_and_download_book(search_name):
         target_file = files[0]
         request = srv.files().get_media(fileId=target_file['id'])
         
-        # تحميل الملف
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             downloader = MediaIoBaseDownload(tmp, request)
             done = False
             while not done: _, done = downloader.next_chunk()
             tmp_path = tmp.name
             
-        # فحص الحجم للتأكد من نجاح التحميل
-        if os.path.getsize(tmp_path) < 100:
-            return None, "الملف فارغ! تأكد من مشاركة المجلد مع إيميل حساب الخدمة."
+        # --- الفحص الحاسم: هل الملف فارغ؟ ---
+        if os.path.getsize(tmp_path) < 1000: # أقل من 1 كيلو بايت
+            return None, "⛔ مشكلة صلاحيات: الملف فارغ. تأكد من مشاركة المجلد مع إيميل الخدمة (Service Account)."
             
         return tmp_path, target_file['name']
     except Exception as e:
@@ -138,45 +136,48 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
             file = genai.get_file(file.name)
         return file
     except Exception as e:
-        st.error(f"خطأ أثناء الرفع لـ Gemini: {e}")
+        st.error(f"خطأ أثناء الرفع لـ Gemini (تأكد من المفاتيح): {e}")
         return None
-        # --- إدارة الموديلات الذكية ---
+# --- إدارة الموديلات الذكية ---
 def get_model_session(gemini_file):
-    # 1. البحث عن أفضل موديل متاح
-    available_model = "gemini-1.5-flash" # الافتراضي
+    # 1. البحث عن موديل متاح (Flash هو الأفضل للكتب)
+    available_model = "gemini-1.5-flash"
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 if 'flash' in m.name: 
                     available_model = m.name
                     break
-                if 'pro' in m.name and 'vision' not in m.name:
-                    available_model = m.name
     except: pass
 
-    # 2. دمج التعليمات في الرسالة الأولى (لتفادي خطأ 400 Invalid Argument)
-    first_message_content = [
+    # 2. تجهيز الرسالة الأولى (بدون system_instruction لتجنب خطأ 400)
+    first_message = [
         gemini_file,
-        "أنت معلم مصري خبير. اشرح لي من هذا الكتاب المرفق فقط. بسط المعلومات."
+        "أنت معلم مصري خبير. هذا هو الكتاب المدرسي. اشرح لي منه فقط. بسط المعلومات وتكلم باللهجة المصرية."
     ]
 
     last_error = ""
-    # محاولة جميع المفاتيح
+    # تجربة المفاتيح
     for api_key in GOOGLE_API_KEYS:
         try:
             genai.configure(api_key=api_key)
             
-            # ملاحظة: لم نستخدم system_instruction هنا لتفادي مشاكل التوافق
+            # تهيئة الموديل بدون تعليمات نظام (System Instruction) لتفادي التعقيد
             model = genai.GenerativeModel(model_name=available_model)
-            chat = model.start_chat(history=[{"role": "user", "parts": first_message_content}])
+            
+            # بدء الشات وإرسال الملف في أول رسالة
+            chat = model.start_chat(history=[
+                {"role": "user", "parts": first_message},
+                {"role": "model", "parts": ["تمام يا بطل، أنا قريت الكتاب وجاهز للشرح. اسألني في أي جزء."]}
+            ])
             return chat
         except Exception as e:
             last_error = str(e)
             continue
 
-    st.error(f"فشل الاتصال بجميع المفاتيح. الخطأ الأخير: {last_error}")
+    st.error(f"فشل الاتصال. الخطأ: {last_error}")
     return None
-   # =========================
+    # =========================
 # 4. التطبيق والواجهة
 # =========================
 def init_session():
@@ -222,11 +223,10 @@ def main_app():
                     st.success("تم فتح الكتاب!")
         
         st.divider()
-        # عرض إيميل الخدمة للمساعدة في حل مشاكل الصلاحيات
-        svc_email = get_service_account_email()
-        with st.expander("🛠️ إعدادات المعلم (هام)"):
-            st.write("لضمان عمل التطبيق، شارك مجلد Drive مع هذا الإيميل:")
-            st.code(svc_email, language="text")
+        # --- هنا الحل: عرض إيميل الخدمة ---
+        with st.expander("🔴 إصلاح مشاكل التحميل"):
+            st.write("إذا ظهر خطأ، تأكد من مشاركة مجلد الكتب في Drive مع هذا الإيميل:")
+            st.code(get_service_email(), language="text")
             
         if st.button("خروج"):
             st.session_state.user["logged_in"] = False
@@ -289,4 +289,4 @@ def main_app():
 if __name__ == "__main__":
     init_session()
     if st.session_state.user["logged_in"]: main_app()
-    else: login_page() 
+    else: login_page()
