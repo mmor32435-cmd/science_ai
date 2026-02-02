@@ -64,7 +64,8 @@ def generate_file_name_search(stage, grade, subject, lang_type):
             sub_code = sub_map.get(subject, "Chem")
             return f"Sec{g_num}_{sub_code}_{lang_code}"
     return ""
-    # =========================
+
+# =========================
 # 3. خدمات جوجل
 # =========================
 @st.cache_resource
@@ -134,13 +135,16 @@ def get_global_gemini_file(stage, grade, subject, lang_type):
     except Exception as e:
         st.error(f"خطأ سحابي: {e}")
         return None
-        # --- إدارة الموديلات ---
+
+# --- إدارة الموديلات الذكية (تم تحديث القائمة بناءً على مفاتيحك) ---
 def get_model_session(gemini_file):
-    # ترتيب جديد: 1.5 Flash هو الأكثر استقراراً حالياً
+    # استخدام الموديلات الحديثة التي ظهرت في فحصك
     models_to_try = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-2.0-flash', # نجعله خياراً لاحقاً لأنه تجريبي وقد يكون مشغولاً
+        'models/gemini-2.0-flash',       # الأحدث والأسرع
+        'models/gemini-2.0-flash-lite',  # خفيف جداً
+        'models/gemini-2.5-flash',       # نسخة حديثة
+        'models/gemini-1.5-pro',         # قوي ومستقر
+        'models/gemini-pro'              # القديم (احتياطي)
     ]
     
     first_message = [
@@ -149,7 +153,7 @@ def get_model_session(gemini_file):
     ]
 
     last_error = ""
-    # تجربة المفاتيح والموديلات
+    # تجربة جميع المفاتيح والموديلات
     for api_key in GOOGLE_API_KEYS:
         try:
             genai.configure(api_key=api_key)
@@ -161,18 +165,18 @@ def get_model_session(gemini_file):
                     chat = model.start_chat(history=[{"role": "user", "parts": first_message}])
                     return chat # نجحنا!
                 except Exception as model_err:
-                    err_str = str(model_err)
-                    if "404" in err_str: continue
-                    if "429" in err_str: continue
-                    last_error = err_str
+                    if "404" in str(model_err): continue # موديل غير موجود، جرب التالي
+                    if "429" in str(model_err): continue # موديل مشغول
+                    last_error = str(model_err)
                     
         except Exception as e:
             last_error = str(e)
             continue
 
-    st.error(f"جميع الموديلات مشغولة حالياً. حاول بعد دقيقة. (الخطأ: {last_error})")
+    st.error(f"جميع الموديلات مشغولة أو غير متاحة. الخطأ الأخير: {last_error}")
     return None
-    # =========================
+
+# =========================
 # 4. التطبيق والواجهة
 # =========================
 def init_session():
@@ -200,7 +204,6 @@ def login_page():
 
 def main_app():
     u = st.session_state.user
-    
     with st.sidebar:
         st.success(f"أهلاً: {u['name']}")
         st.info(f"{u['stage']} | {u['grade']}")
@@ -253,20 +256,18 @@ def main_app():
         with st.chat_message("assistant"):
             with st.spinner("..."):
                 try:
-                    # تحسين إعادة المحاولة (صبر أطول)
                     response = None
-                    # نحاول 5 مرات مع زيادة وقت الانتظار
-                    for attempt in range(5):
+                    # محاولة لمدة 3 مرات مع زيادة الانتظار
+                    for attempt in range(3):
                         try:
                             response = st.session_state.chat.send_message(input_text)
                             break
                         except Exception as e:
-                            err_msg = str(e)
-                            if "429" in err_msg or "Quota" in err_msg:
-                                time.sleep(2 * (attempt + 1)) # 2, 4, 6, 8... ثانية
+                            if "429" in str(e):
+                                time.sleep(3) # انتظار أطول
                                 continue
                             else:
-                                st.error(f"خطأ تقني: {err_msg}")
+                                st.error(f"خطأ تقني: {e}")
                                 break
                     
                     if response:
@@ -280,7 +281,7 @@ def main_app():
                                     st.audio(f.name)
                             asyncio.run(play())
                     else:
-                        st.warning("الخادم مشغول جداً بسبب كثرة الطلبات. يرجى الانتظار 30 ثانية والمحاولة مجدداً.")
+                        st.warning("الخادم مشغول جداً. حاول مرة أخرى.")
                 except Exception as e:
                     st.error(f"حدث خطأ غير متوقع: {e}")
 
