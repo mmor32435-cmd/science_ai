@@ -1,8 +1,10 @@
-streamlit
-google-generativeai
-google-auth
-google-api-python-client
-streamlit-mic-recorder
-edge-tts
-SpeechRecognition
-nest-asyncio
+streamlit>=1.30
+google-generativeai>=0.7.2
+google-api-python-client>=2.120.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
+# Optional (لو عايز)
+streamlit-mic-recorder>=0.0.8
+edge-tts>=6.1.9
