@@ -1,13 +1,19 @@
 import streamlit as st
 
+# =========================
 # لازم يكون أول أمر Streamlit
+# =========================
 st.set_page_config(page_title="المعلم الذكي", layout="wide", page_icon="🎓")
 
+# =========================
+# Imports
+# =========================
 import os
 import time
 import tempfile
 import logging
 import random
+import re
 from contextlib import contextmanager
 
 logging.basicConfig(level=logging.INFO)
@@ -131,10 +137,9 @@ GRADE_MAP = {
     "الثاني": "2",
     "الثالث": "3",
 }
-
 SUBJECT_MAP = {"كيمياء": "Chem", "فيزياء": "Physics", "أحياء": "Biology"}
 
-# منع موديلات preview/deep-research اللي بتطلع quota limit=0
+# منع موديلات preview/deep-research (غالبًا بتكون quota=0 أو غير مناسبة)
 ALLOWED_MODELS = [
     "models/gemini-2.0-flash",
     "models/gemini-2.0-flash-lite",
@@ -246,19 +251,52 @@ def normalize_model_name(name):
     return name
 
 
-def _is_quota_zero_error(msg):
+def _is_quota_hard_fail(msg):
+    """
+    حالات لا ينفع معها Retry:
+    - limit: 0
+    - check your plan and billing
+    - exceeded daily quota
+    """
     if msg is None:
         return False
     s = str(msg).lower()
 
-    # حالات شائعة للكوتا = 0
-    if ("quota exceeded" in s) and ("limit: 0" in s):
+    if ("limit: 0" in s) and ("quota" in s or "free_tier" in s):
         return True
-    if ("generate_content_free_tier_requests" in s) and ("limit: 0" in s):
+    if "check your plan and billing" in s:
         return True
-    if ("limit: 0" in s) and ("quota" in s):
+    if "exceeded your current quota" in s:
+        # قد تكون مؤقتة أو يومية؛ لكن نعتبرها hard fail لو ظهر معها billing
+        if "billing" in s:
+            return True
+    if "requests per day" in s or "per day" in s:
         return True
     return False
+
+
+def _extract_retry_seconds(err_text):
+    if not err_text:
+        return None
+    s = str(err_text)
+
+    # Please retry in 6.508s
+    m = re.search(r"retry in ([0-9.]+)s", s, flags=re.IGNORECASE)
+    if m:
+        try:
+            return float(m.group(1))
+        except Exception:
+            pass
+
+    # retry_delay { seconds: 6 }
+    m2 = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)\s*\}", s, flags=re.IGNORECASE)
+    if m2:
+        try:
+            return float(m2.group(1))
+        except Exception:
+            pass
+
+    return None
 
 
 # =========================
@@ -385,13 +423,11 @@ def list_generate_models_for_key(api_key):
         if name and ("generateContent" in methods):
             available.append(name)
 
-    # تقاطع المتاح فعلياً مع allowlist
     candidates = []
     for m in ALLOWED_MODELS:
         if m in available:
             candidates.append(m)
 
-    # حماية: امنع deep-research/preview
     cleaned = []
     for c in candidates:
         low = c.lower()
@@ -430,6 +466,10 @@ def upload_to_gemini(local_path, api_key):
 
 
 def create_chat_session(gemini_file):
+    """
+    مهم: لا نرسل أي send_message هنا لتفادي استهلاك الكوتا عند إنشاء الجلسة.
+    ربط الكتاب يتم عند أول سؤال فقط داخل send_message_with_retry.
+    """
     if not GENAI_AVAILABLE:
         st.error("Gemini غير متاح: " + str(GENAI_IMPORT_ERROR))
         return None
@@ -452,7 +492,7 @@ def create_chat_session(gemini_file):
 
             candidates = list_generate_models_for_key(key)
             if not candidates:
-                last_error = "لا توجد موديلات مسموحة/متاحة لهذا المفتاح. قد تحتاج Billing أو مفتاح آخر."
+                last_error = "لا توجد موديلات مسموحة/متاحة لهذا المفتاح."
                 continue
 
             for m in candidates:
@@ -464,13 +504,9 @@ def create_chat_session(gemini_file):
                         generation_config={"temperature": 0.2, "top_p": 0.9, "max_output_tokens": 1024},
                     )
                     chat = model.start_chat(history=[])
-                    chat.send_message([gemini_file, "تم تحميل الكتاب. التزم بشرحه فقط."])
                     return chat
                 except Exception as e:
                     last_error = e
-                    if _is_quota_zero_error(e):
-                        # مفيش فايدة نكمل على نفس المفتاح
-                        break
                     continue
 
         except Exception as e:
@@ -478,24 +514,32 @@ def create_chat_session(gemini_file):
             continue
 
     st.error("فشل إنشاء جلسة المحادثة. آخر خطأ: " + str(last_error))
-
-    if _is_quota_zero_error(last_error):
-        st.warning(
-            "الكوتا (Free Tier) للمشروع/الموديل = 0. "
-            "الحل: تفعيل Billing أو استخدام API Key من مشروع لديه كوتا متاحة."
-        )
-
     return None
 
 
 def send_message_with_retry(chat, message):
+    """
+    - يربط الكتاب أول مرة فقط (payload = [file, message])
+    - يقرأ retry_delay لو موجود
+    - لو quota hard fail: يرجع رسالة واضحة
+    """
     last_error = None
 
     for attempt in range(MAX_RETRIES):
         try:
-            resp = chat.send_message(message)
-            text = getattr(resp, "text", None)
-            if text:
+            if (not st.session_state.get("book_bound", False)) and (st.session_state.get("gemini_file") is not None):
+                payload = [st.session_state.gemini_file, message]
+            else:
+                payload = message
+
+            resp = chat.send_message(payload)
+            text = getattr(resp, "text", None) or ""
+
+            # إذا نجح أول إرسال وفيه الملف => اعتبرنا الكتاب اتربط
+            if not st.session_state.get("book_bound", False):
+                st.session_state.book_bound = True
+
+            if text.strip():
                 return text
             return "لم يصل رد نصّي من النموذج."
 
@@ -503,24 +547,28 @@ def send_message_with_retry(chat, message):
             last_error = e
             msg = str(e)
 
-            if _is_quota_zero_error(msg):
+            if _is_quota_hard_fail(msg):
                 return (
-                    "لا يمكن الرد لأن الكوتا = 0 (limit: 0). "
-                    "فعّل Billing أو استخدم API Key بمشروع لديه كوتا."
+                    "لا يمكن تنفيذ الطلب بسبب الكوتا/الخطة الحالية للمفتاح.\n"
+                    "الحل: فعّل Billing أو استخدم API Key بمشروع/حساب لديه كوتا متاحة.\n"
+                    "تفاصيل الخطأ: " + msg
                 )
 
             retryable = False
-            for code in ["429", "500", "502", "503", "504", "timeout"]:
-                if code in msg:
+            for token in ["429", "quota", "rate", "500", "502", "503", "504", "timeout"]:
+                if token in msg.lower() or token in msg:
                     retryable = True
                     break
 
             if not retryable:
                 break
 
-            backoff = min(MAX_BACKOFF, BASE_RETRY_DELAY * (2 ** attempt))
-            backoff = backoff + random.uniform(0, 0.6)
-            time.sleep(backoff)
+            wait_s = _extract_retry_seconds(msg)
+            if wait_s is None:
+                backoff = min(MAX_BACKOFF, BASE_RETRY_DELAY * (2 ** attempt))
+                wait_s = backoff + random.uniform(0, 0.6)
+
+            time.sleep(wait_s)
 
     return "حصل خطأ أثناء الإرسال: " + str(last_error)
 
@@ -540,7 +588,7 @@ async def _tts_to_bytes_async(text, voice):
 def _run_async_safely(coro):
     try:
         loop = asyncio.get_running_loop()
-        _ = loop  # just to use it
+        _ = loop
         new_loop = asyncio.new_event_loop()
         try:
             return new_loop.run_until_complete(coro)
@@ -595,6 +643,8 @@ if "gemini_file" not in st.session_state:
     st.session_state.gemini_file = None
 if "book_label" not in st.session_state:
     st.session_state.book_label = None
+if "book_bound" not in st.session_state:
+    st.session_state.book_bound = False
 
 
 def reset_chat():
@@ -602,6 +652,7 @@ def reset_chat():
     st.session_state.chat = None
     st.session_state.gemini_file = None
     st.session_state.book_label = None
+    st.session_state.book_bound = False
 
 
 # =========================
@@ -631,153 +682,4 @@ with st.sidebar:
     stage = st.selectbox("المرحلة", STAGES, key="stage")
     grade = st.selectbox("الصف", GRADES[stage], key="grade")
     st.selectbox("الترم", TERMS, key="term")
-    lang = st.radio("لغة الكتاب", ["Arabic", "English"], horizontal=True, key="lang")
-    subject = st.selectbox("المادة", subjects_for(stage, grade), key="subject")
-
-    st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        load_btn = st.button("تحميل الكتاب", type="primary", use_container_width=True)
-    with c2:
-        reset_btn = st.button("إعادة تعيين", use_container_width=True)
-
-    st.divider()
-    enable_tts = st.toggle("تشغيل الصوت (TTS)", value=False, disabled=not TTS_AVAILABLE)
-
-    if not TTS_AVAILABLE:
-        st.caption("لتفعيل الصوت: ثبّت edge-tts")
-    if not MIC_AVAILABLE:
-        st.caption("للميكروفون: ثبّت streamlit-mic-recorder")
-    if not HAS_CHAT_UI:
-        st.caption("نسخة Streamlit قديمة؛ سيتم استخدام واجهة بديلة بدل chat UI.")
-
-if reset_btn:
-    reset_chat()
-    st.rerun()
-
-# ---- Load book ----
-if load_btn:
-    if not DRIVE_AVAILABLE:
-        st.error("لا يمكن التحميل: Drive غير متاح.")
-    elif not GENAI_AVAILABLE:
-        st.error("لا يمكن التحميل: Gemini غير متاح.")
-    elif not GOOGLE_API_KEYS:
-        st.error("أضف GOOGLE_API_KEYS داخل secrets.")
-    else:
-        search_name = generate_file_name_search(stage, grade, subject, lang)
-
-        with status_box("جاري تجهيز الكتاب...") as status:
-            _status_write(status, "البحث عن: " + search_name)
-
-            local_path, result_msg = find_and_download_book(search_name)
-            if not local_path:
-                _status_update(status, label="فشل", state="error")
-                st.error(result_msg)
-            else:
-                _status_write(status, "تم العثور على: " + str(result_msg))
-                _status_write(status, "رفع الكتاب إلى Gemini...")
-
-                gemini_file = None
-                for key in GOOGLE_API_KEYS:
-                    gemini_file = upload_to_gemini(local_path, key)
-                    if gemini_file:
-                        break
-
-                try:
-                    os.unlink(local_path)
-                except Exception:
-                    pass
-
-                if not gemini_file:
-                    _status_update(status, label="فشل الرفع", state="error")
-                    st.error("فشل رفع الكتاب إلى Gemini.")
-                else:
-                    _status_write(status, "إنشاء جلسة المحادثة...")
-
-                    chat = create_chat_session(gemini_file)
-                    if not chat:
-                        _status_update(status, label="فشل", state="error")
-                    else:
-                        st.session_state.gemini_file = gemini_file
-                        st.session_state.chat = chat
-                        st.session_state.book_label = str(result_msg)
-                        st.session_state.messages = []
-                        _status_update(status, label="تم", state="complete")
-                        st.success("تم تحميل الكتاب وبدء الشرح.")
-
-# ---- Main layout ----
-left, right = st.columns([1.15, 0.85])
-
-with left:
-    st.subheader("المحادثة")
-
-    if st.session_state.book_label:
-        st.markdown(
-            "<div class='small-muted'>الكتاب الحالي: <b>{}</b></div>".format(st.session_state.book_label),
-            unsafe_allow_html=True,
-        )
-    else:
-        st.info("اختر الإعدادات من الشريط الجانبي ثم اضغط: تحميل الكتاب")
-
-    for m in st.session_state.messages:
-        role = m.get("role", "assistant")
-        content = m.get("content", "")
-        with render_msg(role):
-            st.markdown(content)
-
-    if MIC_AVAILABLE and st.session_state.chat:
-        audio = mic_recorder(
-            start_prompt="🎙️ سجّل سؤالك",
-            stop_prompt="⏹️ إيقاف",
-            just_once=True,
-            use_container_width=True,
-        )
-        if audio and isinstance(audio, dict) and audio.get("bytes"):
-            st.warning("تم تسجيل الصوت، لكن تحويل الكلام لنص (STT) غير مفعّل. اكتب سؤالك نصيًا.")
-
-    prompt = get_user_input("اكتب سؤالك من الكتاب...")
-
-    if prompt:
-        if not st.session_state.chat:
-            st.warning("لازم تحمل الكتاب الأول قبل ما تسأل.")
-        else:
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with render_msg("user"):
-                st.markdown(prompt)
-
-            with render_msg("assistant"):
-                with st.spinner("جارٍ التفكير..."):
-                    answer = send_message_with_retry(st.session_state.chat, prompt)
-                st.markdown(answer)
-
-                if enable_tts and TTS_AVAILABLE:
-                    audio_bytes = tts_to_bytes(answer, VOICE_NAME)
-                    if audio_bytes:
-                        st.audio(audio_bytes, format="audio/mpeg")
-
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-
-with right:
-    st.subheader("مساعدات سريعة")
-    st.markdown(
-        """
-- اسأل أسئلة مباشرة من محتوى الدرس.
-- اطلب: تلخيص، شرح خطوة بخطوة، أمثلة، أسئلة تدريب.
-- لو سؤالك خارج الكتاب، النظام سيقول إن المعلومة غير موجودة.
-"""
-    )
-    st.divider()
-    st.subheader("حالة المكونات")
-    st.write(
-        {
-            "VERSION": APP_VERSION,
-            "GENAI_AVAILABLE": GENAI_AVAILABLE,
-            "DRIVE_AVAILABLE": DRIVE_AVAILABLE,
-            "MIC_AVAILABLE": MIC_AVAILABLE,
-            "TTS_AVAILABLE": TTS_AVAILABLE,
-            "HAS_CHAT_UI": HAS_CHAT_UI,
-            "API_KEYS_COUNT": len(GOOGLE_API_KEYS),
-            "BOOK_LOADED": bool(st.session_state.book_label),
-            "ALLOWED_MODELS": [m.replace("models/", "") for m in ALLOWED_MODELS],
-        }
-    )
+    lang = st.radio("لغة الكتاب", ["Arabic", "English"], 
