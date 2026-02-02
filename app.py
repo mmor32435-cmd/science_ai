@@ -1,375 +1,343 @@
+# diagnostic_app.py
 import streamlit as st
 
-# لازم يكون أول أمر Streamlit
-st.set_page_config(
-    page_title="المعلم الذكي",
-    layout="wide",
-    page_icon="🎓"
-)
+st.set_page_config(page_title="تشخيص التطبيق", layout="wide", page_icon="🧪")
 
-# ======================================
-# Imports + Safe availability checks
-# ======================================
-import os
-import time
-import tempfile
-import logging
-import random
-from contextlib import contextmanager
+import os, sys, platform, traceback, time, json
+from datetime import datetime
+from typing import Dict, Any, List
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("smart_teacher")
+# ---------- إعدادات (عدّلها لو لزم) ----------
+FOLDER_ID = "1ub4ML8q4YCM_VZR991XXQ6hBBas2X6rS"
+AVAILABLE_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
 
-# Google Gemini
-try:
-    import google.generativeai as genai
-    GENAI_AVAILABLE = True
-except Exception:
-    GENAI_AVAILABLE = False
+# ---------- أدوات مساعدة ----------
+def redacted(s: str, keep_last: int = 4) -> str:
+    if not s:
+        return ""
+    s = str(s)
+    if len(s) <= keep_last:
+        return "*" * len(s)
+    return "*" * (len(s) - keep_last) + s[-keep_last:]
 
-# Google Drive
-try:
+def safe_version(pkg: str) -> str:
+    try:
+        from importlib.metadata import version
+        return version(pkg)
+    except Exception:
+        return "غير مثبت/غير معروف"
+
+def run_check(name: str, fn):
+    t0 = time.time()
+    try:
+        data = fn()
+        return {
+            "check": name,
+            "ok": True,
+            "ms": int((time.time() - t0) * 1000),
+            "details": data,
+            "error": ""
+        }
+    except Exception as e:
+        return {
+            "check": name,
+            "ok": False,
+            "ms": int((time.time() - t0) * 1000),
+            "details": {},
+            "error": f"{e}\n\n{traceback.format_exc()}"
+        }
+
+def show_results(results: List[Dict[str, Any]]):
+    ok = sum(1 for r in results if r["ok"])
+    bad = len(results) - ok
+    st.subheader(f"النتائج: ✅ {ok} | ❌ {bad}")
+
+    for r in results:
+        with st.expander(f"{'✅' if r['ok'] else '❌'} {r['check']}  ({r['ms']} ms)", expanded=not r["ok"]):
+            if r["ok"]:
+                st.json(r["details"])
+            else:
+                st.error("فشل الاختبار")
+                st.code(r["error"], language="text")
+
+# ---------- اختبارات ----------
+def check_boot():
+    return {
+        "time": datetime.utcnow().isoformat() + "Z",
+        "file": os.path.basename(__file__) if "__file__" in globals() else "unknown",
+        "cwd": os.getcwd()
+    }
+
+def check_python_env():
+    return {
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "executable": sys.executable,
+    }
+
+def check_streamlit_features():
+    feats = {
+        "streamlit_version": safe_version("streamlit"),
+        "has_st_status": hasattr(st, "status"),
+        "has_chat_input": hasattr(st, "chat_input"),
+        "has_chat_message": hasattr(st, "chat_message"),
+        "has_cache_resource": hasattr(st, "cache_resource"),
+    }
+    # تنبيه لأسباب الصفحة البيضاء الشائعة
+    warnings = []
+    v = feats["streamlit_version"]
+    try:
+        # مقارنة بسيطة
+        major_minor = tuple(int(x) for x in v.split(".")[:2])
+        if major_minor < (1, 25):
+            warnings.append("نسخة Streamlit قديمة جدًا وقد تسبب صفحة بيضاء خصوصًا مع chat_input/chat_message.")
+    except Exception:
+        pass
+
+    feats["warnings"] = warnings
+    return feats
+
+def check_common_conflicts():
+    # مشاكل شائعة: تسمية الملف بأسماء مكتبات
+    bad_names = {"streamlit.py", "google.py", "asyncio.py"}
+    me = os.path.basename(__file__).lower() if "__file__" in globals() else ""
+    return {
+        "current_filename": me,
+        "conflict_risk": me in bad_names,
+        "note": "لو اسم ملفك streamlit.py أو google.py إلخ قد يحدث Crash/صفحة بيضاء."
+    }
+
+def check_installed_packages():
+    pkgs = [
+        "streamlit",
+        "google-generativeai",
+        "google-api-python-client",
+        "google-auth",
+        "edge-tts",
+        "streamlit-mic-recorder",
+        "speechrecognition",
+    ]
+    return {p: safe_version(p) for p in pkgs}
+
+def check_secrets_shape():
+    # لا نطبع القيم الحساسة
+    keys = []
+    sa = False
+    try:
+        keys_raw = st.secrets.get("GOOGLE_API_KEYS", [])
+        if isinstance(keys_raw, str):
+            keys = [k.strip() for k in keys_raw.split(",") if k.strip()]
+        elif isinstance(keys_raw, (list, tuple)):
+            keys = list(keys_raw)
+        else:
+            keys = []
+    except Exception:
+        keys = []
+
+    try:
+        sa = "gcp_service_account" in st.secrets
+    except Exception:
+        sa = False
+
+    return {
+        "has_GOOGLE_API_KEYS": bool(keys),
+        "keys_count": len(keys),
+        "keys_preview": [redacted(k) for k in keys[:5]],
+        "has_gcp_service_account": sa,
+        "secrets_top_level_keys": list(getattr(st, "secrets", {}).keys()) if hasattr(st, "secrets") else []
+    }
+
+def check_network():
+    # اختبار بسيط للاتصال بدون requests
+    import urllib.request
+    t0 = time.time()
+    with urllib.request.urlopen("https://www.google.com", timeout=8) as resp:
+        code = resp.getcode()
+    return {"google_status_code": code, "latency_ms": int((time.time() - t0) * 1000)}
+
+def check_imports_google():
+    out = {}
+    # genai
+    try:
+        import google.generativeai as genai  # noqa
+        out["google_generativeai_import"] = True
+    except Exception as e:
+        out["google_generativeai_import"] = f"FAIL: {e}"
+
+    # drive
+    try:
+        from google.oauth2 import service_account  # noqa
+        from googleapiclient.discovery import build  # noqa
+        from googleapiclient.http import MediaIoBaseDownload  # noqa
+        out["google_drive_imports"] = True
+    except Exception as e:
+        out["google_drive_imports"] = f"FAIL: {e}"
+
+    return out
+
+def _get_api_keys() -> List[str]:
+    keys_raw = st.secrets.get("GOOGLE_API_KEYS", [])
+    if isinstance(keys_raw, str):
+        return [k.strip() for k in keys_raw.split(",") if k.strip()]
+    if isinstance(keys_raw, (list, tuple)):
+        return [str(k).strip() for k in keys_raw if str(k).strip()]
+    return []
+
+def _get_drive_service():
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseDownload
-    DRIVE_AVAILABLE = True
-except Exception:
-    DRIVE_AVAILABLE = False
 
-# Optional: mic recorder
-try:
-    from streamlit_mic_recorder import mic_recorder
-    MIC_AVAILABLE = True
-except Exception:
-    MIC_AVAILABLE = False
+    if "gcp_service_account" not in st.secrets:
+        raise RuntimeError("لا يوجد gcp_service_account داخل secrets")
 
-# Optional: TTS
-try:
-    import edge_tts
-    import asyncio
-    TTS_AVAILABLE = True
-except Exception:
-    TTS_AVAILABLE = False
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
+    credentials = service_account.Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/drive.readonly"]
+    )
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
-# ======================================
-# CSS (RTL + Cairo)
-# ======================================
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
-html, body, .stApp {
-    font-family: 'Cairo', sans-serif !important;
-    direction: rtl;
-    text-align: right;
-}
-.header-box {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 1.2rem 1.5rem;
-    border-radius: 15px;
-    color: white;
-    text-align: center;
-    margin-bottom: 1rem;
-}
-.small-muted { color: #666; font-size: 0.9rem; }
-.stButton > button {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 10px;
-    height: 46px;
-    width: 100%;
-    border: none;
-    font-size: 16px;
-}
-</style>
-""", unsafe_allow_html=True)
+def check_drive_access_list_folder():
+    service = _get_drive_service()
+    q = f"'{FOLDER_ID}' in parents and trashed=false"
+    res = service.files().list(q=q, fields="files(id,name,size,mimeType)", pageSize=5).execute()
+    files = res.get("files", [])
+    return {
+        "folder_id": FOLDER_ID,
+        "found_count": len(files),
+        "sample_files": files
+    }
 
-
-# ======================================
-# Constants
-# ======================================
-FOLDER_ID = "1ub4ML8q4YCM_VZR991XXQ6hBBas2X6rS"
-
-MAX_RETRIES = 4
-BASE_RETRY_DELAY = 1.5  # seconds
-MAX_BACKOFF = 12        # seconds
-
-VOICE_NAME = "ar-EG-ShakirNeural"
-
-STAGES = ["الابتدائية", "الإعدادية", "الثانوية"]
-GRADES = {
-    "الابتدائية": ["الرابع", "الخامس", "السادس"],
-    "الإعدادية": ["الأول", "الثاني", "الثالث"],
-    "الثانوية": ["الأول", "الثاني", "الثالث"],
-}
-TERMS = ["الترم الأول", "الترم الثاني"]
-
-GRADE_MAP = {
-    "الرابع": "4", "الخامس": "5", "السادس": "6",
-    "الأول": "1", "الثاني": "2", "الثالث": "3"
-}
-SUBJECT_MAP = {"كيمياء": "Chem", "فيزياء": "Physics", "أحياء": "Biology"}
-
-AVAILABLE_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-    "gemini-pro",
-]
-
-
-# ======================================
-# Helpers
-# ======================================
-@contextmanager
-def status_box(label: str):
-    """Compatible status wrapper."""
-    if hasattr(st, "status"):
-        with st.status(label, expanded=True) as s:
-            yield s
-    else:
-        with st.spinner(label):
-            yield None
-
-
-def subjects_for(stage, grade):
-    if stage in ["الابتدائية", "الإعدادية"]:
-        return ["علوم"]
-    if stage == "الثانوية":
-        if grade == "الأول":
-            return ["علوم متكاملة"]
-        return ["كيمياء", "فيزياء", "أحياء"]
-    return ["علوم"]
-
-
-def generate_file_name_search(stage, grade, subject, lang_type):
-    g_num = GRADE_MAP.get(grade, "1")
-    lang_code = "En" if lang_type == "English" else "Ar"
-
-    if stage == "الابتدائية":
-        return f"Grade{g_num}_{lang_code}"
-    if stage == "الإعدادية":
-        return f"Prep{g_num}_{lang_code}"
-    if stage == "الثانوية":
-        if grade == "الأول":
-            return f"Sec1_Integrated_{lang_code}"
-        sub_code = SUBJECT_MAP.get(subject, "Chem")
-        return f"Sec{g_num}_{sub_code}_{lang_code}"
-    return ""
-
-
-def get_api_keys():
-    """Return list of Gemini API keys from Streamlit secrets."""
-    try:
-        keys = st.secrets.get("GOOGLE_API_KEYS", [])
-        if isinstance(keys, str):
-            return [k.strip() for k in keys.split(",") if k.strip()]
-        if keys:
-            return list(keys)
-        return []
-    except Exception as e:
-        logger.error(f"Failed to read GOOGLE_API_KEYS: {e}")
-        return []
-
-
-GOOGLE_API_KEYS = get_api_keys()
-
-
-def get_service_account_email():
-    try:
-        if "gcp_service_account" in st.secrets:
-            creds = dict(st.secrets["gcp_service_account"])
-            return creds.get("client_email", "غير متوفر")
-        return "غير متوفر"
-    except Exception:
-        return "غير متوفر"
-
-
-def configure_genai_by_key(key: str) -> bool:
-    if not GENAI_AVAILABLE:
-        return False
-    try:
-        genai.configure(api_key=key)
-        return True
-    except Exception as e:
-        logger.error(f"genai.configure failed: {e}")
-        return False
-
-
-# ======================================
-# Google Drive Service (cached)
-# ======================================
-@st.cache_resource(show_spinner=False)
-def get_drive_service_cached():
-    if not DRIVE_AVAILABLE:
-        return None
-    try:
-        if "gcp_service_account" not in st.secrets:
-            return None
-
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict and isinstance(creds_dict["private_key"], str):
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/drive.readonly"]
-        )
-        return build("drive", "v3", credentials=credentials, cache_discovery=False)
-    except Exception as e:
-        logger.error(f"Drive service build error: {e}")
-        return None
-
-
-# ======================================
-# Drive: find + download
-# ======================================
-def find_best_drive_file(service, search_name: str):
-    query = (
+def check_drive_can_query_specific_name():
+    service = _get_drive_service()
+    search_name = st.session_state.get("diag_search_name", "Grade4_Ar")
+    q = (
         f"'{FOLDER_ID}' in parents and "
         f"name contains '{search_name}' and "
         f"mimeType='application/pdf' and trashed=false"
     )
+    res = service.files().list(q=q, fields="files(id,name,size,modifiedTime)", pageSize=10).execute()
+    files = res.get("files", [])
+    return {
+        "search_name": search_name,
+        "matches": len(files),
+        "top_results": files[:5]
+    }
 
-    results = service.files().list(
-        q=query,
-        fields="files(id, name, size, modifiedTime)",
-        pageSize=20
-    ).execute()
+def check_gemini_simple_generate():
+    import google.generativeai as genai
 
-    files = results.get("files", [])
-    if not files:
-        return None
+    keys = _get_api_keys()
+    if not keys:
+        raise RuntimeError("لا توجد GOOGLE_API_KEYS داخل secrets")
 
-    # pick largest size as best candidate (common if multiple matches)
-    def to_int(x):
+    last_err = None
+    for key in keys:
         try:
-            return int(x)
-        except Exception:
-            return 0
-
-    files.sort(key=lambda f: to_int(f.get("size", 0)), reverse=True)
-    return files[0]
-
-
-def download_drive_file(service, file_id: str) -> str:
-    request = service.files().get_media(fileId=file_id)
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    tmp_path = tmp.name
-
-    downloader = MediaIoBaseDownload(tmp, request)
-    done = False
-    try:
-        while not done:
-            _, done = downloader.next_chunk()
-        tmp.close()
-
-        if os.path.getsize(tmp_path) < 1500:
-            os.unlink(tmp_path)
-            raise RuntimeError("الملف تم تنزيله لكنه فارغ/صغير جدًا.")
-        return tmp_path
-    except Exception:
-        try:
-            tmp.close()
-        except Exception:
-            pass
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
-
-
-def find_and_download_book(search_name: str):
-    service = get_drive_service_cached()
-    if not service:
-        return None, "فشل الاتصال بـ Google Drive (تأكد من Service Account في secrets)."
-
-    try:
-        target = find_best_drive_file(service, search_name)
-        if not target:
-            return None, f"لم يتم العثور على ملف مطابق: {search_name}"
-
-        local_path = download_drive_file(service, target["id"])
-        return local_path, target["name"]
-    except Exception as e:
-        logger.error(f"Drive download error: {e}")
-        return None, str(e)
-
-
-# ======================================
-# Gemini: upload PDF + create chat
-# ======================================
-def upload_to_gemini(local_path: str, key: str):
-    if not configure_genai_by_key(key):
-        return None
-
-    try:
-        gemini_file = genai.upload_file(local_path, mime_type="application/pdf")
-
-        # Wait until processed
-        waited = 0
-        while getattr(gemini_file, "state", None) and gemini_file.state.name == "PROCESSING" and waited < 90:
-            time.sleep(2)
-            waited += 2
-            gemini_file = genai.get_file(gemini_file.name)
-
-        if getattr(gemini_file, "state", None) and gemini_file.state.name == "FAILED":
-            return None
-
-        return gemini_file
-    except Exception as e:
-        logger.error(f"Gemini upload error: {e}")
-        return None
-
-
-def create_chat_session(gemini_file):
-    if not GENAI_AVAILABLE:
-        st.error("مكتبة google-generativeai غير مثبتة.")
-        return None
-    if not GOOGLE_API_KEYS:
-        st.error("لا يوجد GOOGLE_API_KEYS في secrets.")
-        return None
-
-    system_prompt = """
-أنت مُعلّم مصري خبير.
-مهمتك: الشرح والإجابة باستخدام محتوى الكتاب المرفق فقط.
-قواعد إلزامية:
-- لا تستخدم أي معلومات خارج الكتاب.
-- لو السؤال غير مغطى في الكتاب: قل بوضوح "المعلومة دي مش موجودة في الكتاب المرفق".
-- استخدم لهجة مصرية بسيطة ومنظمة: (تعريف → شرح → مثال من الكتاب إن أمكن → سؤال للتأكد).
-"""
-
-    last_error = None
-
-    for key in GOOGLE_API_KEYS:
-        if not configure_genai_by_key(key):
+            genai.configure(api_key=key)
+            # جرّب نموذج من القائمة
+            for m in AVAILABLE_MODELS:
+                try:
+                    model = genai.GenerativeModel(m)
+                    r = model.generate_content("قل: اختبار الاتصال بنجاح في سطر واحد فقط.")
+                    txt = getattr(r, "text", "") or ""
+                    if txt.strip():
+                        return {
+                            "used_key": redacted(key),
+                            "used_model": m,
+                            "response_preview": txt[:300]
+                        }
+                except Exception as e:
+                    last_err = e
+                    continue
+        except Exception as e:
+            last_err = e
             continue
 
-        for model_name in AVAILABLE_MODELS:
-            try:
-                model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=system_prompt,
-                    generation_config={
-                        "temperature": 0.2,
-                        "top_p": 0.9,
-                        "max_output_tokens": 1024
-                    }
-                )
-                chat = model.start_chat(history=[])
+    raise RuntimeError(f"فشل اختبار Gemini. آخر خطأ: {last_err}")
 
-                # bind file context
-                chat.send_message([gemini_file, "ده كتاب المنهج. التزم بشرحه فقط."])
-                return chat
+def check_gemini_list_models_if_possible():
+    import google.generativeai as genai
+    keys = _get_api_keys()
+    if not keys:
+        raise RuntimeError("لا توجد GOOGLE_API_KEYS داخل secrets")
 
-            except Exception as e:
-                last_error = e
-                msg = str(e)
-                # common transient errors
-                if any(code in msg for code in ["429", "500", "503", "timeout"]):
-                    continue
-                # model not found/permission
-                if "404" in msg or "not found" in msg.lower():
-                    continue
-                logger.error(f"Create chat failed for {model_name}: {e}")
-                continue
+    genai.configure(api_key=keys[0])
+    # list_models قد لا تكون متاحة في بعض الإصدارات/الصلاحيات
+    if not hasattr(genai, "list_models"):
+        return {"supported": False, "note": "genai.list_models غير متاحة في هذا الإصدار"}
+    models = []
+    try:
+        for m in genai.list_models():
+            name = getattr(m, "name", "")
+            models.append(name)
+    except Exception as e:
+        return {"supported": True, "error": str(e)}
+
+    return {"supported": True, "models_count": len(models), "models_sample": models[:25]}
+
+
+# ---------- واجهة التشخيص ----------
+st.title("🧪 تشخيص شامل للتطبيق")
+st.caption("الهدف: كشف أسباب الصفحة البيضاء + مشاكل الحزم + secrets + Drive + Gemini بدون ما نعرض أسرارك.")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    run_all = st.button("تشغيل كل الاختبارات", type="primary", use_container_width=True)
+with col2:
+    run_drive = st.button("اختبارات Google Drive فقط", use_container_width=True)
+with col3:
+    run_gemini = st.button("اختبارات Gemini فقط", use_container_width=True)
+
+st.text_input("اسم بحث تجريبي لملف PDF في Drive (اختياري)", value="Grade4_Ar", key="diag_search_name")
+
+with st.expander("ملاحظة مهمة لو الصفحة البيضاء عندك في التطبيق الأساسي", expanded=True):
+    st.write("""
+- الصفحة البيضاء غالبًا تعني: **Exception حصل قبل رسم أي Widgets**.
+- أشهر سببين: **Streamlit قديم** أو استخدام باراميتر غير مدعوم (مثل `vertical_alignment` في `st.columns` بإصدارات قديمة).
+- شغّل التطبيق من Terminal أو افتح Logs على Streamlit Cloud عشان تشوف Traceback الحقيقي.
+""")
+
+results = []
+
+if run_all or run_drive or run_gemini:
+    # اختبارات عامة دائمًا
+    results.append(run_check("BOOT / تشغيل الملف", check_boot))
+    results.append(run_check("بيئة بايثون", check_python_env))
+    results.append(run_check("مزايا Streamlit المتاحة (لتجنب الصفحة البيضاء)", check_streamlit_features))
+    results.append(run_check("تعارض أسماء الملفات الشائع", check_common_conflicts))
+    results.append(run_check("إصدارات الحزم المثبتة", check_installed_packages))
+    results.append(run_check("شكل secrets (بدون كشف القيم)", check_secrets_shape))
+    results.append(run_check("اختبار الاتصال بالإنترنت", check_network))
+    results.append(run_check("اختبار Imports (Gemini/Drive)", check_imports_google))
+
+    if run_all or run_drive:
+        results.append(run_check("Drive: بناء الخدمة + قراءة محتويات الفولدر", check_drive_access_list_folder))
+        results.append(run_check("Drive: البحث باسم ملف (contains)", check_drive_can_query_specific_name))
+
+    if run_all or run_gemini:
+        results.append(run_check("Gemini: اختبار generate_content بسيط", check_gemini_simple_generate))
+        results.append(run_check("Gemini: محاولة list_models (إن أمكن)", check_gemini_list_models_if_possible))
+
+    show_results(results)
+else:
+    st.info("اضغط زر من الأزرار بالأعلى لتشغيل التشخيص.")
+
+st.divider()
+st.subheader("تصدير تقرير التشخيص")
+if results:
+    report = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "folder_id": FOLDER_ID,
+        "results": results,
+    }
+    st.download_button(
+        "تحميل التقرير JSON",
+        data=json.dumps(report, ensure_ascii=False, indent=2),
+        file_name="diagnostic_report.json",
+        mime="application/json",
+        use_container_width=True
+    )
